@@ -29,6 +29,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any, Optional
 
 TOOL_NAME = "codebase-memory-mcp"
 REGISTRY_REPO = "looptech-ai/understand-quickly"
@@ -37,7 +38,7 @@ DISPATCH_EVENT_TYPE = "uq-publish"
 DEFAULT_OUT = Path(".codebase-memory") / "graph.json"
 
 
-def _git(args: list[str], cwd: Path) -> str | None:
+def _git(args: list, cwd: Path) -> Optional[str]:
     try:
         r = subprocess.run(  # nosec B603
             ["git", *args], cwd=str(cwd), capture_output=True, text=True,
@@ -48,17 +49,24 @@ def _git(args: list[str], cwd: Path) -> str | None:
     return r.stdout.strip() if r.returncode == 0 else None
 
 
-def _detect_repo_slug(cwd: Path) -> str | None:
+def _detect_repo_slug(cwd: Path) -> Optional[str]:
     url = _git(["remote", "get-url", "origin"], cwd) or ""
     for prefix in ("https://github.com/", "git@github.com:"):
         if url.startswith(prefix):
-            slug = url[len(prefix):].removesuffix(".git")
+            slug = url[len(prefix):]
+            if slug.endswith(".git"):
+                slug = slug[: -len(".git")]
             return slug or None
     return None
 
 
-def _mcp_call(binary: str, tool: str, args: dict, timeout: float = 30.0) -> dict:
-    """Spawn the cbm binary, run a single tool call over stdio, return JSON result."""
+def _mcp_call(binary: str, tool: str, args: dict, timeout: float = 30.0) -> Any:
+    """Spawn the cbm binary, run a single tool call over stdio, return decoded result.
+
+    MCP `tools/call` results have shape ``{"content":[{"type":"text","text":"..."}],
+    "isError":bool}``. This helper unwraps the text payload and ``json.loads()``-es
+    it, raising ``RuntimeError`` on ``isError`` or unparseable text.
+    """
     msgs = (
         b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":'
         b'{"protocolVersion":"2025-11-25","capabilities":{}}}\n'
@@ -71,32 +79,66 @@ def _mcp_call(binary: str, tool: str, args: dict, timeout: float = 30.0) -> dict
     proc = subprocess.run(  # nosec B603
         [binary], input=msgs, capture_output=True, timeout=timeout, check=False,
     )
+    result = None
     for line in proc.stdout.splitlines():
         try:
             obj = json.loads(line)
         except json.JSONDecodeError:
             continue
         if obj.get("id") == 2:
-            return obj.get("result", {})
-    raise RuntimeError(f"no response from {binary} for tool {tool}")
+            result = obj.get("result", {})
+            break
+    if result is None:
+        raise RuntimeError(f"no response from {binary} for tool {tool}")
+    content = result.get("content") if isinstance(result, dict) else None
+    if isinstance(content, list) and content and isinstance(content[0], dict):
+        text = content[0].get("text", "")
+        if result.get("isError"):
+            raise RuntimeError(f"{tool} returned isError: {text[:200]}")
+        try:
+            return json.loads(text) if text else {}
+        except json.JSONDecodeError:
+            # Tool returned a plain (non-JSON) text payload — surface as-is.
+            return {"text": text}
+    return result  # already-decoded shape (e.g. test mocks)
+
+
+def _query_rows(binary: str, project: str, query: str) -> list:
+    """Run a Cypher query and return the rows list (empty on error)."""
+    res = _mcp_call(binary, "query_graph", {"project": project, "query": query})
+    if not isinstance(res, dict):
+        return []
+    rows = res.get("rows") or res.get("results") or res.get("data") or []
+    return rows if isinstance(rows, list) else []
 
 
 def build_graph(binary: str, project: str) -> dict:
-    """Project the in-memory KG to a `gitnexus@1`-shaped graph using existing MCP tools."""
-    arch = _mcp_call(binary, "get_architecture", {"project": project})
-    nodes_raw = arch.get("nodes") or arch.get("modules") or []
-    edges_raw = arch.get("edges") or arch.get("links") or []
+    """Project the in-memory KG to a `gitnexus@1`-shaped graph via `query_graph`.
+
+    Uses two Cypher queries to extract Module-level nodes and their dependency
+    edges. Falls back to an empty graph if the underlying tools return no rows.
+    """
+    node_rows = _query_rows(
+        binary, project,
+        "MATCH (n:Module) RETURN id(n) AS id, n.name AS name, labels(n)[0] AS kind "
+        "LIMIT 5000",
+    )
+    edge_rows = _query_rows(
+        binary, project,
+        "MATCH (a:Module)-[r]->(b:Module) "
+        "RETURN id(a) AS source, id(b) AS target, type(r) AS kind LIMIT 20000",
+    )
     nodes = [
-        {"id": str(n.get("id", n.get("name", i))),
-         "label": n.get("name", n.get("label", "")),
-         "kind": n.get("kind", n.get("type", "module"))}
-        for i, n in enumerate(nodes_raw)
+        {"id": str(r.get("id", r.get("name", i))),
+         "label": str(r.get("name", "") or ""),
+         "kind": str(r.get("kind", "Module") or "Module")}
+        for i, r in enumerate(node_rows) if isinstance(r, dict)
     ]
     edges = [
-        {"source": str(e.get("source", e.get("from", ""))),
-         "target": str(e.get("target", e.get("to", ""))),
-         "kind": e.get("kind", e.get("type", "depends_on"))}
-        for e in edges_raw
+        {"source": str(r.get("source", "")),
+         "target": str(r.get("target", "")),
+         "kind": str(r.get("kind", "DEPENDS_ON") or "DEPENDS_ON")}
+        for r in edge_rows if isinstance(r, dict)
     ]
     return {"schema": "gitnexus@1", "nodes": nodes, "links": edges}
 
@@ -116,7 +158,7 @@ def stamp_metadata(graph: dict, *, repo_dir: Path, tool_version: str) -> dict:
 
 
 def dispatch(repo_slug: str, *, token: str, schema: str, graph_path: str,
-             commit: str | None, tool_version: str, timeout: float = 10.0) -> int:
+             commit: Optional[str], tool_version: str, timeout: float = 10.0) -> int:
     payload = {
         "event_type": DISPATCH_EVENT_TYPE,
         "client_payload": {

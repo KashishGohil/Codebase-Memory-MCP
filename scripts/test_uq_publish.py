@@ -47,18 +47,49 @@ class StampMetadataTests(unittest.TestCase):
 
 
 class BuildGraphTests(unittest.TestCase):
-    def test_projects_architecture_response_to_gitnexus_at_1(self) -> None:
-        fake_arch = {
-            "nodes": [{"id": 1, "name": "AuthService", "kind": "module"}],
-            "edges": [{"source": 1, "target": 2, "kind": "depends_on"}],
-        }
-        with mock.patch.object(uq, "_mcp_call", return_value=fake_arch):
+    def test_projects_query_graph_rows_to_gitnexus_at_1(self) -> None:
+        node_rows = [{"id": 1, "name": "AuthService", "kind": "Module"}]
+        edge_rows = [{"source": 1, "target": 2, "kind": "DEPENDS_ON"}]
+
+        def fake_query_rows(_binary: str, _project: str, query: str):
+            return node_rows if "id(n)" in query else edge_rows
+
+        with mock.patch.object(uq, "_query_rows", side_effect=fake_query_rows):
             graph = uq.build_graph("/fake/binary", "demo")
         self.assertEqual(graph["schema"], "gitnexus@1")
         self.assertEqual(len(graph["nodes"]), 1)
         self.assertEqual(graph["nodes"][0]["label"], "AuthService")
+        self.assertEqual(graph["nodes"][0]["kind"], "Module")
         self.assertEqual(len(graph["links"]), 1)
         self.assertEqual(graph["links"][0]["source"], "1")
+        self.assertEqual(graph["links"][0]["kind"], "DEPENDS_ON")
+
+
+class McpCallUnwrapTests(unittest.TestCase):
+    """`_mcp_call` must unwrap the MCP `{content:[{type:'text',text:'...'}]}` envelope."""
+
+    def _mcp_response(self, payload: dict, is_error: bool = False) -> bytes:
+        env = {
+            "jsonrpc": "2.0", "id": 2,
+            "result": {
+                "content": [{"type": "text", "text": json.dumps(payload)}],
+                "isError": is_error,
+            },
+        }
+        return (json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}).encode()
+                + b"\n" + json.dumps(env).encode() + b"\n")
+
+    def test_unwraps_text_content_and_decodes_json(self) -> None:
+        fake_proc = mock.MagicMock(stdout=self._mcp_response({"rows": [{"a": 1}]}))
+        with mock.patch.object(uq.subprocess, "run", return_value=fake_proc):
+            out = uq._mcp_call("/fake/bin", "query_graph", {"project": "p", "query": "q"})
+        self.assertEqual(out, {"rows": [{"a": 1}]})
+
+    def test_is_error_raises(self) -> None:
+        fake_proc = mock.MagicMock(stdout=self._mcp_response({"msg": "boom"}, is_error=True))
+        with mock.patch.object(uq.subprocess, "run", return_value=fake_proc):
+            with self.assertRaises(RuntimeError):
+                uq._mcp_call("/fake/bin", "query_graph", {"project": "p", "query": "q"})
 
 
 if __name__ == "__main__":
