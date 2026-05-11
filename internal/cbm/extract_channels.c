@@ -141,7 +141,7 @@ static void scan_string_consts_python(CBMExtractCtx *ctx, chan_const_table_t *tb
     ts_nstack_init(&stack, ctx->arena, CHAN_STACK_CAP);
     ts_nstack_push(&stack, ctx->arena, ctx->root);
 
-    while (top > 0 && tbl->count < CHAN_CONST_CAP) {
+    while (stack.count > 0 && tbl->count < CHAN_CONST_CAP) {
         TSNode node = ts_nstack_pop(&stack);
         const char *kind = ts_node_type(node);
 
