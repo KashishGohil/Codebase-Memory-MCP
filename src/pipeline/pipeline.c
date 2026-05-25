@@ -858,6 +858,7 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
     struct timespec t0;
     cbm_clock_gettime(CLOCK_MONOTONIC, &t0);
     cbm_path_alias_collection_t *path_aliases = NULL;
+    cbm_sl_endpoint_list_t *endpoints = NULL;
 
     /* Load user-defined extension overrides (fail-open: NULL on error) */
     CBM_PROF_START(t_userconfig);
@@ -912,6 +913,8 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
         .mode = (int)p->mode,
         .path_aliases = path_aliases,
     };
+    endpoints = cbm_sl_endpoint_list_new();
+    ctx.endpoints = endpoints;
 
     rc = run_extraction_phase(p, &ctx, files, file_count);
     if (rc != 0) {
@@ -932,6 +935,7 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
 cleanup:
     cbm_pkgmap_free(cbm_pipeline_get_pkgmap());
     cbm_pipeline_set_pkgmap(NULL);
+    cbm_sl_endpoint_list_free(endpoints);
     cbm_discover_free(files, file_count);
     cbm_gbuf_free(p->gbuf);
     p->gbuf = NULL;

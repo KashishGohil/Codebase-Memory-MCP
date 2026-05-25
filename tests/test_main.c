@@ -71,6 +71,20 @@ extern void suite_integration(void);
 extern void suite_incremental(void);
 extern void suite_simhash(void);
 extern void suite_stack_overflow(void);
+extern void suite_servicelink_graphql(void);
+extern void suite_servicelink_grpc(void);
+extern void suite_servicelink_kafka(void);
+extern void suite_servicelink_sqs(void);
+extern void suite_servicelink_sns(void);
+extern void suite_servicelink_ws(void);
+extern void suite_servicelink_sse(void);
+extern void suite_servicelink_pubsub(void);
+extern void suite_servicelink_rabbitmq(void);
+extern void suite_servicelink_eventbridge(void);
+extern void suite_servicelink_mqtt(void);
+extern void suite_servicelink_nats(void);
+extern void suite_servicelink_redis_pubsub(void);
+extern void suite_servicelink_trpc(void);
 extern void suite_endpoint_registry(void);
 
 int main(void) {
@@ -188,6 +202,22 @@ int main(void) {
     /* Integration (end-to-end) */
     RUN_SUITE(integration);
     RUN_SUITE(incremental);
+
+    /* Service links */
+    RUN_SUITE(servicelink_graphql);
+    RUN_SUITE(servicelink_grpc);
+    RUN_SUITE(servicelink_kafka);
+    RUN_SUITE(servicelink_sqs);
+    RUN_SUITE(servicelink_sns);
+    RUN_SUITE(servicelink_ws);
+    RUN_SUITE(servicelink_sse);
+    RUN_SUITE(servicelink_pubsub);
+    RUN_SUITE(servicelink_rabbitmq);
+    RUN_SUITE(servicelink_eventbridge);
+    RUN_SUITE(servicelink_mqtt);
+    RUN_SUITE(servicelink_nats);
+    RUN_SUITE(servicelink_redis_pubsub);
+    RUN_SUITE(servicelink_trpc);
 
     /* Cross-repo endpoint registry */
     RUN_SUITE(endpoint_registry);

@@ -137,9 +137,22 @@ typedef struct {
 } cbm_sl_linker_entry_t;
 
 static const cbm_sl_linker_entry_t LINKERS[] = {
-    { NULL, NULL }  /* protocol linkers added in subsequent PRs */
+    { "GraphQL",      cbm_servicelink_graphql },
+    { "gRPC",         cbm_servicelink_grpc },
+    { "Kafka",        cbm_servicelink_kafka },
+    { "SQS",          cbm_servicelink_sqs },
+    { "SNS",          cbm_servicelink_sns },
+    { "Pub/Sub",      cbm_servicelink_pubsub },
+    { "WebSocket",    cbm_servicelink_ws },
+    { "SSE",          cbm_servicelink_sse },
+    { "RabbitMQ",     cbm_servicelink_rabbitmq },
+    { "MQTT",         cbm_servicelink_mqtt },
+    { "NATS",         cbm_servicelink_nats },
+    { "Redis Pub/Sub", cbm_servicelink_redis_pubsub },
+    { "tRPC",         cbm_servicelink_trpc },
+    { "EventBridge",  cbm_servicelink_eventbridge },
 };
-#define LINKER_COUNT ((int)(sizeof(LINKERS) / sizeof(LINKERS[0])) - 1)
+#define LINKER_COUNT (int)(sizeof(LINKERS) / sizeof(LINKERS[0]))
 
 /* ── Main pass entry point ──────────────────────────────────── */
 
@@ -184,5 +197,5 @@ int cbm_pipeline_pass_servicelinks(cbm_pipeline_ctx_t *ctx) {
                  "errors", itoa_sl(errors));
 
     /* Return 0 unless ALL linkers failed */
-    return (LINKER_COUNT > 0 && errors == LINKER_COUNT) ? -1 : 0;
+    return (errors == LINKER_COUNT) ? -1 : 0;
 }
