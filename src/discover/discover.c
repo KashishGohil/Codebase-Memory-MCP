@@ -13,13 +13,16 @@
 
 #include "foundation/constants.h"
 #include "foundation/compat_fs.h"
+#ifdef _WIN32
+#include "foundation/win_utf8.h"
+#endif
 #include <stdint.h> // int64_t
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h> // strdup
 #include <sys/stat.h>
 
-/* ── Hardcoded always-skip directories ───────────────────────────── */
+/* ── Hardcoded always-skip directories ──────────────────────────── */
 
 static const char *ALWAYS_SKIP_DIRS[] = {
     /* VCS */
@@ -52,7 +55,7 @@ static const char *FAST_SKIP_DIRS[] = {
     "locale",    "locales",       "i18n",           "l10n",         "scripts",     "tools",
     "hack",      "bin",           "build",          "out",          NULL};
 
-/* ── Ignored suffixes ────────────────────────────────────────────── */
+/* ── Ignored suffixes ───────────────────────────────── */
 
 static const char *ALWAYS_IGNORED_SUFFIXES[] = {
     ".tmp",    "~",        ".pyc",  ".pyo",   ".o",   ".a",   ".so",  ".dll",
@@ -68,7 +71,7 @@ static const char *FAST_IGNORED_SUFFIXES[] = {
     ".crt", ".key",  ".cer",      ".p12",  ".pb",  ".avro",   ".parquet", ".beam",
     ".elc", ".rlib", ".coverage", ".prof", ".out", ".patch",  ".diff",    NULL};
 
-/* ── Fast-mode skip filenames ────────────────────────────────────── */
+/* ── Fast-mode skip filenames ─────────────────────── */
 
 static const char *FAST_SKIP_FILENAMES[] = {
     "LICENSE",        "LICENSE.txt",     "LICENSE.md",   "LICENSE-MIT",   "LICENSE-APACHE",
@@ -79,14 +82,14 @@ static const char *FAST_SKIP_FILENAMES[] = {
     "mix.lock",       "flake.lock",      "pubspec.lock", "composer.lock", "package-lock.json",
     "configure",      "Makefile.in",     "config.guess", "config.sub",    NULL};
 
-/* ── Fast-mode substring patterns ────────────────────────────────── */
+/* ── Fast-mode substring patterns ───────────────────── */
 
 static const char *FAST_PATTERNS[] = {".d.ts",      ".bundle.", ".chunk.", ".generated.",
                                       ".pb.go",     "_pb2.py",  ".pb2.py", "_grpc.pb.go",
                                       "_string.go", "mock_",    "_mock.",  "_test_helpers.",
                                       ".stories.",  ".spec.",   ".test.",  NULL};
 
-/* ── Ignored JSON filenames ──────────────────────────────────────── */
+/* ── Ignored JSON filenames ──────────────────────── */
 
 static const char *IGNORED_JSON_FILES[] = {
     "package.json",       "package-lock.json", "tsconfig.json",
@@ -111,7 +114,7 @@ static bool str_in_list(const char *s, const char *const *list) {
     return false;
 }
 
-/* ── Helper: check if string ends with suffix ────────────────────── */
+/* ── Helper: check if string ends with suffix ────────────── */
 
 static bool ends_with(const char *s, const char *suffix) {
     size_t slen = strlen(s);
@@ -122,13 +125,13 @@ static bool ends_with(const char *s, const char *suffix) {
     return strcmp(s + slen - sufflen, suffix) == 0;
 }
 
-/* ── Helper: check if string contains substring ──────────────────── */
+/* ── Helper: check if string contains substring ───────────── */
 
 static bool str_contains(const char *s, const char *sub) {
     return strstr(s, sub) != NULL;
 }
 
-/* ── Public filter functions ─────────────────────────────────────── */
+/* ── Public filter functions ─────────────────────── */
 
 bool cbm_should_skip_dir(const char *dirname, cbm_index_mode_t mode) {
     if (!dirname) {
@@ -199,7 +202,7 @@ bool cbm_matches_fast_pattern(const char *filename, cbm_index_mode_t mode) {
     return false;
 }
 
-/* ── Dynamic file list ───────────────────────────────────────────── */
+/* ── Dynamic file list ────────────────────────── */
 
 typedef struct {
     cbm_file_info_t *files;
@@ -226,7 +229,7 @@ static void fl_add(file_list_t *fl, const char *abs_path, const char *rel_path, 
     fi->size = size;
 }
 
-/* ── Recursive walk ──────────────────────────────────────────────── */
+/* ── Recursive walk ─────────────────────────────── */
 
 /* Compute path relative to a nested .gitignore's directory.
  * "webapp/src/foo.js" with prefix "webapp" → "src/foo.js". */
@@ -315,12 +318,32 @@ static CBMLanguage detect_file_language(const char *entry_name, const char *abs_
     return lang;
 }
 
+/* UTF-8-safe stat: wide API on Windows, regular stat on POSIX. */
+static int wide_stat(const char *path, struct stat *st) {
+#ifdef _WIN32
+    wchar_t *wpath = cbm_utf8_to_wide(path);
+    if (!wpath) {
+        return CBM_NOT_FOUND;
+    }
+    struct _stat64 wst;
+    int ret = _wstat64(wpath, &wst);
+    free(wpath);
+    if (ret != 0) {
+        return CBM_NOT_FOUND;
+    }
+    st->st_mode = wst.st_mode;
+    st->st_size = wst.st_size;
+    st->st_mtime = wst.st_mtime;
+    return 0;
+#else
+    return stat(path, st);
+#endif
+}
+
 /* Stat a path, skipping symlinks. Returns 0 on success, -1 to skip. */
 static int safe_stat(const char *abs_path, struct stat *st) {
 #ifdef _WIN32
-    if (stat(abs_path, st) != 0) {
-        return CBM_NOT_FOUND;
-    }
+    return wide_stat(abs_path, st);
 #else
     if (lstat(abs_path, st) != 0) {
         return CBM_NOT_FOUND;
@@ -328,8 +351,8 @@ static int safe_stat(const char *abs_path, struct stat *st) {
     if (S_ISLNK(st->st_mode)) {
         return CBM_NOT_FOUND;
     }
-#endif
     return 0;
+#endif
 }
 
 /* Process a single regular file entry during directory walk. */
@@ -364,7 +387,7 @@ static cbm_gitignore_t *try_load_nested_gitignore(const walk_frame_t *frame) {
     char gi_path[CBM_SZ_4K];
     snprintf(gi_path, sizeof(gi_path), "%s/.gitignore", frame->dir);
     struct stat gi_st;
-    if (stat(gi_path, &gi_st) == 0 && S_ISREG(gi_st.st_mode)) {
+    if (wide_stat(gi_path, &gi_st) == 0 && S_ISREG(gi_st.st_mode)) {
         return cbm_gitignore_load(gi_path);
     }
     return NULL;
@@ -461,7 +484,7 @@ static void walk_dir(const char *dir_path, const char *rel_prefix, const cbm_dis
     free(stack);
 }
 
-/* ── Public API ──────────────────────────────────────────────────── */
+/* ── Public API ───────────────────────────────── */
 
 int cbm_discover(const char *repo_path, const cbm_discover_opts_t *opts, cbm_file_info_t **out,
                  int *count) {
@@ -474,7 +497,7 @@ int cbm_discover(const char *repo_path, const cbm_discover_opts_t *opts, cbm_fil
 
     /* Verify directory exists */
     struct stat st;
-    if (stat(repo_path, &st) != 0 || !S_ISDIR(st.st_mode)) {
+    if (wide_stat(repo_path, &st) != 0 || !S_ISDIR(st.st_mode)) {
         return CBM_NOT_FOUND;
     }
 
@@ -483,7 +506,7 @@ int cbm_discover(const char *repo_path, const cbm_discover_opts_t *opts, cbm_fil
     char gi_path[CBM_SZ_4K];
     snprintf(gi_path, sizeof(gi_path), "%s/.git", repo_path);
     struct stat gi_stat;
-    if (stat(gi_path, &gi_stat) == 0 && S_ISDIR(gi_stat.st_mode)) {
+    if (wide_stat(gi_path, &gi_stat) == 0 && S_ISDIR(gi_stat.st_mode)) {
         snprintf(gi_path, sizeof(gi_path), "%s/.gitignore", repo_path);
         gitignore = cbm_gitignore_load(gi_path);
     }

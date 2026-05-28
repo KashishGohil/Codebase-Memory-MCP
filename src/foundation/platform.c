@@ -13,7 +13,7 @@
 
 #ifdef _WIN32
 
-/* ── Windows implementation ───────────────────────────────────── */
+/* ── Windows implementation ────────────────────────────────── */
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -21,6 +21,7 @@
 #include <windows.h>
 #include <io.h>
 #include <sys/stat.h>
+#include "foundation/win_utf8.h"
 
 void *cbm_mmap_read(const char *path, size_t *out_size) {
     if (!path || !out_size) {
@@ -28,24 +29,33 @@ void *cbm_mmap_read(const char *path, size_t *out_size) {
     }
     *out_size = 0;
 
-    HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+    wchar_t *wpath = cbm_utf8_to_wide(path);
+    if (!wpath) {
+        return NULL;
+    }
+
+    HANDLE file = CreateFileW(wpath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
                               FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) {
+        free(wpath);
         return NULL;
     }
     LARGE_INTEGER sz;
     if (!GetFileSizeEx(file, &sz) || sz.QuadPart == 0) {
         CloseHandle(file);
+        free(wpath);
         return NULL;
     }
-    HANDLE mapping = CreateFileMappingA(file, NULL, PAGE_READONLY, 0, 0, NULL);
+    HANDLE mapping = CreateFileMappingW(file, NULL, PAGE_READONLY, 0, 0, NULL);
     if (!mapping) {
         CloseHandle(file);
+        free(wpath);
         return NULL;
     }
     void *addr = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
     CloseHandle(mapping);
     CloseHandle(file);
+    free(wpath);
     if (!addr) {
         return NULL;
     }
@@ -80,18 +90,34 @@ int cbm_nprocs(void) {
 }
 
 bool cbm_file_exists(const char *path) {
-    DWORD attr = GetFileAttributesA(path);
+    wchar_t *wpath = cbm_utf8_to_wide(path);
+    if (!wpath) {
+        return false;
+    }
+    DWORD attr = GetFileAttributesW(wpath);
+    free(wpath);
     return attr != INVALID_FILE_ATTRIBUTES;
 }
 
 bool cbm_is_dir(const char *path) {
-    DWORD attr = GetFileAttributesA(path);
+    wchar_t *wpath = cbm_utf8_to_wide(path);
+    if (!wpath) {
+        return false;
+    }
+    DWORD attr = GetFileAttributesW(wpath);
+    free(wpath);
     return attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY);
 }
 
 int64_t cbm_file_size(const char *path) {
+    wchar_t *wpath = cbm_utf8_to_wide(path);
+    if (!wpath) {
+        return CBM_NOT_FOUND;
+    }
     WIN32_FILE_ATTRIBUTE_DATA fad;
-    if (!GetFileAttributesExA(path, GetFileExInfoStandard, &fad)) {
+    BOOL ok = GetFileAttributesExW(wpath, GetFileExInfoStandard, &fad);
+    free(wpath);
+    if (!ok) {
         return CBM_NOT_FOUND;
     }
     LARGE_INTEGER sz;
@@ -113,7 +139,7 @@ char *cbm_normalize_path_sep(char *path) {
 
 #else /* POSIX (macOS + Linux) */
 
-/* ── POSIX implementation ─────────────────────────────────────── */
+/* ── POSIX implementation ────────────────────────────────── */
 
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -127,7 +153,7 @@ char *cbm_normalize_path_sep(char *path) {
 #include <sched.h>
 #endif
 
-/* ── Memory mapping ────────────────────────────────────────────── */
+/* ── Memory mapping ──────────────────────────── */
 
 void *cbm_mmap_read(const char *path, size_t *out_size) {
     if (!path || !out_size) {
@@ -162,7 +188,7 @@ void cbm_munmap(void *addr, size_t size) {
     }
 }
 
-/* ── Timing ────────────────────────────────────────────────────── */
+/* ── Timing ───────────────────────────── */
 
 #ifdef __APPLE__
 static mach_timebase_info_data_t timebase_info;
@@ -190,7 +216,7 @@ uint64_t cbm_now_ms(void) {
     return cbm_now_ns() / CBM_USEC_PER_SEC;
 }
 
-/* ── System info ───────────────────────────────────────────────── */
+/* ── System info ───────────────────────────── */
 
 int cbm_nprocs(void) {
 #ifdef __APPLE__
@@ -207,7 +233,7 @@ int cbm_nprocs(void) {
 #endif
 }
 
-/* ── File system ───────────────────────────────────────────────── */
+/* ── File system ──────────────────────────── */
 
 bool cbm_file_exists(const char *path) {
     struct stat st;
@@ -242,7 +268,7 @@ char *cbm_normalize_path_sep(char *path) {
 
 #endif /* _WIN32 */
 
-/* ── Environment variables ────────────────────────────────────── */
+/* ── Environment variables ──────────────────────────── */
 
 /* Thread-safe getenv: iterates environ directly instead of calling getenv().
  * getenv() is flagged by concurrency-mt-unsafe because the returned pointer
@@ -278,7 +304,7 @@ const char *cbm_safe_getenv(const char *name, char *buf, size_t buf_sz, const ch
     return NULL;
 }
 
-/* ── Home directory (cross-platform) ──────────────────────────── */
+/* ── Home directory (cross-platform) ───────────────────── */
 
 const char *cbm_get_home_dir(void) {
     static char buf[CBM_SZ_1K];
@@ -300,7 +326,7 @@ const char *cbm_get_home_dir(void) {
     return NULL;
 }
 
-/* ── App config directories (cross-platform) ─────────────────── */
+/* ── App config directories (cross-platform) ────────── */
 
 const char *cbm_app_config_dir(void) {
     static char buf[CBM_SZ_1K];
@@ -355,7 +381,7 @@ const char *cbm_app_local_dir(void) {
 #endif
 }
 
-/* ── Cache directory ─────────────────────────────────────────── */
+/* ── Cache directory ────────────────────────── */
 
 const char *cbm_resolve_cache_dir(void) {
     static char buf[CBM_SZ_1K];
