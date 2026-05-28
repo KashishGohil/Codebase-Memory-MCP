@@ -339,6 +339,10 @@ static int configure_pragmas(cbm_store_t *s, bool in_memory) {
         if (rc != CBM_STORE_OK) {
             return rc;
         }
+        /* Recover stale WAL from previous crash (best-effort).
+         * PASSIVE never blocks readers and never ftruncates.
+         * May fail with SQLITE_BUSY if another process holds a lock. */
+        (void)sqlite3_exec(s->db, "PRAGMA wal_checkpoint(PASSIVE)", NULL, NULL, NULL);
         rc = exec_sql(s, "PRAGMA synchronous = NORMAL;");
         if (rc != CBM_STORE_OK) {
             return rc;
@@ -723,6 +727,12 @@ static void finalize_stmt(sqlite3_stmt **s) {
 void cbm_store_close(cbm_store_t *s) {
     if (!s) {
         return;
+    }
+
+    /* Checkpoint WAL before close to prevent orphan WAL accumulation.
+     * Best-effort — silently skips if concurrent reader holds a lock. */
+    if (s->db && s->db_path) {
+        (void)sqlite3_wal_checkpoint_v2(s->db, NULL, SQLITE_CHECKPOINT_PASSIVE, NULL, NULL);
     }
 
     /* Finalize all cached statements */
