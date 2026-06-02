@@ -27,6 +27,7 @@ enum {
     MAIN_FLAG_OFF = 5, /* strlen("--ui=") */
     MAIN_PORT_OFF = 7, /* strlen("--port=") */
     MAIN_MAX_PORT = 65536,
+    PARENT_WATCHDOG_STACK_SIZE = 64 * CBM_SZ_1K,
 };
 #define MAIN_RAM_FRACTION 0.5
 
@@ -34,6 +35,7 @@ enum {
 #include "foundation/log.h"
 #include "foundation/diagnostics.h"
 #include "foundation/platform.h"
+#include "foundation/compat.h"
 #include "foundation/compat_thread.h"
 #include "foundation/mem.h"
 #include "foundation/profile.h"
@@ -59,9 +61,10 @@ static cbm_mcp_server_t *g_server = NULL;
 static cbm_http_server_t *g_http_server = NULL;
 static atomic_int g_shutdown = 0;
 
-static void signal_handler(int sig) {
-    (void)sig;
-    atomic_store(&g_shutdown, 1);
+static void request_shutdown(void) {
+    if (atomic_exchange(&g_shutdown, 1)) {
+        return;
+    }
 
     /* Cancel any in-progress pipeline (async-signal-safe: only does atomic_store) */
     if (g_server) {
@@ -82,6 +85,37 @@ static void signal_handler(int sig) {
     /* Close stdin to unblock getline in the MCP server loop */
     (void)fclose(stdin);
 }
+
+static void signal_handler(int sig) {
+    (void)sig;
+    request_shutdown();
+}
+
+/* ── Parent process watchdog ───────────────────────────────────── */
+
+#ifndef _WIN32
+static void *parent_watchdog_thread(void *arg) {
+    pid_t initial_ppid = *(pid_t *)arg;
+    const unsigned int interval_us = 500000;
+
+    while (!atomic_load(&g_shutdown)) {
+        cbm_usleep(interval_us);
+
+        if (atomic_load(&g_shutdown)) {
+            break;
+        }
+
+        pid_t current_ppid = getppid();
+        if (initial_ppid > 1 && current_ppid != initial_ppid) {
+            cbm_log_warn("parent.exited", "reason", "ppid_changed");
+            request_shutdown();
+            exit(0);
+        }
+    }
+
+    return NULL;
+}
+#endif
 
 /* ── Watcher background thread ──────────────────────────────────── */
 
@@ -345,6 +379,24 @@ int main(int argc, char **argv) {
         return subcmd;
     }
 
+#ifndef _WIN32
+    pid_t initial_ppid = getppid();
+    if (initial_ppid <= 1) {
+        return 0;
+    }
+
+    cbm_thread_t parent_watchdog_tid;
+    bool parent_watchdog_started = false;
+    int parent_watchdog_rc = cbm_thread_create(&parent_watchdog_tid, PARENT_WATCHDOG_STACK_SIZE,
+                                               parent_watchdog_thread, &initial_ppid);
+    if (parent_watchdog_rc == 0) {
+        parent_watchdog_started = true;
+    } else {
+        cbm_log_int(CBM_LOG_WARN, "parent.watchdog.unavailable", "rc", parent_watchdog_rc);
+        return SKIP_ONE;
+    }
+#endif
+
     /* Default: MCP server on stdio */
     cbm_mem_init(MAIN_RAM_FRACTION); /* 50% of RAM — safe now because mimalloc tracks ALL
                                       * memory (C + C++ allocations) via global override.
@@ -391,6 +443,12 @@ int main(int argc, char **argv) {
     if (!g_server) {
         cbm_log_error("server.err", "msg", "failed to create server");
         cbm_config_close(runtime_config);
+#ifndef _WIN32
+        atomic_store(&g_shutdown, 1);
+        if (parent_watchdog_started) {
+            cbm_thread_join(&parent_watchdog_tid);
+        }
+#endif
         return SKIP_ONE;
     }
 
@@ -430,9 +488,16 @@ int main(int argc, char **argv) {
 
     /* Run MCP event loop (blocks until EOF or signal) */
     int rc = cbm_mcp_server_run(g_server, stdin, stdout);
+    atomic_store(&g_shutdown, 1);
 
     /* Shutdown */
     cbm_log_info("server.shutdown");
+
+#ifndef _WIN32
+    if (parent_watchdog_started) {
+        cbm_thread_join(&parent_watchdog_tid);
+    }
+#endif
 
     if (http_started) {
         cbm_http_server_stop(g_http_server);

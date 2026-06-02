@@ -60,4 +60,8 @@ scripts/clean.sh
 # Step 2 + 3: Build and run tests (with arch prefix on macOS)
 $ARCH_PREFIX make -j"$NPROC" -f Makefile.cbm test $MAKE_ARGS
 
+# Step 4: Build the stdio MCP binary and verify it exits when its parent dies.
+$ARCH_PREFIX make -j"$NPROC" -f Makefile.cbm cbm $MAKE_ARGS
+bash tests/test_parent_watchdog.sh
+
 echo "=== All tests passed ==="
