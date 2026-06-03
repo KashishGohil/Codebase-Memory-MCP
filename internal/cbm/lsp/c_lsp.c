@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <stdint.h>
 
 /* Safe kind accessor — returns CBM_TYPE_UNKNOWN for NULL types.
  * Prevents SEGV in c_eval_expr_type_inner on unusual C++ AST shapes. */
@@ -1223,6 +1224,37 @@ static const CBMType* c_eval_expr_type_inner(CLSPContext* ctx, TSNode node);
 #define C_EVAL_DEPTH_LIMIT 256
 #define C_EVAL_MAX_STEPS_PER_FILE 10000
 
+/* Validate that a putative CBMType pointer can be safely dereferenced.
+ * The C/C++ LSP's registry-lookup paths can occasionally surface a stale
+ * or mis-typed pointer through chains of template-function calls (UBSan
+ * catches this on ns-3 src/core/model/ptr.h with templated operator<,
+ * operator==, etc.) — the pointer ends up unaligned and points into
+ * string data. Validating alignment + kind range here keeps the
+ * best-effort evaluator from crashing on those inputs without changing
+ * its result shape (unknown propagates correctly through callers). */
+static bool cbm_type_pointer_looks_valid(const CBMType* t) {
+    if (!t) return false;
+    if ((uintptr_t)t % 8 != 0) return false;
+    /* CBMTypeKind is an enum with ~30 members; reject anything outside a
+     * generous bound to catch garbage values read from misaligned memory. */
+    if ((unsigned)t->kind > 64u) return false;
+    /* For FUNC types we also peek at return_types[0] — the corruption pattern
+     * surfaces a valid-looking FUNC with garbage children, so a shallow check
+     * on the outer pointer isn't enough. We bound-check the array pointer
+     * itself and its first element. */
+    if (t->kind == CBM_TYPE_FUNC) {
+        const CBMType** rts = t->data.func.return_types;
+        if (rts) {
+            if ((uintptr_t)rts % 8 != 0) return false;
+            const CBMType* r0 = rts[0];
+            if (r0 && ((uintptr_t)r0 % 8 != 0 || (unsigned)r0->kind > 64u)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
     if (ts_node_is_null(node)) return cbm_type_unknown();
     /* Expression type evaluation is best-effort. Some recovery-mode C++ ASTs
@@ -1239,7 +1271,10 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
     ctx->eval_depth++;
     const CBMType* result = c_eval_expr_type_inner(ctx, node);
     ctx->eval_depth--;
-    return result ? result : cbm_type_unknown();
+    if (!cbm_type_pointer_looks_valid(result)) {
+        return cbm_type_unknown();
+    }
+    return result;
 }
 
 static const CBMType* c_eval_expr_type_inner(CLSPContext* ctx, TSNode node) {
