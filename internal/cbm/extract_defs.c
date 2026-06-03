@@ -469,6 +469,56 @@ static TSNode resolve_qualified_name(TSNode decl) {
     return null_node;
 }
 
+// C++/CUDA: find a qualified_identifier inside the declarator chain of a
+// function_definition (e.g. SemanticLayer::ReceiveUp). Returns null if the
+// declarator is unqualified. Used to detect out-of-line method definitions.
+static TSNode find_qualified_func_declarator(TSNode node) {
+    TSNode decl = ts_node_child_by_field_name(node, TS_FIELD("declarator"));
+    for (int depth = 0; depth < DECLARATOR_DEPTH_LIMIT && !ts_node_is_null(decl); depth++) {
+        const char *dk = ts_node_type(decl);
+        if (strcmp(dk, "qualified_identifier") == 0 || strcmp(dk, "scoped_identifier") == 0) {
+            return decl;
+        }
+        TSNode inner = ts_node_child_by_field_name(decl, TS_FIELD("declarator"));
+        if (ts_node_is_null(inner) && ts_node_named_child_count(decl) > 0) {
+            inner = ts_node_named_child(decl, 0);
+        }
+        if (ts_node_is_null(inner)) {
+            break;
+        }
+        decl = inner;
+    }
+    TSNode null_node = {0};
+    return null_node;
+}
+
+// Extract the immediate enclosing class name from a qualified_identifier
+// declarator. For `SemanticLayer::ReceiveUp` returns "SemanticLayer".
+// For `ns3::SemanticLayer::ReceiveUp` walks nested scopes and returns the
+// innermost class identifier ("SemanticLayer") — i.e. the direct parent.
+static char *extract_qualified_immediate_scope(CBMArena *a, TSNode qid, const char *source) {
+    TSNode scope = ts_node_child_by_field_name(qid, TS_FIELD("scope"));
+    if (ts_node_is_null(scope)) {
+        return NULL;
+    }
+    for (int depth = 0; depth < DECLARATOR_DEPTH_LIMIT; depth++) {
+        const char *sk = ts_node_type(scope);
+        if (strcmp(sk, "qualified_identifier") != 0 && strcmp(sk, "scoped_identifier") != 0) {
+            break;
+        }
+        TSNode name = ts_node_child_by_field_name(scope, TS_FIELD("name"));
+        if (ts_node_is_null(name)) {
+            break;
+        }
+        scope = name;
+    }
+    char *text = cbm_node_text(a, scope, source);
+    if (!text || !text[0]) {
+        return NULL;
+    }
+    return text;
+}
+
 // Resolve function name from C/C++/CUDA/GLSL declarator chain.
 static TSNode resolve_c_declarator_name(TSNode node) {
     TSNode decl = ts_node_child_by_field_name(node, TS_FIELD("declarator"));
@@ -1711,6 +1761,24 @@ static void extract_func_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec 
     def.end_line = ts_node_end_point(node).row + TS_LINE_OFFSET;
     def.lines = (int)(def.end_line - def.start_line + TS_LINE_OFFSET);
     def.is_exported = cbm_is_exported(name, ctx->language);
+
+    // C++/CUDA: out-of-line method definition (e.g. `Foo::Bar` in a .cc file).
+    // The class body in the header is declaration-only; promote this to Method
+    // and attach a parent_class so reviewers/queries don't see a free function.
+    if ((ctx->language == CBM_LANG_CPP || ctx->language == CBM_LANG_CUDA) &&
+        strcmp(ts_node_type(node), "function_definition") == 0) {
+        TSNode qid = find_qualified_func_declarator(node);
+        if (!ts_node_is_null(qid)) {
+            char *scope_name = extract_qualified_immediate_scope(a, qid, ctx->source);
+            if (scope_name && scope_name[0]) {
+                const char *class_qn =
+                    cbm_fqn_compute(a, ctx->project, ctx->rel_path, scope_name);
+                def.qualified_name = cbm_arena_sprintf(a, "%s.%s", class_qn, name);
+                def.label = "Method";
+                def.parent_class = class_qn;
+            }
+        }
+    }
 
     // Parameters — use func_node (inner function for templates)
     TSNode params = ts_node_child_by_field_name(func_node, TS_FIELD("parameters"));
