@@ -6,7 +6,7 @@
  */
 #include "test_framework.h"
 #include "../src/foundation/log.h"
-#include "../src/foundation/compat.h"  /* cbm_setenv / cbm_unsetenv */
+#include "../src/foundation/compat.h"
 #include <stdbool.h>
 #ifndef _WIN32
 #include <unistd.h>
