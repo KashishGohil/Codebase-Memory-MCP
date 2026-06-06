@@ -2495,10 +2495,40 @@ static void try_artifact_bootstrap(const char *project_name, const char *repo_pa
     }
 }
 
+/* Cap on excluded dir paths listed in the response — keep it compact on large
+ * repos (node_modules / vendor / etc. can produce many skip points). The full
+ * count is still reported via "count" + "truncated". */
+enum { INDEX_EXCLUDED_DIR_CAP = 25 };
+
+/* Attach a compact summary of directory subtrees skipped during discovery (#411).
+ * Shape: "excluded": {"dirs": [up to 25 rel-paths], "count": <total>, "truncated": <bool>}.
+ * No-op when nothing was excluded. excluded_dirs[] is borrowed (copied into doc). */
+static void add_excluded_summary(yyjson_mut_doc *doc, yyjson_mut_val *root, char **excluded_dirs,
+                                 int excluded_count) {
+    if (!excluded_dirs || excluded_count <= 0) {
+        return;
+    }
+    yyjson_mut_val *excluded = yyjson_mut_obj(doc);
+    yyjson_mut_val *dirs = yyjson_mut_arr(doc);
+    int shown = excluded_count < INDEX_EXCLUDED_DIR_CAP ? excluded_count : INDEX_EXCLUDED_DIR_CAP;
+    for (int i = 0; i < shown; i++) {
+        if (excluded_dirs[i]) {
+            yyjson_mut_arr_add_strcpy(doc, dirs, excluded_dirs[i]);
+        }
+    }
+    yyjson_mut_obj_add_val(doc, excluded, "dirs", dirs);
+    yyjson_mut_obj_add_int(doc, excluded, "count", excluded_count);
+    yyjson_mut_obj_add_bool(doc, excluded, "truncated", excluded_count > shown);
+    yyjson_mut_obj_add_val(doc, root, "excluded", excluded);
+}
+
 /* Build the success portion of the index_repository response. */
 static void build_index_success_response(cbm_mcp_server_t *srv, yyjson_mut_doc *doc,
                                          yyjson_mut_val *root, const char *project_name,
-                                         const char *repo_path, bool persistence) {
+                                         const char *repo_path, bool persistence,
+                                         char **excluded_dirs, int excluded_count) {
+    add_excluded_summary(doc, root, excluded_dirs, excluded_count);
+
     cbm_store_t *store = resolve_store(srv, project_name);
     if (!store) {
         return;
@@ -2586,7 +2616,13 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
     srv->active_pipeline = NULL;
     cbm_pipeline_unlock();
 
-    cbm_pipeline_free(p);
+    /* Capture the excluded-subtree list (#411) while the pipeline (which owns
+     * the strings) is still alive — the response builder copies them into the
+     * JSON doc, so they need only outlive that call, not cbm_pipeline_free. */
+    char **excluded_dirs = NULL;
+    int excluded_count = 0;
+    cbm_pipeline_get_excluded(p, &excluded_dirs, &excluded_count);
+
     cbm_mem_collect(); /* return mimalloc pages to OS after large indexing */
 
     /* Invalidate cached store so next query reopens the fresh database */
@@ -2611,11 +2647,14 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
     }
 
     if (rc == 0) {
-        build_index_success_response(srv, doc, root, project_name, repo_path, persistence);
+        build_index_success_response(srv, doc, root, project_name, repo_path, persistence,
+                                     excluded_dirs, excluded_count);
     }
 
     char *json = yy_doc_to_str(doc);
     yyjson_mut_doc_free(doc);
+    /* Free the pipeline only after the response doc copied the excluded list. */
+    cbm_pipeline_free(p);
     free(project_name);
     free(repo_path);
 

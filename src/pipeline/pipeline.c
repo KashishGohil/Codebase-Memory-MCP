@@ -82,6 +82,12 @@ struct cbm_pipeline {
     cbm_gbuf_t *gbuf;
     cbm_registry_t *registry;
 
+    /* Directory subtrees skipped during discovery (rel paths). Captured from
+     * cbm_discover_ex so the MCP layer can report excluded subtrees (#411).
+     * Owned by the pipeline; freed in cbm_pipeline_free. */
+    char **excluded_dirs;
+    int excluded_count;
+
     /* User-defined extension overrides (loaded once per run) */
     cbm_userconfig_t *userconfig;
 };
@@ -161,6 +167,9 @@ void cbm_pipeline_free(cbm_pipeline_t *p) {
     free(p->repo_path);
     free(p->db_path);
     free(p->project_name);
+    cbm_discover_free_excluded(p->excluded_dirs, p->excluded_count);
+    p->excluded_dirs = NULL;
+    p->excluded_count = 0;
     /* gbuf, store, registry freed during/after run */
     /* Defensively free userconfig in case run() was never called or panicked */
     if (p->userconfig) {
@@ -191,6 +200,15 @@ atomic_int *cbm_pipeline_cancelled_ptr(cbm_pipeline_t *p) {
 
 int cbm_pipeline_get_mode(const cbm_pipeline_t *p) {
     return p ? (int)p->mode : 0;
+}
+
+void cbm_pipeline_get_excluded(const cbm_pipeline_t *p, char ***out, int *count) {
+    if (out) {
+        *out = p ? p->excluded_dirs : NULL;
+    }
+    if (count) {
+        *count = p ? p->excluded_count : 0;
+    }
 }
 
 /* Resolve the DB path for this pipeline. Caller must free(). */
@@ -958,7 +976,14 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
     };
     cbm_file_info_t *files = NULL;
     int file_count = 0;
-    int rc = cbm_discover(p->repo_path, &opts, &files, &file_count);
+    /* Capture skipped subtrees on the pipeline so the MCP layer can report
+     * which directories were excluded (#411). Replace any prior list (e.g. a
+     * re-run on the same pipeline) to avoid leaking the previous one. */
+    cbm_discover_free_excluded(p->excluded_dirs, p->excluded_count);
+    p->excluded_dirs = NULL;
+    p->excluded_count = 0;
+    int rc = cbm_discover_ex(p->repo_path, &opts, &files, &file_count, &p->excluded_dirs,
+                             &p->excluded_count);
     if (rc != 0) {
         cbm_log_error("pipeline.err", "phase", "discover", "rc", itoa_buf(rc));
     }
