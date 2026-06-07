@@ -80,6 +80,9 @@ extern void suite_integration(void);
 extern void suite_lang_contract(void);
 extern void suite_edge_imports(void);
 extern void suite_edge_structural(void);
+extern void suite_lsp_resolution_probe(void);
+extern void suite_node_creation_probe(void);
+extern void suite_edge_types_probe(void);
 extern void suite_incremental(void);
 extern void suite_simhash(void);
 extern void suite_stack_overflow(void);
@@ -217,6 +220,9 @@ int main(void) {
     RUN_SUITE(lang_contract);
     RUN_SUITE(edge_imports);
     RUN_SUITE(edge_structural);
+    RUN_SUITE(lsp_resolution_probe);
+    RUN_SUITE(node_creation_probe);
+    RUN_SUITE(edge_types_probe);
 
     RUN_SUITE(incremental);
 
