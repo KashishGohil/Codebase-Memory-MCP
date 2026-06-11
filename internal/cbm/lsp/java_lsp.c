@@ -3579,6 +3579,15 @@ void cbm_run_java_lsp_cross(CBMArena *arena, const char *source, int source_len,
         }
     }
 
+    /* Build the hash indexes: without this every lookup_type/func/method in
+     * the walk below is a LINEAR scan over the whole cross registry —
+     * O(lookups x defs) per file. Index allocations go to a per-call scratch
+     * arena: reg's arena is the pipeline-lifetime result arena, and per-file
+     * bucket allocations there accumulate GBs across a large repo. */
+    CBMArena idx_arena;
+    cbm_arena_init(&idx_arena);
+    cbm_registry_finalize_into(&reg, &idx_arena);
+
     /* Parse if needed. */
     TSTree *tree = cached_tree;
     bool owns_tree = false;
@@ -3589,8 +3598,10 @@ void cbm_run_java_lsp_cross(CBMArena *arena, const char *source, int source_len,
         ts_parser_delete(parser);
         owns_tree = true;
     }
-    if (!tree)
+    if (!tree) {
+        cbm_arena_destroy(&idx_arena);
         return;
+    }
     TSNode root = ts_tree_root_node(tree);
 
     JavaLSPContext ctx;
@@ -3604,6 +3615,7 @@ void cbm_run_java_lsp_cross(CBMArena *arena, const char *source, int source_len,
     }
 
     java_lsp_process_file(&ctx, root);
+    cbm_arena_destroy(&idx_arena);
 
     if (owns_tree)
         ts_tree_delete(tree);

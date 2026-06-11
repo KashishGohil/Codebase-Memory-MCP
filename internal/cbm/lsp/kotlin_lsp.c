@@ -4165,12 +4165,21 @@ void cbm_run_kotlin_lsp_cross(CBMArena *arena, const char *source, int source_le
         kt_register_cross_def(&reg, arena, &defs[i]);
     }
 
+    /* Build the hash indexes: without this every registry lookup in the walk
+     * is a LINEAR scan over the whole cross registry — O(lookups x defs) per
+     * file (same class as the java_lsp/elasticsearch slowdown). Indexes live
+     * in a per-call scratch arena (reg's arena is pipeline-lifetime). */
+    CBMArena idx_arena;
+    cbm_arena_init(&idx_arena);
+    cbm_registry_finalize_into(&reg, &idx_arena);
+
     /* Parse the source if the pipeline didn't hand us a cached tree. */
     TSTree *tree = cached_tree;
     bool owns_tree = false;
     if (!tree) {
         TSParser *parser = ts_parser_new();
         if (!parser) {
+            cbm_arena_destroy(&idx_arena);
             return;
         }
         ts_parser_set_language(parser, tree_sitter_kotlin());
@@ -4179,6 +4188,7 @@ void cbm_run_kotlin_lsp_cross(CBMArena *arena, const char *source, int source_le
         owns_tree = true;
     }
     if (!tree) {
+        cbm_arena_destroy(&idx_arena);
         return;
     }
     TSNode root = ts_tree_root_node(tree);
@@ -4211,6 +4221,7 @@ void cbm_run_kotlin_lsp_cross(CBMArena *arena, const char *source, int source_le
     }
 
     kotlin_lsp_process_file(&ctx, root);
+    cbm_arena_destroy(&idx_arena);
 
     if (owns_tree) {
         ts_tree_delete(tree);

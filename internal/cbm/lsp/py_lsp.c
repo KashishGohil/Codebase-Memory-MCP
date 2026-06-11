@@ -3381,8 +3381,12 @@ static const char **py_split_pipe(CBMArena *arena, const char *text) {
 
 /* Build a registry from CBMLSPDef[] supplied by the caller — covers both
  * the source file's own defs and cross-file referenced defs. */
-static void py_register_lsp_defs(CBMArena *arena, CBMTypeRegistry *reg, CBMLSPDef *defs,
-                                 int def_count) {
+static void py_register_lsp_defs(CBMArena *arena, CBMArena *idx_arena, CBMTypeRegistry *reg,
+                                 CBMLSPDef *defs, int def_count) {
+    /* Pass 1: types only — the method pass probes the registry per Method def
+     * (receiver auto-registration), which is a LINEAR scan pre-finalize:
+     * O(methods x types) per file (same quadratic as php_register_lsp_defs;
+     * see that function's comment). Types first, finalize, then methods. */
     for (int i = 0; i < def_count; i++) {
         CBMLSPDef *d = &defs[i];
         if (!d->qualified_name || !d->short_name || !d->label)
@@ -3402,6 +3406,20 @@ static void py_register_lsp_defs(CBMArena *arena, CBMTypeRegistry *reg, CBMLSPDe
             }
             cbm_registry_add_type(reg, rt);
         }
+    }
+    /* idx_arena == NULL skips the mid-build finalize: the tier-2 builder
+     * registers one def per call — finalizing per def would rebuild the
+     * buckets def_count times and leak each generation into the shared
+     * registry arena. */
+    if (idx_arena) {
+        cbm_registry_finalize_into(reg, idx_arena);
+    }
+
+    /* Pass 2: functions and methods. */
+    for (int i = 0; i < def_count; i++) {
+        CBMLSPDef *d = &defs[i];
+        if (!d->qualified_name || !d->short_name || !d->label)
+            continue;
 
         if (strcmp(d->label, "Function") == 0 || strcmp(d->label, "Method") == 0) {
             CBMRegisteredFunc rf;
@@ -3471,11 +3489,14 @@ void cbm_run_py_lsp_cross(CBMArena *arena, const char *source, int source_len,
     cbm_registry_init(&reg, arena);
     cbm_python_stdlib_register(&reg, arena);
     /* per-file path: defs[] already filtered by caller, no lang-check needed */
-    py_register_lsp_defs(arena, &reg, defs, def_count);
+    /* Index allocations go to a per-call scratch arena (see php_lsp_cross). */
+    CBMArena idx_arena;
+    cbm_arena_init(&idx_arena);
+    py_register_lsp_defs(arena, &idx_arena, &reg, defs, def_count);
 
     /* Finalize registry — O(1) lookups. See go_lsp.c "3c. Finalize"
      * comment for the rationale. */
-    cbm_registry_finalize(&reg);
+    cbm_registry_finalize_into(&reg, &idx_arena);
 
     PyLSPContext ctx;
     py_lsp_init(&ctx, arena, source, source_len, &reg, module_qn, out);
@@ -3485,6 +3506,7 @@ void cbm_run_py_lsp_cross(CBMArena *arena, const char *source, int source_len,
         }
     }
     py_lsp_process_file(&ctx, root);
+    cbm_arena_destroy(&idx_arena);
 
     if (owns_tree && tree)
         ts_tree_delete(tree);
@@ -3508,7 +3530,7 @@ CBMTypeRegistry *cbm_py_build_cross_registry(CBMArena *arena, CBMLSPDef *defs, i
         if (d->lang != CBM_LANG_PYTHON)
             continue;
         /* Reuse the existing register fn on a single-def slice (n=1 inline). */
-        py_register_lsp_defs(arena, reg, d, 1);
+        py_register_lsp_defs(arena, NULL, reg, d, 1);
     }
 
     cbm_registry_finalize(reg);
