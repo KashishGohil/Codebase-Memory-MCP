@@ -10,7 +10,9 @@
 #include "test_helpers.h"
 #include "pipeline/pipeline.h"
 #include "pipeline/pipeline_internal.h"
+#include "pipeline/pass_cross_repo.h"
 #include "store/store.h"
+#include <sqlite3/sqlite3.h>
 #include <yyjson/yyjson.h> // properties-JSON validity (oversized-props regression)
 
 #include <stdlib.h>
@@ -1059,6 +1061,395 @@ static void teardown_usages_repo(void) {
     if (g_usages_tmpdir[0])
         rm_rf(g_usages_tmpdir);
     g_usages_tmpdir[0] = '\0';
+}
+
+static int count_edges_by_type(cbm_store_t *s, const char *project, const char *edge_type) {
+    sqlite3_stmt *stmt = NULL;
+    struct sqlite3 *db = cbm_store_get_db(s);
+    if (!db) {
+        return -1;
+    }
+    if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM edges WHERE project=?1 AND type=?2", -1,
+                           &stmt, NULL) != SQLITE_OK) {
+        return -1;
+    }
+    sqlite3_bind_text(stmt, 1, project, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, edge_type, -1, SQLITE_STATIC);
+    int count = -1;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        count = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    return count;
+}
+
+static int edge_props_are_valid_json(cbm_store_t *s, const char *project, const char *edge_type) {
+    sqlite3_stmt *stmt = NULL;
+    struct sqlite3 *db = cbm_store_get_db(s);
+    if (!db) {
+        return 0;
+    }
+    if (sqlite3_prepare_v2(db,
+                           "SELECT properties FROM edges WHERE project=?1 AND type=?2", -1,
+                           &stmt, NULL) != SQLITE_OK) {
+        return 0;
+    }
+    sqlite3_bind_text(stmt, 1, project, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, edge_type, -1, SQLITE_STATIC);
+
+    int seen = 0;
+    int ok = 1;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        seen++;
+        const char *props = (const char *)sqlite3_column_text(stmt, 0);
+        yyjson_doc *doc = props ? yyjson_read(props, strlen(props), 0) : NULL;
+        if (!doc) {
+            ok = 0;
+            break;
+        }
+        yyjson_doc_free(doc);
+    }
+    sqlite3_finalize(stmt);
+    return seen > 0 && ok;
+}
+
+static int node_exists_by_qn(cbm_store_t *s, const char *project, const char *qn) {
+    sqlite3_stmt *stmt = NULL;
+    struct sqlite3 *db = cbm_store_get_db(s);
+    if (!db) {
+        return 0;
+    }
+    if (sqlite3_prepare_v2(db,
+                           "SELECT COUNT(*) FROM nodes WHERE project=?1 AND qualified_name=?2",
+                           -1, &stmt, NULL) != SQLITE_OK) {
+        return 0;
+    }
+    sqlite3_bind_text(stmt, 1, project, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, qn, -1, SQLITE_STATIC);
+    int count = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        count = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    return count > 0;
+}
+
+typedef struct {
+    char cache[256];
+    char provider_root[256];
+    char consumer_root[256];
+    char provider_db[512];
+    char consumer_db[512];
+} cross_maven_fixture_t;
+
+static int setup_cross_maven_fixture(cross_maven_fixture_t *fx, const char *provider_pom,
+                                     const char *consumer_pom) {
+    memset(fx, 0, sizeof(*fx));
+    snprintf(fx->cache, sizeof(fx->cache), "/tmp/cbm_cross_maven_cache_XXXXXX");
+    if (!cbm_mkdtemp(fx->cache)) {
+        return -1;
+    }
+    snprintf(fx->provider_root, sizeof(fx->provider_root), "/tmp/cbm_provider_maven_XXXXXX");
+    if (!cbm_mkdtemp(fx->provider_root)) {
+        th_cleanup(fx->cache);
+        return -1;
+    }
+    snprintf(fx->consumer_root, sizeof(fx->consumer_root), "/tmp/cbm_consumer_maven_XXXXXX");
+    if (!cbm_mkdtemp(fx->consumer_root)) {
+        th_cleanup(fx->provider_root);
+        th_cleanup(fx->cache);
+        return -1;
+    }
+
+    if (th_write_file(TH_PATH(fx->provider_root, "pom.xml"), provider_pom) != 0 ||
+        th_write_file(TH_PATH(fx->consumer_root, "pom.xml"), consumer_pom) != 0) {
+        th_cleanup(fx->consumer_root);
+        th_cleanup(fx->provider_root);
+        th_cleanup(fx->cache);
+        return -1;
+    }
+
+    cbm_setenv("CBM_CACHE_DIR", fx->cache, 1);
+    snprintf(fx->provider_db, sizeof(fx->provider_db), "%s/provider.db", fx->cache);
+    snprintf(fx->consumer_db, sizeof(fx->consumer_db), "%s/consumer.db", fx->cache);
+
+    cbm_store_t *provider = cbm_store_open_path(fx->provider_db);
+    cbm_store_t *consumer = cbm_store_open_path(fx->consumer_db);
+    if (!provider || !consumer) {
+        if (provider) {
+            cbm_store_close(provider);
+        }
+        if (consumer) {
+            cbm_store_close(consumer);
+        }
+        th_cleanup(fx->consumer_root);
+        th_cleanup(fx->provider_root);
+        th_cleanup(fx->cache);
+        return -1;
+    }
+    int ok = cbm_store_upsert_project(provider, "provider", fx->provider_root) == CBM_STORE_OK &&
+             cbm_store_upsert_project(consumer, "consumer", fx->consumer_root) == CBM_STORE_OK;
+
+    cbm_node_t provider_project = {.project = "provider",
+                                   .label = "Project",
+                                   .name = "provider",
+                                   .qualified_name = "__project__provider",
+                                   .file_path = "",
+                                   .start_line = 0,
+                                   .end_line = 0,
+                                   .properties_json = "{}"};
+    cbm_node_t consumer_project = {.project = "consumer",
+                                   .label = "Project",
+                                   .name = "consumer",
+                                   .qualified_name = "__project__consumer",
+                                   .file_path = "",
+                                   .start_line = 0,
+                                   .end_line = 0,
+                                   .properties_json = "{}"};
+    cbm_node_t provider_pom_node = {.project = "provider",
+                                    .label = "File",
+                                    .name = "pom.xml",
+                                    .qualified_name = "provider.pom",
+                                    .file_path = "pom.xml",
+                                    .start_line = 1,
+                                    .end_line = 1,
+                                    .properties_json = "{}"};
+    cbm_node_t consumer_pom_node = {.project = "consumer",
+                                    .label = "File",
+                                    .name = "pom.xml",
+                                    .qualified_name = "consumer.pom",
+                                    .file_path = "pom.xml",
+                                    .start_line = 1,
+                                    .end_line = 1,
+                                    .properties_json = "{}"};
+    ok = ok && cbm_store_upsert_node(provider, &provider_project) > 0 &&
+         cbm_store_upsert_node(consumer, &consumer_project) > 0 &&
+         cbm_store_upsert_node(provider, &provider_pom_node) > 0 &&
+         cbm_store_upsert_node(consumer, &consumer_pom_node) > 0;
+
+    cbm_store_close(provider);
+    cbm_store_close(consumer);
+    if (!ok) {
+        th_cleanup(fx->consumer_root);
+        th_cleanup(fx->provider_root);
+        th_cleanup(fx->cache);
+        return -1;
+    }
+    return 0;
+}
+
+static void cleanup_cross_maven_fixture(cross_maven_fixture_t *fx) {
+    th_cleanup(fx->consumer_root);
+    th_cleanup(fx->provider_root);
+    th_cleanup(fx->cache);
+}
+
+TEST(cross_repo_maven_dependency_creates_library_edges) {
+    const char *provider_pom = "<project><modelVersion>4.0.0</modelVersion>"
+                               "<groupId>com.example.platform</groupId>"
+                               "<artifactId>shared-library</artifactId>"
+                               "<version>1.0.0</version></project>";
+    const char *consumer_pom =
+        "<project><modelVersion>4.0.0</modelVersion>"
+        "<groupId>app</groupId><artifactId>consumer</artifactId>"
+        "<dependencies><dependency><groupId>com.example.platform</groupId>"
+        "<artifactId>shared-library</artifactId><version>1.0.0</version>"
+        "</dependency><dependency><groupId>vendor.client</groupId>"
+        "<artifactId>vendor-client</artifactId><version>2.0.0</version>"
+        "<exclusions><exclusion><groupId>com.example.platform</groupId>"
+        "<artifactId>shared-library</artifactId></exclusion></exclusions>"
+        "</dependency></dependencies></project>";
+    cross_maven_fixture_t fx;
+    ASSERT_EQ(setup_cross_maven_fixture(&fx, provider_pom, consumer_pom), 0);
+
+    const char *targets[] = {"provider"};
+    cbm_cross_repo_result_t result = cbm_cross_repo_match("consumer", targets, 1);
+    ASSERT_EQ(result.library_edges, 2);
+
+    cbm_store_t *consumer = cbm_store_open_path(fx.consumer_db);
+    cbm_store_t *provider = cbm_store_open_path(fx.provider_db);
+    ASSERT_NOT_NULL(consumer);
+    ASSERT_NOT_NULL(provider);
+    ASSERT_EQ(count_edges_by_type(consumer, "consumer", "CROSS_LIBRARY_DEPENDS_ON"), 2);
+    ASSERT_EQ(count_edges_by_type(provider, "provider", "CROSS_LIBRARY_USED_BY"), 2);
+    cbm_store_close(consumer);
+    cbm_store_close(provider);
+
+    cleanup_cross_maven_fixture(&fx);
+    PASS();
+}
+
+TEST(cross_repo_maven_dependency_escapes_library_edge_props) {
+    const char *provider_pom = "<project><modelVersion>4.0.0</modelVersion>"
+                               "<groupId>com.example\"platform</groupId>"
+                               "<artifactId>shared-library</artifactId>"
+                               "<version>1.0.0</version></project>";
+    const char *consumer_pom =
+        "<project><modelVersion>4.0.0</modelVersion>"
+        "<groupId>app</groupId><artifactId>consumer</artifactId>"
+        "<dependencies><dependency><groupId>com.example\"platform</groupId>"
+        "<artifactId>shared-library</artifactId><version>1.0.0</version>"
+        "</dependency></dependencies></project>";
+    cross_maven_fixture_t fx;
+    ASSERT_EQ(setup_cross_maven_fixture(&fx, provider_pom, consumer_pom), 0);
+
+    const char *targets[] = {"provider"};
+    cbm_cross_repo_result_t result = cbm_cross_repo_match("consumer", targets, 1);
+    ASSERT_EQ(result.library_edges, 1);
+
+    cbm_store_t *consumer = cbm_store_open_path(fx.consumer_db);
+    cbm_store_t *provider = cbm_store_open_path(fx.provider_db);
+    ASSERT_NOT_NULL(consumer);
+    ASSERT_NOT_NULL(provider);
+    ASSERT_TRUE(edge_props_are_valid_json(consumer, "consumer", "CROSS_LIBRARY_DEPENDS_ON"));
+    ASSERT_TRUE(edge_props_are_valid_json(provider, "provider", "CROSS_LIBRARY_USED_BY"));
+    cbm_store_close(consumer);
+    cbm_store_close(provider);
+
+    cleanup_cross_maven_fixture(&fx);
+    PASS();
+}
+
+TEST(cross_repo_maven_dependency_management_does_not_create_library_edge) {
+    const char *provider_pom = "<project><modelVersion>4.0.0</modelVersion>"
+                               "<groupId>com.example.platform</groupId>"
+                               "<artifactId>shared-library</artifactId>"
+                               "<version>1.0.0</version></project>";
+    const char *consumer_pom =
+        "<project><modelVersion>4.0.0</modelVersion>"
+        "<groupId>app</groupId><artifactId>consumer</artifactId>"
+        "<dependencyManagement><dependencies><dependency>"
+        "<groupId>com.example.platform</groupId><artifactId>shared-library</artifactId>"
+        "<version>1.0.0</version></dependency></dependencies></dependencyManagement>"
+        "</project>";
+    cross_maven_fixture_t fx;
+    ASSERT_EQ(setup_cross_maven_fixture(&fx, provider_pom, consumer_pom), 0);
+
+    const char *targets[] = {"provider"};
+    cbm_cross_repo_result_t result = cbm_cross_repo_match("consumer", targets, 1);
+    ASSERT_EQ(result.library_edges, 0);
+
+    cbm_store_t *consumer = cbm_store_open_path(fx.consumer_db);
+    cbm_store_t *provider = cbm_store_open_path(fx.provider_db);
+    ASSERT_NOT_NULL(consumer);
+    ASSERT_NOT_NULL(provider);
+    ASSERT_EQ(count_edges_by_type(consumer, "consumer", "CROSS_LIBRARY_DEPENDS_ON"), 0);
+    ASSERT_EQ(count_edges_by_type(provider, "provider", "CROSS_LIBRARY_USED_BY"), 0);
+    cbm_store_close(consumer);
+    cbm_store_close(provider);
+
+    cleanup_cross_maven_fixture(&fx);
+    PASS();
+}
+
+TEST(cross_repo_maven_commented_dependency_does_not_create_library_edge) {
+    const char *provider_pom = "<project><modelVersion>4.0.0</modelVersion>"
+                               "<groupId>com.example.platform</groupId>"
+                               "<artifactId>shared-library</artifactId>"
+                               "<version>1.0.0</version></project>";
+    const char *consumer_pom =
+        "<project><modelVersion>4.0.0</modelVersion>"
+        "<groupId>app</groupId><artifactId>consumer</artifactId>"
+        "<dependencies><!-- <dependency><groupId>com.example.platform</groupId>"
+        "<artifactId>shared-library</artifactId><version>1.0.0</version>"
+        "</dependency> --></dependencies></project>";
+    cross_maven_fixture_t fx;
+    ASSERT_EQ(setup_cross_maven_fixture(&fx, provider_pom, consumer_pom), 0);
+
+    const char *targets[] = {"provider"};
+    cbm_cross_repo_result_t result = cbm_cross_repo_match("consumer", targets, 1);
+    ASSERT_EQ(result.library_edges, 0);
+
+    cbm_store_t *consumer = cbm_store_open_path(fx.consumer_db);
+    cbm_store_t *provider = cbm_store_open_path(fx.provider_db);
+    ASSERT_NOT_NULL(consumer);
+    ASSERT_NOT_NULL(provider);
+    ASSERT_EQ(count_edges_by_type(consumer, "consumer", "CROSS_LIBRARY_DEPENDS_ON"), 0);
+    ASSERT_EQ(count_edges_by_type(provider, "provider", "CROSS_LIBRARY_USED_BY"), 0);
+    cbm_store_close(consumer);
+    cbm_store_close(provider);
+
+    cleanup_cross_maven_fixture(&fx);
+    PASS();
+}
+
+TEST(cross_repo_maven_cleanup_preserves_unrelated_nodes) {
+    const char *provider_pom = "<project><modelVersion>4.0.0</modelVersion>"
+                               "<groupId>com.example.platform</groupId>"
+                               "<artifactId>shared-library</artifactId>"
+                               "<version>1.0.0</version></project>";
+    const char *consumer_pom =
+        "<project><modelVersion>4.0.0</modelVersion>"
+        "<groupId>app</groupId><artifactId>consumer</artifactId>"
+        "<dependencies><dependency><groupId>com.example.platform</groupId>"
+        "<artifactId>shared-library</artifactId><version>1.0.0</version>"
+        "</dependency></dependencies></project>";
+    cross_maven_fixture_t fx;
+    ASSERT_EQ(setup_cross_maven_fixture(&fx, provider_pom, consumer_pom), 0);
+
+    cbm_store_t *consumer = cbm_store_open_path(fx.consumer_db);
+    ASSERT_NOT_NULL(consumer);
+    cbm_node_t unrelated = {.project = "consumer",
+                            .label = "Function",
+                            .name = "Unrelated",
+                            .qualified_name = "xxlibraryzz_should_stay",
+                            .file_path = "src/main.c",
+                            .start_line = 1,
+                            .end_line = 1,
+                            .properties_json = "{}"};
+    ASSERT_GT(cbm_store_upsert_node(consumer, &unrelated), 0);
+    cbm_store_close(consumer);
+
+    const char *targets[] = {"provider"};
+    cbm_cross_repo_result_t result = cbm_cross_repo_match("consumer", targets, 1);
+    ASSERT_EQ(result.library_edges, 1);
+
+    consumer = cbm_store_open_path(fx.consumer_db);
+    ASSERT_NOT_NULL(consumer);
+    ASSERT_TRUE(node_exists_by_qn(consumer, "consumer", "xxlibraryzz_should_stay"));
+    cbm_store_close(consumer);
+
+    cleanup_cross_maven_fixture(&fx);
+    PASS();
+}
+
+TEST(cross_repo_maven_removed_dependency_clears_provider_used_by) {
+    const char *provider_pom = "<project><modelVersion>4.0.0</modelVersion>"
+                               "<groupId>com.example.platform</groupId>"
+                               "<artifactId>shared-library</artifactId>"
+                               "<version>1.0.0</version></project>";
+    const char *consumer_pom =
+        "<project><modelVersion>4.0.0</modelVersion>"
+        "<groupId>app</groupId><artifactId>consumer</artifactId>"
+        "<dependencies><dependency><groupId>com.example.platform</groupId>"
+        "<artifactId>shared-library</artifactId><version>1.0.0</version>"
+        "</dependency></dependencies></project>";
+    cross_maven_fixture_t fx;
+    ASSERT_EQ(setup_cross_maven_fixture(&fx, provider_pom, consumer_pom), 0);
+
+    const char *targets[] = {"provider"};
+    cbm_cross_repo_result_t result = cbm_cross_repo_match("consumer", targets, 1);
+    ASSERT_EQ(result.library_edges, 1);
+
+    ASSERT_EQ(th_write_file(TH_PATH(fx.consumer_root, "pom.xml"),
+                            "<project><modelVersion>4.0.0</modelVersion>"
+                            "<groupId>app</groupId><artifactId>consumer</artifactId>"
+                            "<dependencies></dependencies></project>"),
+              0);
+    result = cbm_cross_repo_match("consumer", targets, 1);
+    ASSERT_EQ(result.library_edges, 0);
+
+    cbm_store_t *consumer = cbm_store_open_path(fx.consumer_db);
+    cbm_store_t *provider = cbm_store_open_path(fx.provider_db);
+    ASSERT_NOT_NULL(consumer);
+    ASSERT_NOT_NULL(provider);
+    ASSERT_EQ(count_edges_by_type(consumer, "consumer", "CROSS_LIBRARY_DEPENDS_ON"), 0);
+    ASSERT_EQ(count_edges_by_type(provider, "provider", "CROSS_LIBRARY_USED_BY"), 0);
+    cbm_store_close(consumer);
+    cbm_store_close(provider);
+
+    cleanup_cross_maven_fixture(&fx);
+    PASS();
 }
 
 TEST(usages_creates_edges) {
@@ -5853,6 +6244,13 @@ SUITE(pipeline) {
     /* Incremental reindex */
     /* FastAPI Depends edge tracking (PR #66 port) */
     RUN_TEST(pipeline_fastapi_depends_edges);
+    /* Cross-repo library dependency linking */
+    RUN_TEST(cross_repo_maven_dependency_creates_library_edges);
+    RUN_TEST(cross_repo_maven_dependency_escapes_library_edge_props);
+    RUN_TEST(cross_repo_maven_dependency_management_does_not_create_library_edge);
+    RUN_TEST(cross_repo_maven_commented_dependency_does_not_create_library_edge);
+    RUN_TEST(cross_repo_maven_cleanup_preserves_unrelated_nodes);
+    RUN_TEST(cross_repo_maven_removed_dependency_clears_provider_used_by);
     /* Incremental */
     RUN_TEST(incremental_full_then_noop);
     RUN_TEST(incremental_detects_changed_file);

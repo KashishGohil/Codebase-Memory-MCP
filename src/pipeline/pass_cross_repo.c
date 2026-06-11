@@ -10,6 +10,7 @@
  * get a CROSS_* edge so the link is visible from either side.
  */
 #include "pipeline/pass_cross_repo.h"
+#include "pipeline/pass_cross_repo_maven.h"
 #include "foundation/constants.h"
 #include "foundation/log.h"
 #include "foundation/platform.h"
@@ -112,6 +113,22 @@ static void delete_cross_edges(cbm_store_t *store, const char *project) {
     cbm_store_delete_edges_by_type(store, project, "CROSS_GRPC_CALLS");
     cbm_store_delete_edges_by_type(store, project, "CROSS_GRAPHQL_CALLS");
     cbm_store_delete_edges_by_type(store, project, "CROSS_TRPC_CALLS");
+    cbm_store_delete_edges_by_type(store, project, "CROSS_LIBRARY_DEPENDS_ON");
+    cbm_store_delete_edges_by_type(store, project, "CROSS_LIBRARY_USED_BY");
+    struct sqlite3 *db = cbm_store_get_db(store);
+    if (!db) {
+        return;
+    }
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(db,
+                           "DELETE FROM nodes WHERE project=?1 AND "
+                           "(qualified_name GLOB '__library__*' OR "
+                           "qualified_name GLOB '__library_consumer__*')",
+                           CBM_NOT_FOUND, &st, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(st, SKIP_ONE, project, CBM_NOT_FOUND, SQLITE_STATIC);
+        sqlite3_step(st);
+        sqlite3_finalize(st);
+    }
 }
 
 /* Insert a CROSS_* edge into a store. */
@@ -660,6 +677,8 @@ cbm_cross_repo_result_t cbm_cross_repo_match(const char *project, const char **t
                                "operation", "CROSS_GRAPHQL_CALLS");
         result.trpc_edges += match_typed_routes(src_store, project, tgt_store, tgt, "TRPC_CALLS",
                                                 "procedure", "procedure", "CROSS_TRPC_CALLS");
+        result.library_edges +=
+            cbm_cross_repo_match_maven_libraries(src_store, project, tgt_store, tgt);
         result.projects_scanned++;
 
         cbm_store_close(tgt_store);
@@ -677,7 +696,7 @@ cbm_cross_repo_result_t cbm_cross_repo_match(const char *project, const char **t
                         ((double)(t1.tv_nsec - t0.tv_nsec) / CR_NS_PER_MS);
 
     int total = result.http_edges + result.async_edges + result.channel_edges + result.grpc_edges +
-                result.graphql_edges + result.trpc_edges;
+                result.graphql_edges + result.trpc_edges + result.library_edges;
     cbm_log_info("cross_repo.done", "project", project, "total", cr_itoa(total));
 
     return result;
