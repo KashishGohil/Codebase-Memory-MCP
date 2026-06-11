@@ -10,7 +10,9 @@
 #include "test_helpers.h"
 #include "pipeline/pipeline.h"
 #include "pipeline/pipeline_internal.h"
+#include "pipeline/pass_cross_repo.h"
 #include "store/store.h"
+#include <sqlite3/sqlite3.h>
 #include <yyjson/yyjson.h> // properties-JSON validity (oversized-props regression)
 
 #include <stdlib.h>
@@ -1059,6 +1061,386 @@ static void teardown_usages_repo(void) {
     if (g_usages_tmpdir[0])
         rm_rf(g_usages_tmpdir);
     g_usages_tmpdir[0] = '\0';
+}
+
+static int count_edges_by_type(cbm_store_t *s, const char *project, const char *edge_type) {
+    sqlite3_stmt *stmt = NULL;
+    struct sqlite3 *db = cbm_store_get_db(s);
+    if (!db) {
+        return -1;
+    }
+    if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM edges WHERE project=?1 AND type=?2", -1,
+                           &stmt, NULL) != SQLITE_OK) {
+        return -1;
+    }
+    sqlite3_bind_text(stmt, 1, project, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, edge_type, -1, SQLITE_STATIC);
+    int count = -1;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        count = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    return count;
+}
+
+static int edge_props_are_valid_json(cbm_store_t *s, const char *project, const char *edge_type) {
+    sqlite3_stmt *stmt = NULL;
+    struct sqlite3 *db = cbm_store_get_db(s);
+    if (!db) {
+        return 0;
+    }
+    if (sqlite3_prepare_v2(db,
+                           "SELECT properties FROM edges WHERE project=?1 AND type=?2", -1,
+                           &stmt, NULL) != SQLITE_OK) {
+        return 0;
+    }
+    sqlite3_bind_text(stmt, 1, project, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, edge_type, -1, SQLITE_STATIC);
+
+    int seen = 0;
+    int ok = 1;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        seen++;
+        const char *props = (const char *)sqlite3_column_text(stmt, 0);
+        yyjson_doc *doc = props ? yyjson_read(props, strlen(props), 0) : NULL;
+        if (!doc) {
+            ok = 0;
+            break;
+        }
+        yyjson_doc_free(doc);
+    }
+    sqlite3_finalize(stmt);
+    return seen > 0 && ok;
+}
+
+TEST(cross_repo_maven_dependency_creates_library_edges) {
+    char cache[256];
+    snprintf(cache, sizeof(cache), "/tmp/cbm_cross_cache_XXXXXX");
+    if (!cbm_mkdtemp(cache)) {
+        FAIL("failed to create cache temp dir");
+    }
+
+    char provider_root[256];
+    snprintf(provider_root, sizeof(provider_root), "/tmp/cbm_provider_XXXXXX");
+    if (!cbm_mkdtemp(provider_root)) {
+        th_cleanup(cache);
+        FAIL("failed to create provider temp dir");
+    }
+
+    char consumer_root[256];
+    snprintf(consumer_root, sizeof(consumer_root), "/tmp/cbm_consumer_XXXXXX");
+    if (!cbm_mkdtemp(consumer_root)) {
+        th_cleanup(provider_root);
+        th_cleanup(cache);
+        FAIL("failed to create consumer temp dir");
+    }
+
+    ASSERT_EQ(th_write_file(TH_PATH(provider_root, "pom.xml"),
+                            "<project><modelVersion>4.0.0</modelVersion>"
+                            "<groupId>com.example.platform</groupId>"
+                            "<artifactId>shared-library</artifactId>"
+                            "<version>1.0.0</version></project>"),
+              0);
+    ASSERT_EQ(th_write_file(TH_PATH(consumer_root, "pom.xml"),
+                            "<project><modelVersion>4.0.0</modelVersion>"
+                            "<groupId>app</groupId><artifactId>consumer</artifactId>"
+                            "<dependencies><dependency><groupId>com.example.platform</groupId>"
+                            "<artifactId>shared-library</artifactId><version>1.0.0</version>"
+                            "</dependency><dependency><groupId>vendor.client</groupId>"
+                            "<artifactId>vendor-client</artifactId><version>2.0.0</version>"
+                            "<exclusions><exclusion><groupId>com.example.platform</groupId>"
+                            "<artifactId>shared-library</artifactId></exclusion></exclusions>"
+                            "</dependency></dependencies></project>"),
+              0);
+
+    cbm_setenv("CBM_CACHE_DIR", cache, 1);
+
+    char provider_db[512];
+    char consumer_db[512];
+    snprintf(provider_db, sizeof(provider_db), "%s/provider.db", cache);
+    snprintf(consumer_db, sizeof(consumer_db), "%s/consumer.db", cache);
+
+    cbm_store_t *provider = cbm_store_open_path(provider_db);
+    cbm_store_t *consumer = cbm_store_open_path(consumer_db);
+    ASSERT_NOT_NULL(provider);
+    ASSERT_NOT_NULL(consumer);
+    ASSERT_EQ(cbm_store_upsert_project(provider, "provider", provider_root), CBM_STORE_OK);
+    ASSERT_EQ(cbm_store_upsert_project(consumer, "consumer", consumer_root), CBM_STORE_OK);
+
+    cbm_node_t provider_project = {.project = "provider",
+                                   .label = "Project",
+                                   .name = "provider",
+                                   .qualified_name = "__project__provider",
+                                   .file_path = "",
+                                   .start_line = 0,
+                                   .end_line = 0,
+                                   .properties_json = "{}"};
+    cbm_node_t consumer_project = {.project = "consumer",
+                                   .label = "Project",
+                                   .name = "consumer",
+                                   .qualified_name = "__project__consumer",
+                                   .file_path = "",
+                                   .start_line = 0,
+                                   .end_line = 0,
+                                   .properties_json = "{}"};
+    cbm_node_t provider_pom = {.project = "provider",
+                               .label = "File",
+                               .name = "pom.xml",
+                               .qualified_name = "provider.pom",
+                               .file_path = "pom.xml",
+                               .start_line = 1,
+                               .end_line = 1,
+                               .properties_json = "{}"};
+    cbm_node_t consumer_pom = {.project = "consumer",
+                               .label = "File",
+                               .name = "pom.xml",
+                               .qualified_name = "consumer.pom",
+                               .file_path = "pom.xml",
+                               .start_line = 1,
+                               .end_line = 1,
+                               .properties_json = "{}"};
+    ASSERT_GT(cbm_store_upsert_node(provider, &provider_project), 0);
+    ASSERT_GT(cbm_store_upsert_node(consumer, &consumer_project), 0);
+    ASSERT_GT(cbm_store_upsert_node(provider, &provider_pom), 0);
+    ASSERT_GT(cbm_store_upsert_node(consumer, &consumer_pom), 0);
+    cbm_store_close(provider);
+    cbm_store_close(consumer);
+
+    const char *targets[] = {"provider"};
+    cbm_cross_repo_result_t result = cbm_cross_repo_match("consumer", targets, 1);
+    ASSERT_EQ(result.library_edges, 2);
+
+    consumer = cbm_store_open_path(consumer_db);
+    provider = cbm_store_open_path(provider_db);
+    ASSERT_NOT_NULL(consumer);
+    ASSERT_NOT_NULL(provider);
+    ASSERT_EQ(count_edges_by_type(consumer, "consumer", "CROSS_LIBRARY_DEPENDS_ON"), 2);
+    ASSERT_EQ(count_edges_by_type(provider, "provider", "CROSS_LIBRARY_USED_BY"), 2);
+    cbm_store_close(consumer);
+    cbm_store_close(provider);
+
+    th_cleanup(consumer_root);
+    th_cleanup(provider_root);
+    th_cleanup(cache);
+    PASS();
+}
+
+TEST(cross_repo_maven_dependency_escapes_library_edge_props) {
+    char cache[256];
+    snprintf(cache, sizeof(cache), "/tmp/cbm_cross_escape_cache_XXXXXX");
+    if (!cbm_mkdtemp(cache)) {
+        FAIL("failed to create cache temp dir");
+    }
+
+    char provider_root[256];
+    snprintf(provider_root, sizeof(provider_root), "/tmp/cbm_provider_escape_XXXXXX");
+    if (!cbm_mkdtemp(provider_root)) {
+        th_cleanup(cache);
+        FAIL("failed to create provider temp dir");
+    }
+
+    char consumer_root[256];
+    snprintf(consumer_root, sizeof(consumer_root), "/tmp/cbm_consumer_escape_XXXXXX");
+    if (!cbm_mkdtemp(consumer_root)) {
+        th_cleanup(provider_root);
+        th_cleanup(cache);
+        FAIL("failed to create consumer temp dir");
+    }
+
+    ASSERT_EQ(th_write_file(TH_PATH(provider_root, "pom.xml"),
+                            "<project><modelVersion>4.0.0</modelVersion>"
+                            "<groupId>com.example\"platform</groupId>"
+                            "<artifactId>shared-library</artifactId>"
+                            "<version>1.0.0</version></project>"),
+              0);
+    ASSERT_EQ(th_write_file(TH_PATH(consumer_root, "pom.xml"),
+                            "<project><modelVersion>4.0.0</modelVersion>"
+                            "<groupId>app</groupId><artifactId>consumer</artifactId>"
+                            "<dependencies><dependency><groupId>com.example\"platform</groupId>"
+                            "<artifactId>shared-library</artifactId><version>1.0.0</version>"
+                            "</dependency></dependencies></project>"),
+              0);
+
+    cbm_setenv("CBM_CACHE_DIR", cache, 1);
+
+    char provider_db[512];
+    char consumer_db[512];
+    snprintf(provider_db, sizeof(provider_db), "%s/provider.db", cache);
+    snprintf(consumer_db, sizeof(consumer_db), "%s/consumer.db", cache);
+
+    cbm_store_t *provider = cbm_store_open_path(provider_db);
+    cbm_store_t *consumer = cbm_store_open_path(consumer_db);
+    ASSERT_NOT_NULL(provider);
+    ASSERT_NOT_NULL(consumer);
+    ASSERT_EQ(cbm_store_upsert_project(provider, "provider", provider_root), CBM_STORE_OK);
+    ASSERT_EQ(cbm_store_upsert_project(consumer, "consumer", consumer_root), CBM_STORE_OK);
+
+    cbm_node_t provider_project = {.project = "provider",
+                                   .label = "Project",
+                                   .name = "provider",
+                                   .qualified_name = "__project__provider",
+                                   .file_path = "",
+                                   .start_line = 0,
+                                   .end_line = 0,
+                                   .properties_json = "{}"};
+    cbm_node_t consumer_project = {.project = "consumer",
+                                   .label = "Project",
+                                   .name = "consumer",
+                                   .qualified_name = "__project__consumer",
+                                   .file_path = "",
+                                   .start_line = 0,
+                                   .end_line = 0,
+                                   .properties_json = "{}"};
+    cbm_node_t provider_pom = {.project = "provider",
+                               .label = "File",
+                               .name = "pom.xml",
+                               .qualified_name = "provider.pom",
+                               .file_path = "pom.xml",
+                               .start_line = 1,
+                               .end_line = 1,
+                               .properties_json = "{}"};
+    cbm_node_t consumer_pom = {.project = "consumer",
+                               .label = "File",
+                               .name = "pom.xml",
+                               .qualified_name = "consumer.pom",
+                               .file_path = "pom.xml",
+                               .start_line = 1,
+                               .end_line = 1,
+                               .properties_json = "{}"};
+    ASSERT_GT(cbm_store_upsert_node(provider, &provider_project), 0);
+    ASSERT_GT(cbm_store_upsert_node(consumer, &consumer_project), 0);
+    ASSERT_GT(cbm_store_upsert_node(provider, &provider_pom), 0);
+    ASSERT_GT(cbm_store_upsert_node(consumer, &consumer_pom), 0);
+    cbm_store_close(provider);
+    cbm_store_close(consumer);
+
+    const char *targets[] = {"provider"};
+    cbm_cross_repo_result_t result = cbm_cross_repo_match("consumer", targets, 1);
+    ASSERT_EQ(result.library_edges, 1);
+
+    consumer = cbm_store_open_path(consumer_db);
+    provider = cbm_store_open_path(provider_db);
+    ASSERT_NOT_NULL(consumer);
+    ASSERT_NOT_NULL(provider);
+    ASSERT_TRUE(edge_props_are_valid_json(consumer, "consumer", "CROSS_LIBRARY_DEPENDS_ON"));
+    ASSERT_TRUE(edge_props_are_valid_json(provider, "provider", "CROSS_LIBRARY_USED_BY"));
+    cbm_store_close(consumer);
+    cbm_store_close(provider);
+
+    th_cleanup(consumer_root);
+    th_cleanup(provider_root);
+    th_cleanup(cache);
+    PASS();
+}
+
+TEST(cross_repo_maven_dependency_management_does_not_create_library_edge) {
+    char cache[256];
+    snprintf(cache, sizeof(cache), "/tmp/cbm_cross_mgmt_cache_XXXXXX");
+    if (!cbm_mkdtemp(cache)) {
+        FAIL("failed to create cache temp dir");
+    }
+
+    char provider_root[256];
+    snprintf(provider_root, sizeof(provider_root), "/tmp/cbm_provider_mgmt_XXXXXX");
+    if (!cbm_mkdtemp(provider_root)) {
+        th_cleanup(cache);
+        FAIL("failed to create provider temp dir");
+    }
+
+    char consumer_root[256];
+    snprintf(consumer_root, sizeof(consumer_root), "/tmp/cbm_consumer_mgmt_XXXXXX");
+    if (!cbm_mkdtemp(consumer_root)) {
+        th_cleanup(provider_root);
+        th_cleanup(cache);
+        FAIL("failed to create consumer temp dir");
+    }
+
+    ASSERT_EQ(th_write_file(TH_PATH(provider_root, "pom.xml"),
+                            "<project><modelVersion>4.0.0</modelVersion>"
+                            "<groupId>com.example.platform</groupId>"
+                            "<artifactId>shared-library</artifactId>"
+                            "<version>1.0.0</version></project>"),
+              0);
+    ASSERT_EQ(th_write_file(TH_PATH(consumer_root, "pom.xml"),
+                            "<project><modelVersion>4.0.0</modelVersion>"
+                            "<groupId>app</groupId><artifactId>consumer</artifactId>"
+                            "<dependencyManagement><dependencies><dependency>"
+                            "<groupId>com.example.platform</groupId>"
+                            "<artifactId>shared-library</artifactId>"
+                            "<version>1.0.0</version></dependency></dependencies>"
+                            "</dependencyManagement></project>"),
+              0);
+
+    cbm_setenv("CBM_CACHE_DIR", cache, 1);
+
+    char provider_db[512];
+    char consumer_db[512];
+    snprintf(provider_db, sizeof(provider_db), "%s/provider.db", cache);
+    snprintf(consumer_db, sizeof(consumer_db), "%s/consumer.db", cache);
+
+    cbm_store_t *provider = cbm_store_open_path(provider_db);
+    cbm_store_t *consumer = cbm_store_open_path(consumer_db);
+    ASSERT_NOT_NULL(provider);
+    ASSERT_NOT_NULL(consumer);
+    ASSERT_EQ(cbm_store_upsert_project(provider, "provider", provider_root), CBM_STORE_OK);
+    ASSERT_EQ(cbm_store_upsert_project(consumer, "consumer", consumer_root), CBM_STORE_OK);
+
+    cbm_node_t provider_project = {.project = "provider",
+                                   .label = "Project",
+                                   .name = "provider",
+                                   .qualified_name = "__project__provider",
+                                   .file_path = "",
+                                   .start_line = 0,
+                                   .end_line = 0,
+                                   .properties_json = "{}"};
+    cbm_node_t consumer_project = {.project = "consumer",
+                                   .label = "Project",
+                                   .name = "consumer",
+                                   .qualified_name = "__project__consumer",
+                                   .file_path = "",
+                                   .start_line = 0,
+                                   .end_line = 0,
+                                   .properties_json = "{}"};
+    cbm_node_t provider_pom = {.project = "provider",
+                               .label = "File",
+                               .name = "pom.xml",
+                               .qualified_name = "provider.pom",
+                               .file_path = "pom.xml",
+                               .start_line = 1,
+                               .end_line = 1,
+                               .properties_json = "{}"};
+    cbm_node_t consumer_pom = {.project = "consumer",
+                               .label = "File",
+                               .name = "pom.xml",
+                               .qualified_name = "consumer.pom",
+                               .file_path = "pom.xml",
+                               .start_line = 1,
+                               .end_line = 1,
+                               .properties_json = "{}"};
+    ASSERT_GT(cbm_store_upsert_node(provider, &provider_project), 0);
+    ASSERT_GT(cbm_store_upsert_node(consumer, &consumer_project), 0);
+    ASSERT_GT(cbm_store_upsert_node(provider, &provider_pom), 0);
+    ASSERT_GT(cbm_store_upsert_node(consumer, &consumer_pom), 0);
+    cbm_store_close(provider);
+    cbm_store_close(consumer);
+
+    const char *targets[] = {"provider"};
+    cbm_cross_repo_result_t result = cbm_cross_repo_match("consumer", targets, 1);
+    ASSERT_EQ(result.library_edges, 0);
+
+    consumer = cbm_store_open_path(consumer_db);
+    provider = cbm_store_open_path(provider_db);
+    ASSERT_NOT_NULL(consumer);
+    ASSERT_NOT_NULL(provider);
+    ASSERT_EQ(count_edges_by_type(consumer, "consumer", "CROSS_LIBRARY_DEPENDS_ON"), 0);
+    ASSERT_EQ(count_edges_by_type(provider, "provider", "CROSS_LIBRARY_USED_BY"), 0);
+    cbm_store_close(consumer);
+    cbm_store_close(provider);
+
+    th_cleanup(consumer_root);
+    th_cleanup(provider_root);
+    th_cleanup(cache);
+    PASS();
 }
 
 TEST(usages_creates_edges) {
@@ -5853,6 +6235,10 @@ SUITE(pipeline) {
     /* Incremental reindex */
     /* FastAPI Depends edge tracking (PR #66 port) */
     RUN_TEST(pipeline_fastapi_depends_edges);
+    /* Cross-repo library dependency linking */
+    RUN_TEST(cross_repo_maven_dependency_creates_library_edges);
+    RUN_TEST(cross_repo_maven_dependency_escapes_library_edge_props);
+    RUN_TEST(cross_repo_maven_dependency_management_does_not_create_library_edge);
     /* Incremental */
     RUN_TEST(incremental_full_then_noop);
     RUN_TEST(incremental_detects_changed_file);
