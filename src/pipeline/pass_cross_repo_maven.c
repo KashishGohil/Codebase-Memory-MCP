@@ -77,6 +77,24 @@ static char *format_prefixed_qn(const char *prefix, const char *value) {
     return qn;
 }
 
+bool cbm_cross_repo_maven_grow_array(void **items, int *cap, size_t elem_size,
+                                     void *(*realloc_fn)(void *, size_t)) {
+    if (!items || !*items || !cap || *cap <= 0 || elem_size == 0 || !realloc_fn) {
+        return false;
+    }
+    if (*cap > INT32_MAX / PAIR_LEN) {
+        return false;
+    }
+    int new_cap = *cap * PAIR_LEN;
+    void *tmp = realloc_fn(*items, (size_t)new_cap * elem_size);
+    if (!tmp) {
+        return false;
+    }
+    *items = tmp;
+    *cap = new_cap;
+    return true;
+}
+
 static void free_artifacts(mcr_artifact_t *items, int count) {
     if (!items) {
         return;
@@ -468,12 +486,11 @@ static bool add_dependency(mcr_dependency_t **items, int *count, int *cap, const
         return false;
     }
     if (*count >= *cap) {
-        *cap *= PAIR_LEN;
-        mcr_dependency_t *tmp = realloc(*items, (size_t)*cap * sizeof(**items));
-        if (!tmp) {
+        void *grown = *items;
+        if (!cbm_cross_repo_maven_grow_array(&grown, cap, sizeof(**items), realloc)) {
             return false;
         }
-        *items = tmp;
+        *items = grown;
     }
     mcr_dependency_t *dep = &(*items)[*count];
     memset(dep, 0, sizeof(*dep));

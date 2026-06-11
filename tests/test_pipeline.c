@@ -1282,6 +1282,31 @@ static void cleanup_cross_maven_fixture(cross_maven_fixture_t *fx) {
     restore_cross_maven_cache_env(fx);
 }
 
+extern bool cbm_cross_repo_maven_grow_array(void **items, int *cap, size_t elem_size,
+                                            void *(*realloc_fn)(void *, size_t));
+
+static void *test_maven_realloc_fails(void *ptr, size_t size) {
+    (void)ptr;
+    (void)size;
+    return NULL;
+}
+
+TEST(cross_repo_maven_failed_growth_preserves_capacity) {
+    int cap = 32;
+    char *items = malloc((size_t)cap);
+    ASSERT_NOT_NULL(items);
+    void *original = items;
+
+    ASSERT_FALSE(
+        cbm_cross_repo_maven_grow_array((void **)&items, &cap, sizeof(*items),
+                                        test_maven_realloc_fails));
+    ASSERT_EQ(cap, 32);
+    ASSERT_EQ(items == original, 1);
+
+    free(items);
+    PASS();
+}
+
 TEST(cross_repo_maven_dependency_creates_library_edges) {
     const char *provider_pom = "<project><modelVersion>4.0.0</modelVersion>"
                                "<groupId>com.example.platform</groupId>"
@@ -6566,6 +6591,7 @@ SUITE(pipeline) {
     /* FastAPI Depends edge tracking (PR #66 port) */
     RUN_TEST(pipeline_fastapi_depends_edges);
     /* Cross-repo library dependency linking */
+    RUN_TEST(cross_repo_maven_failed_growth_preserves_capacity);
     RUN_TEST(cross_repo_maven_dependency_creates_library_edges);
     RUN_TEST(cross_repo_maven_dependency_escapes_library_edge_props);
     RUN_TEST(cross_repo_maven_dependency_management_does_not_create_library_edge);
