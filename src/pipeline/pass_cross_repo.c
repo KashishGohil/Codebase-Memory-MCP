@@ -47,6 +47,25 @@ static const char *cr_itoa(int v) {
     return cr_ibuf;
 }
 
+bool cbm_cross_repo_project_list_alloc(char ***out, int cap, void *(*malloc_fn)(size_t)) {
+    if (!out) {
+        return false;
+    }
+    *out = NULL;
+    if (cap <= 0 || !malloc_fn) {
+        return false;
+    }
+    if ((size_t)cap > SIZE_MAX / sizeof(char *)) {
+        return false;
+    }
+    char **items = malloc_fn((size_t)cap * sizeof(*items));
+    if (!items) {
+        return false;
+    }
+    *out = items;
+    return true;
+}
+
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
 static const char *cr_cache_dir(void) {
@@ -114,16 +133,14 @@ static void delete_cross_edges(cbm_store_t *store, const char *project) {
     cbm_store_delete_edges_by_type(store, project, "CROSS_GRAPHQL_CALLS");
     cbm_store_delete_edges_by_type(store, project, "CROSS_TRPC_CALLS");
     cbm_store_delete_edges_by_type(store, project, "CROSS_LIBRARY_DEPENDS_ON");
-    cbm_store_delete_edges_by_type(store, project, "CROSS_LIBRARY_USED_BY");
     struct sqlite3 *db = cbm_store_get_db(store);
     if (!db) {
         return;
     }
     sqlite3_stmt *st = NULL;
     if (sqlite3_prepare_v2(db,
-                           "DELETE FROM nodes WHERE project=?1 AND "
-                           "(qualified_name GLOB '__library__*' OR "
-                           "qualified_name GLOB '__library_consumer__*')",
+                           "DELETE FROM nodes WHERE project=?1 AND label='Library' "
+                           "AND qualified_name GLOB '__library__*'",
                            CBM_NOT_FOUND, &st, NULL) == SQLITE_OK) {
         sqlite3_bind_text(st, SKIP_ONE, project, CBM_NOT_FOUND, SQLITE_STATIC);
         sqlite3_step(st);
@@ -578,7 +595,12 @@ static int collect_all_projects(char ***out) {
 
     int cap = CR_INIT_CAP;
     int count = 0;
-    char **projects = malloc((size_t)cap * sizeof(char *));
+    char **projects = NULL;
+    if (!cbm_cross_repo_project_list_alloc(&projects, cap, malloc)) {
+        cbm_closedir(d);
+        *out = NULL;
+        return 0;
+    }
 
     cbm_dirent_t *ent;
     while ((ent = cbm_readdir(d)) != NULL) {
@@ -593,15 +615,25 @@ static int collect_all_projects(char ***out) {
             continue;
         }
         if (count >= cap) {
-            cap *= PAIR_LEN;
-            char **tmp = realloc(projects, (size_t)cap * sizeof(char *));
+            if (cap > INT32_MAX / PAIR_LEN) {
+                break;
+            }
+            int new_cap = cap * PAIR_LEN;
+            if ((size_t)new_cap > SIZE_MAX / sizeof(*projects)) {
+                break;
+            }
+            char **tmp = realloc(projects, (size_t)new_cap * sizeof(*projects));
             if (!tmp) {
                 break;
             }
+            cap = new_cap;
             projects = tmp;
         }
         /* Strip .db extension */
         projects[count] = malloc(len - PAIR_LEN);
+        if (!projects[count]) {
+            break;
+        }
         memcpy(projects[count], ent->name, len - CR_DB_EXT_LEN);
         projects[count][len - CR_DB_EXT_LEN] = '\0';
         count++;

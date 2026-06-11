@@ -28,9 +28,6 @@ typedef struct {
     char *artifact_id;
     char *version;
     char *scope;
-    char *relation;
-    char *context_group_id;
-    char *context_artifact_id;
     char *pom_path;
 } mcr_dependency_t;
 
@@ -86,6 +83,9 @@ bool cbm_cross_repo_maven_grow_array(void **items, int *cap, size_t elem_size,
         return false;
     }
     int new_cap = *cap * PAIR_LEN;
+    if ((size_t)new_cap > SIZE_MAX / elem_size) {
+        return false;
+    }
     void *tmp = realloc_fn(*items, (size_t)new_cap * elem_size);
     if (!tmp) {
         return false;
@@ -115,9 +115,6 @@ static void free_dependency_fields(mcr_dependency_t *dep) {
     free(dep->artifact_id);
     free(dep->version);
     free(dep->scope);
-    free(dep->relation);
-    free(dep->context_group_id);
-    free(dep->context_artifact_id);
     free(dep->pom_path);
     memset(dep, 0, sizeof(*dep));
 }
@@ -370,12 +367,11 @@ static int list_pom_paths(cbm_store_t *store, const char *project, char ***out) 
             continue;
         }
         if (count >= cap) {
-            cap *= PAIR_LEN;
-            char **tmp = realloc(paths, (size_t)cap * sizeof(char *));
-            if (!tmp) {
+            void *grown = paths;
+            if (!cbm_cross_repo_maven_grow_array(&grown, &cap, sizeof(*paths), realloc)) {
                 break;
             }
-            paths = tmp;
+            paths = grown;
         }
         paths[count] = malloc(strlen(path) + SKIP_ONE);
         if (paths[count]) {
@@ -438,16 +434,15 @@ static int collect_artifacts(cbm_store_t *store, const char *project, mcr_artifa
         }
         if (group && group[0] && artifact && artifact[0]) {
             if (count >= cap) {
-                cap *= PAIR_LEN;
-                mcr_artifact_t *tmp = realloc(items, (size_t)cap * sizeof(*items));
-                if (!tmp) {
+                void *grown = items;
+                if (!cbm_cross_repo_maven_grow_array(&grown, &cap, sizeof(*items), realloc)) {
                     free(parent_group);
                     free(group);
                     free(artifact);
                     free(xml);
                     break;
                 }
-                items = tmp;
+                items = grown;
             }
             memset(&items[count], 0, sizeof(items[count]));
             items[count].group_id = group;
@@ -479,10 +474,10 @@ static int collect_artifacts(cbm_store_t *store, const char *project, mcr_artifa
 
 static bool add_dependency(mcr_dependency_t **items, int *count, int *cap, const char *group,
                            const char *artifact, const char *version, const char *scope,
-                           const char *relation, const char *context_group,
-                           const char *context_artifact, const char *pom_path) {
-    if (!items || !*items || !count || !cap || !group || !artifact || !group[0] ||
-        !artifact[0]) {
+                           const char *pom_path) {
+    bool missing_storage = !items || !*items || !count || !cap;
+    bool missing_coordinate = !group || !artifact || !group[0] || !artifact[0];
+    if (missing_storage || missing_coordinate) {
         return false;
     }
     if (*count >= *cap) {
@@ -498,12 +493,8 @@ static bool add_dependency(mcr_dependency_t **items, int *count, int *cap, const
     dep->artifact_id = dup_cstr(artifact);
     dep->version = dup_cstr(version);
     dep->scope = dup_cstr(scope);
-    dep->relation = dup_cstr(relation ? relation : "dependency");
-    dep->context_group_id = dup_cstr(context_group);
-    dep->context_artifact_id = dup_cstr(context_artifact);
     dep->pom_path = dup_cstr(pom_path);
-    if (!dep->group_id || !dep->artifact_id || !dep->version || !dep->scope || !dep->relation ||
-        !dep->context_group_id || !dep->context_artifact_id || !dep->pom_path) {
+    if (!dep->group_id || !dep->artifact_id || !dep->version || !dep->scope || !dep->pom_path) {
         free_dependency_fields(dep);
         return false;
     }
@@ -564,28 +555,8 @@ static int collect_dependencies(cbm_store_t *store, const char *project, mcr_dep
             char *version = xml_tag_text_dup(open_end + SKIP_ONE, end, "version");
             char *scope = xml_tag_text_dup(open_end + SKIP_ONE, end, "scope");
 
-            add_dependency(&items, &count, &cap, group, artifact, version, scope, "dependency",
-                           group, artifact, paths[i]);
+            add_dependency(&items, &count, &cap, group, artifact, version, scope, paths[i]);
 
-            const char *ex = open_end + SKIP_ONE;
-            while ((ex = strstr(ex, "<exclusion")) != NULL && ex < end && count < MCR_MAX_EDGES) {
-                const char *ex_open_end = strchr(ex, '>');
-                if (!ex_open_end || ex_open_end >= end) {
-                    break;
-                }
-                const char *ex_end = strstr(ex_open_end + SKIP_ONE, "</exclusion>");
-                if (!ex_end || ex_end > end) {
-                    break;
-                }
-                char *ex_group = xml_tag_text_dup(ex_open_end + SKIP_ONE, ex_end, "groupId");
-                char *ex_artifact =
-                    xml_tag_text_dup(ex_open_end + SKIP_ONE, ex_end, "artifactId");
-                add_dependency(&items, &count, &cap, ex_group, ex_artifact, version, scope,
-                               "exclusion", group, artifact, paths[i]);
-                free(ex_group);
-                free(ex_artifact);
-                ex = ex_end + strlen("</exclusion>");
-            }
             free(group);
             free(artifact);
             free(version);
@@ -607,8 +578,7 @@ static int64_t project_node_id(cbm_store_t *store, const char *project) {
         return 0;
     }
     sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(db,
-                           "SELECT id FROM nodes WHERE project=?1 AND label='Project' LIMIT 1",
+    if (sqlite3_prepare_v2(db, "SELECT id FROM nodes WHERE project=?1 AND label='Project' LIMIT 1",
                            CBM_NOT_FOUND, &st, NULL) != SQLITE_OK) {
         return 0;
     }
@@ -697,9 +667,6 @@ static char *build_library_props(const char *other_project, const mcr_dependency
     yyjson_mut_obj_add_strcpy(doc, root, "artifact_id", dep->artifact_id);
     yyjson_mut_obj_add_strcpy(doc, root, "version", dep->version);
     yyjson_mut_obj_add_strcpy(doc, root, "scope", dep->scope);
-    yyjson_mut_obj_add_strcpy(doc, root, "relation", dep->relation);
-    yyjson_mut_obj_add_strcpy(doc, root, "context_group_id", dep->context_group_id);
-    yyjson_mut_obj_add_strcpy(doc, root, "context_artifact_id", dep->context_artifact_id);
     yyjson_mut_obj_add_strcpy(doc, root, "source_pom", dep->pom_path ? dep->pom_path : "");
 
     size_t len = 0;
@@ -711,15 +678,14 @@ static char *build_library_props(const char *other_project, const mcr_dependency
     return json;
 }
 
-static char *format_library_qn(const char *prefix, const char *project, const mcr_dependency_t *dep) {
+static char *format_library_qn(const char *prefix, const char *project,
+                               const mcr_dependency_t *dep) {
     if (!prefix || !project || !dep) {
         return NULL;
     }
     const char *pom_path = dep->pom_path ? dep->pom_path : "";
-    int needed =
-        snprintf(NULL, 0, "%s%s__%s__%s:%s__via__%s:%s__%s", prefix, project, dep->relation,
-                 dep->group_id, dep->artifact_id, dep->context_group_id, dep->context_artifact_id,
-                 pom_path);
+    int needed = snprintf(NULL, 0, "%s%s__%s:%s__%s", prefix, project, dep->group_id,
+                          dep->artifact_id, pom_path);
     if (needed < 0) {
         return NULL;
     }
@@ -727,9 +693,8 @@ static char *format_library_qn(const char *prefix, const char *project, const mc
     if (!qn) {
         return NULL;
     }
-    snprintf(qn, (size_t)needed + SKIP_ONE, "%s%s__%s__%s:%s__via__%s:%s__%s", prefix, project,
-             dep->relation, dep->group_id, dep->artifact_id, dep->context_group_id,
-             dep->context_artifact_id, pom_path);
+    snprintf(qn, (size_t)needed + SKIP_ONE, "%s%s__%s:%s__%s", prefix, project, dep->group_id,
+             dep->artifact_id, pom_path);
     return qn;
 }
 

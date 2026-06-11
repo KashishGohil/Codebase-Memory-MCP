@@ -1815,14 +1815,10 @@ static void append_cross_repo_summary(yyjson_mut_doc *doc, yyjson_mut_val *root,
     /* Scan edge types for any CROSS_* edges and sum them */
     int cross_total = 0;
     yyjson_mut_val *cr = yyjson_mut_obj(doc);
-    static const char *cross_types[] = {"CROSS_HTTP_CALLS",
-                                        "CROSS_ASYNC_CALLS",
-                                        "CROSS_CHANNEL",
-                                        "CROSS_GRPC_CALLS",
-                                        "CROSS_GRAPHQL_CALLS",
-                                        "CROSS_TRPC_CALLS",
-                                        "CROSS_LIBRARY_DEPENDS_ON",
-                                        "CROSS_LIBRARY_USED_BY"};
+    static const char *cross_types[] = {
+        "CROSS_HTTP_CALLS",         "CROSS_ASYNC_CALLS",    "CROSS_CHANNEL",
+        "CROSS_GRPC_CALLS",         "CROSS_GRAPHQL_CALLS",  "CROSS_TRPC_CALLS",
+        "CROSS_LIBRARY_DEPENDS_ON", "CROSS_LIBRARY_USED_BY"};
     for (int t = 0; t < (int)(sizeof(cross_types) / sizeof(cross_types[0])); t++) {
         for (int i = 0; i < schema->edge_type_count; i++) {
             if (strcmp(schema->edge_types[i].type, cross_types[t]) == 0) {

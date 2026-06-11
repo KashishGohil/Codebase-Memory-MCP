@@ -17,6 +17,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <stdatomic.h>
 #include "foundation/compat_thread.h"
 #include <fcntl.h>
@@ -1069,8 +1070,8 @@ static int count_edges_by_type(cbm_store_t *s, const char *project, const char *
     if (!db) {
         return -1;
     }
-    if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM edges WHERE project=?1 AND type=?2", -1,
-                           &stmt, NULL) != SQLITE_OK) {
+    if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM edges WHERE project=?1 AND type=?2", -1, &stmt,
+                           NULL) != SQLITE_OK) {
         return -1;
     }
     sqlite3_bind_text(stmt, 1, project, -1, SQLITE_STATIC);
@@ -1089,8 +1090,7 @@ static int edge_props_are_valid_json(cbm_store_t *s, const char *project, const 
     if (!db) {
         return 0;
     }
-    if (sqlite3_prepare_v2(db,
-                           "SELECT properties FROM edges WHERE project=?1 AND type=?2", -1,
+    if (sqlite3_prepare_v2(db, "SELECT properties FROM edges WHERE project=?1 AND type=?2", -1,
                            &stmt, NULL) != SQLITE_OK) {
         return 0;
     }
@@ -1119,8 +1119,7 @@ static int node_exists_by_qn(cbm_store_t *s, const char *project, const char *qn
     if (!db) {
         return 0;
     }
-    if (sqlite3_prepare_v2(db,
-                           "SELECT COUNT(*) FROM nodes WHERE project=?1 AND qualified_name=?2",
+    if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM nodes WHERE project=?1 AND qualified_name=?2",
                            -1, &stmt, NULL) != SQLITE_OK) {
         return 0;
     }
@@ -1284,11 +1283,38 @@ static void cleanup_cross_maven_fixture(cross_maven_fixture_t *fx) {
 
 extern bool cbm_cross_repo_maven_grow_array(void **items, int *cap, size_t elem_size,
                                             void *(*realloc_fn)(void *, size_t));
+extern bool cbm_cross_repo_project_list_alloc(char ***out, int cap, void *(*malloc_fn)(size_t));
 
 static void *test_maven_realloc_fails(void *ptr, size_t size) {
     (void)ptr;
     (void)size;
     return NULL;
+}
+
+static int g_test_maven_realloc_calls;
+
+static void *test_maven_realloc_records_call(void *ptr, size_t size) {
+    (void)size;
+    g_test_maven_realloc_calls++;
+    return ptr;
+}
+
+static void *test_project_list_malloc_fails(size_t size) {
+    (void)size;
+    return NULL;
+}
+
+TEST(cross_repo_project_list_initial_alloc_failure_returns_empty) {
+    char **projects = (char **)1;
+
+    ASSERT_FALSE(cbm_cross_repo_project_list_alloc(&projects, 32, test_project_list_malloc_fails));
+    ASSERT_NULL(projects);
+
+    projects = (char **)1;
+    ASSERT_FALSE(cbm_cross_repo_project_list_alloc(&projects, 0, test_project_list_malloc_fails));
+    ASSERT_NULL(projects);
+
+    PASS();
 }
 
 TEST(cross_repo_maven_failed_growth_preserves_capacity) {
@@ -1297,10 +1323,27 @@ TEST(cross_repo_maven_failed_growth_preserves_capacity) {
     ASSERT_NOT_NULL(items);
     void *original = items;
 
-    ASSERT_FALSE(
-        cbm_cross_repo_maven_grow_array((void **)&items, &cap, sizeof(*items),
-                                        test_maven_realloc_fails));
+    ASSERT_FALSE(cbm_cross_repo_maven_grow_array((void **)&items, &cap, sizeof(*items),
+                                                 test_maven_realloc_fails));
     ASSERT_EQ(cap, 32);
+    ASSERT_EQ(items == original, 1);
+
+    free(items);
+    PASS();
+}
+
+TEST(cross_repo_maven_growth_rejects_byte_overflow_before_realloc) {
+    int cap = 2;
+    char *items = malloc(1);
+    ASSERT_NOT_NULL(items);
+    void *original = items;
+    g_test_maven_realloc_calls = 0;
+
+    ASSERT_FALSE(cbm_cross_repo_maven_grow_array((void **)&items, &cap,
+                                                 (SIZE_MAX / (size_t)(cap * PAIR_LEN)) + 1,
+                                                 test_maven_realloc_records_call));
+    ASSERT_EQ(g_test_maven_realloc_calls, 0);
+    ASSERT_EQ(cap, 2);
     ASSERT_EQ(items == original, 1);
 
     free(items);
@@ -1312,29 +1355,28 @@ TEST(cross_repo_maven_dependency_creates_library_edges) {
                                "<groupId>com.example.platform</groupId>"
                                "<artifactId>shared-library</artifactId>"
                                "<version>1.0.0</version></project>";
-    const char *consumer_pom =
-        "<project><modelVersion>4.0.0</modelVersion>"
-        "<groupId>app</groupId><artifactId>consumer</artifactId>"
-        "<dependencies><dependency><groupId>com.example.platform</groupId>"
-        "<artifactId>shared-library</artifactId><version>1.0.0</version>"
-        "</dependency><dependency><groupId>vendor.client</groupId>"
-        "<artifactId>vendor-client</artifactId><version>2.0.0</version>"
-        "<exclusions><exclusion><groupId>com.example.platform</groupId>"
-        "<artifactId>shared-library</artifactId></exclusion></exclusions>"
-        "</dependency></dependencies></project>";
+    const char *consumer_pom = "<project><modelVersion>4.0.0</modelVersion>"
+                               "<groupId>app</groupId><artifactId>consumer</artifactId>"
+                               "<dependencies><dependency><groupId>com.example.platform</groupId>"
+                               "<artifactId>shared-library</artifactId><version>1.0.0</version>"
+                               "</dependency><dependency><groupId>vendor.client</groupId>"
+                               "<artifactId>vendor-client</artifactId><version>2.0.0</version>"
+                               "<exclusions><exclusion><groupId>com.example.platform</groupId>"
+                               "<artifactId>shared-library</artifactId></exclusion></exclusions>"
+                               "</dependency></dependencies></project>";
     cross_maven_fixture_t fx;
     ASSERT_EQ(setup_cross_maven_fixture(&fx, provider_pom, consumer_pom), 0);
 
     const char *targets[] = {"provider"};
     cbm_cross_repo_result_t result = cbm_cross_repo_match("consumer", targets, 1);
-    ASSERT_EQ(result.library_edges, 2);
+    ASSERT_EQ(result.library_edges, 1);
 
     cbm_store_t *consumer = cbm_store_open_path(fx.consumer_db);
     cbm_store_t *provider = cbm_store_open_path(fx.provider_db);
     ASSERT_NOT_NULL(consumer);
     ASSERT_NOT_NULL(provider);
-    ASSERT_EQ(count_edges_by_type(consumer, "consumer", "CROSS_LIBRARY_DEPENDS_ON"), 2);
-    ASSERT_EQ(count_edges_by_type(provider, "provider", "CROSS_LIBRARY_USED_BY"), 2);
+    ASSERT_EQ(count_edges_by_type(consumer, "consumer", "CROSS_LIBRARY_DEPENDS_ON"), 1);
+    ASSERT_EQ(count_edges_by_type(provider, "provider", "CROSS_LIBRARY_USED_BY"), 1);
     cbm_store_close(consumer);
     cbm_store_close(provider);
 
@@ -1347,12 +1389,11 @@ TEST(cross_repo_maven_dependency_escapes_library_edge_props) {
                                "<groupId>com.example\"platform</groupId>"
                                "<artifactId>shared-library</artifactId>"
                                "<version>1.0.0</version></project>";
-    const char *consumer_pom =
-        "<project><modelVersion>4.0.0</modelVersion>"
-        "<groupId>app</groupId><artifactId>consumer</artifactId>"
-        "<dependencies><dependency><groupId>com.example\"platform</groupId>"
-        "<artifactId>shared-library</artifactId><version>1.0.0</version>"
-        "</dependency></dependencies></project>";
+    const char *consumer_pom = "<project><modelVersion>4.0.0</modelVersion>"
+                               "<groupId>app</groupId><artifactId>consumer</artifactId>"
+                               "<dependencies><dependency><groupId>com.example\"platform</groupId>"
+                               "<artifactId>shared-library</artifactId><version>1.0.0</version>"
+                               "</dependency></dependencies></project>";
     cross_maven_fixture_t fx;
     ASSERT_EQ(setup_cross_maven_fixture(&fx, provider_pom, consumer_pom), 0);
 
@@ -1441,14 +1482,13 @@ TEST(cross_repo_maven_plugin_dependency_does_not_create_library_edge) {
                                "<groupId>com.example.platform</groupId>"
                                "<artifactId>shared-library</artifactId>"
                                "<version>1.0.0</version></project>";
-    const char *consumer_pom =
-        "<project><modelVersion>4.0.0</modelVersion>"
-        "<groupId>app</groupId><artifactId>consumer</artifactId>"
-        "<build><plugins><plugin><groupId>org.apache.maven.plugins</groupId>"
-        "<artifactId>maven-plugin</artifactId><version>1.0.0</version>"
-        "<dependencies><dependency><groupId>com.example.platform</groupId>"
-        "<artifactId>shared-library</artifactId><version>1.0.0</version>"
-        "</dependency></dependencies></plugin></plugins></build></project>";
+    const char *consumer_pom = "<project><modelVersion>4.0.0</modelVersion>"
+                               "<groupId>app</groupId><artifactId>consumer</artifactId>"
+                               "<build><plugins><plugin><groupId>org.apache.maven.plugins</groupId>"
+                               "<artifactId>maven-plugin</artifactId><version>1.0.0</version>"
+                               "<dependencies><dependency><groupId>com.example.platform</groupId>"
+                               "<artifactId>shared-library</artifactId><version>1.0.0</version>"
+                               "</dependency></dependencies></plugin></plugins></build></project>";
     cross_maven_fixture_t fx;
     ASSERT_EQ(setup_cross_maven_fixture(&fx, provider_pom, consumer_pom), 0);
 
@@ -1474,12 +1514,11 @@ TEST(cross_repo_maven_cleanup_preserves_unrelated_nodes) {
                                "<groupId>com.example.platform</groupId>"
                                "<artifactId>shared-library</artifactId>"
                                "<version>1.0.0</version></project>";
-    const char *consumer_pom =
-        "<project><modelVersion>4.0.0</modelVersion>"
-        "<groupId>app</groupId><artifactId>consumer</artifactId>"
-        "<dependencies><dependency><groupId>com.example.platform</groupId>"
-        "<artifactId>shared-library</artifactId><version>1.0.0</version>"
-        "</dependency></dependencies></project>";
+    const char *consumer_pom = "<project><modelVersion>4.0.0</modelVersion>"
+                               "<groupId>app</groupId><artifactId>consumer</artifactId>"
+                               "<dependencies><dependency><groupId>com.example.platform</groupId>"
+                               "<artifactId>shared-library</artifactId><version>1.0.0</version>"
+                               "</dependency></dependencies></project>";
     cross_maven_fixture_t fx;
     ASSERT_EQ(setup_cross_maven_fixture(&fx, provider_pom, consumer_pom), 0);
 
@@ -1493,7 +1532,16 @@ TEST(cross_repo_maven_cleanup_preserves_unrelated_nodes) {
                             .start_line = 1,
                             .end_line = 1,
                             .properties_json = "{}"};
+    cbm_node_t prefixed_function = {.project = "consumer",
+                                    .label = "Function",
+                                    .name = "PrefixedFunction",
+                                    .qualified_name = "__library__manual_function_should_stay",
+                                    .file_path = "src/manual.c",
+                                    .start_line = 1,
+                                    .end_line = 1,
+                                    .properties_json = "{}"};
     ASSERT_GT(cbm_store_upsert_node(consumer, &unrelated), 0);
+    ASSERT_GT(cbm_store_upsert_node(consumer, &prefixed_function), 0);
     cbm_store_close(consumer);
 
     const char *targets[] = {"provider"};
@@ -1503,7 +1551,43 @@ TEST(cross_repo_maven_cleanup_preserves_unrelated_nodes) {
     consumer = cbm_store_open_path(fx.consumer_db);
     ASSERT_NOT_NULL(consumer);
     ASSERT_TRUE(node_exists_by_qn(consumer, "consumer", "xxlibraryzz_should_stay"));
+    ASSERT_TRUE(node_exists_by_qn(consumer, "consumer", "__library__manual_function_should_stay"));
     cbm_store_close(consumer);
+
+    cleanup_cross_maven_fixture(&fx);
+    PASS();
+}
+
+TEST(cross_repo_maven_provider_rerun_preserves_incoming_used_by) {
+    const char *provider_pom = "<project><modelVersion>4.0.0</modelVersion>"
+                               "<groupId>com.example.platform</groupId>"
+                               "<artifactId>shared-library</artifactId>"
+                               "<version>1.0.0</version></project>";
+    const char *consumer_pom = "<project><modelVersion>4.0.0</modelVersion>"
+                               "<groupId>app</groupId><artifactId>consumer</artifactId>"
+                               "<dependencies><dependency><groupId>com.example.platform</groupId>"
+                               "<artifactId>shared-library</artifactId><version>1.0.0</version>"
+                               "</dependency></dependencies></project>";
+    cross_maven_fixture_t fx;
+    ASSERT_EQ(setup_cross_maven_fixture(&fx, provider_pom, consumer_pom), 0);
+
+    const char *provider_targets[] = {"provider"};
+    cbm_cross_repo_result_t result = cbm_cross_repo_match("consumer", provider_targets, 1);
+    ASSERT_EQ(result.library_edges, 1);
+
+    cbm_store_t *provider = cbm_store_open_path(fx.provider_db);
+    ASSERT_NOT_NULL(provider);
+    ASSERT_EQ(count_edges_by_type(provider, "provider", "CROSS_LIBRARY_USED_BY"), 1);
+    cbm_store_close(provider);
+
+    const char *consumer_targets[] = {"consumer"};
+    result = cbm_cross_repo_match("provider", consumer_targets, 1);
+    ASSERT_EQ(result.library_edges, 0);
+
+    provider = cbm_store_open_path(fx.provider_db);
+    ASSERT_NOT_NULL(provider);
+    ASSERT_EQ(count_edges_by_type(provider, "provider", "CROSS_LIBRARY_USED_BY"), 1);
+    cbm_store_close(provider);
 
     cleanup_cross_maven_fixture(&fx);
     PASS();
@@ -1514,12 +1598,11 @@ TEST(cross_repo_maven_removed_dependency_clears_provider_used_by) {
                                "<groupId>com.example.platform</groupId>"
                                "<artifactId>shared-library</artifactId>"
                                "<version>1.0.0</version></project>";
-    const char *consumer_pom =
-        "<project><modelVersion>4.0.0</modelVersion>"
-        "<groupId>app</groupId><artifactId>consumer</artifactId>"
-        "<dependencies><dependency><groupId>com.example.platform</groupId>"
-        "<artifactId>shared-library</artifactId><version>1.0.0</version>"
-        "</dependency></dependencies></project>";
+    const char *consumer_pom = "<project><modelVersion>4.0.0</modelVersion>"
+                               "<groupId>app</groupId><artifactId>consumer</artifactId>"
+                               "<dependencies><dependency><groupId>com.example.platform</groupId>"
+                               "<artifactId>shared-library</artifactId><version>1.0.0</version>"
+                               "</dependency></dependencies></project>";
     cross_maven_fixture_t fx;
     ASSERT_EQ(setup_cross_maven_fixture(&fx, provider_pom, consumer_pom), 0);
 
@@ -1629,9 +1712,8 @@ TEST(cross_repo_maven_fixture_restores_cache_dir) {
                                "<groupId>com.example.platform</groupId>"
                                "<artifactId>shared-library</artifactId>"
                                "<version>1.0.0</version></project>";
-    const char *consumer_pom =
-        "<project><modelVersion>4.0.0</modelVersion>"
-        "<groupId>app</groupId><artifactId>consumer</artifactId></project>";
+    const char *consumer_pom = "<project><modelVersion>4.0.0</modelVersion>"
+                               "<groupId>app</groupId><artifactId>consumer</artifactId></project>";
     const char *original = getenv("CBM_CACHE_DIR");
     char original_copy[512] = {0};
     if (original) {
@@ -1664,20 +1746,19 @@ TEST(cross_repo_maven_long_references_do_not_collide) {
              "<project><modelVersion>4.0.0</modelVersion><groupId>%s</groupId>"
              "<artifactId>%s</artifactId><version>1.0.0</version></project>",
              group, artifact);
-    const char *consumer_pom =
-        "<project><modelVersion>4.0.0</modelVersion>"
-        "<groupId>app</groupId><artifactId>consumer</artifactId></project>";
+    const char *consumer_pom = "<project><modelVersion>4.0.0</modelVersion>"
+                               "<groupId>app</groupId><artifactId>consumer</artifactId></project>";
     cross_maven_fixture_t fx;
     ASSERT_EQ(setup_cross_maven_fixture(&fx, provider_pom, consumer_pom), 0);
 
-    char common_path[360];
+    char common_path[240];
     memset(common_path, 0, sizeof(common_path));
     snprintf(common_path, sizeof(common_path),
-             "modules/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"
-             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/"
-             "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/");
-    char dep_path_a[420];
-    char dep_path_b[420];
+             "modules/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"
+             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/"
+             "cccccccccccccccccccccccccccccccccccccccc/");
+    char dep_path_a[300];
+    char dep_path_b[300];
     snprintf(dep_path_a, sizeof(dep_path_a), "%sdep-a/pom.xml", common_path);
     snprintf(dep_path_b, sizeof(dep_path_b), "%sdep-b/pom.xml", common_path);
 
@@ -1688,8 +1769,16 @@ TEST(cross_repo_maven_long_references_do_not_collide) {
              "<dependencies><dependency><groupId>%s</groupId><artifactId>%s</artifactId>"
              "<version>1.0.0</version></dependency></dependencies></project>",
              group, artifact);
-    ASSERT_EQ(th_write_file(TH_PATH(fx.consumer_root, dep_path_a), dep_pom), 0);
-    ASSERT_EQ(th_write_file(TH_PATH(fx.consumer_root, dep_path_b), dep_pom), 0);
+    int write_rc = th_write_file(TH_PATH(fx.consumer_root, dep_path_a), dep_pom);
+    if (write_rc != 0) {
+        cleanup_cross_maven_fixture(&fx);
+    }
+    ASSERT_EQ(write_rc, 0);
+    write_rc = th_write_file(TH_PATH(fx.consumer_root, dep_path_b), dep_pom);
+    if (write_rc != 0) {
+        cleanup_cross_maven_fixture(&fx);
+    }
+    ASSERT_EQ(write_rc, 0);
 
     cbm_store_t *consumer = cbm_store_open_path(fx.consumer_db);
     ASSERT_NOT_NULL(consumer);
@@ -1727,19 +1816,20 @@ TEST(cross_repo_maven_long_references_do_not_collide) {
 }
 
 TEST(cross_repo_maven_very_long_pom_paths_do_not_truncate) {
+#ifdef _WIN32
+    SKIP_PLATFORM("Windows does not reliably allow 512+ character fixture paths");
+#endif
     const char *provider_pom = "<project><modelVersion>4.0.0</modelVersion>"
                                "<groupId>com.example.platform</groupId>"
                                "<artifactId>shared-library</artifactId>"
                                "<version>1.0.0</version></project>";
-    const char *consumer_pom =
-        "<project><modelVersion>4.0.0</modelVersion>"
-        "<groupId>app</groupId><artifactId>consumer</artifactId></project>";
-    const char *dep_pom =
-        "<project><modelVersion>4.0.0</modelVersion>"
-        "<groupId>app</groupId><artifactId>consumer-module</artifactId>"
-        "<dependencies><dependency><groupId>com.example.platform</groupId>"
-        "<artifactId>shared-library</artifactId><version>1.0.0</version>"
-        "</dependency></dependencies></project>";
+    const char *consumer_pom = "<project><modelVersion>4.0.0</modelVersion>"
+                               "<groupId>app</groupId><artifactId>consumer</artifactId></project>";
+    const char *dep_pom = "<project><modelVersion>4.0.0</modelVersion>"
+                          "<groupId>app</groupId><artifactId>consumer-module</artifactId>"
+                          "<dependencies><dependency><groupId>com.example.platform</groupId>"
+                          "<artifactId>shared-library</artifactId><version>1.0.0</version>"
+                          "</dependency></dependencies></project>";
     cross_maven_fixture_t fx;
     ASSERT_EQ(setup_cross_maven_fixture(&fx, provider_pom, consumer_pom), 0);
 
@@ -1759,8 +1849,16 @@ TEST(cross_repo_maven_very_long_pom_paths_do_not_truncate) {
     ASSERT_GT((int)strlen(dep_path_a), 512);
     ASSERT_EQ(strncmp(dep_path_a, dep_path_b, 512), 0);
 
-    ASSERT_EQ(th_write_file(TH_PATH(fx.consumer_root, dep_path_a), dep_pom), 0);
-    ASSERT_EQ(th_write_file(TH_PATH(fx.consumer_root, dep_path_b), dep_pom), 0);
+    int write_rc = th_write_file(TH_PATH(fx.consumer_root, dep_path_a), dep_pom);
+    if (write_rc != 0) {
+        cleanup_cross_maven_fixture(&fx);
+    }
+    ASSERT_EQ(write_rc, 0);
+    write_rc = th_write_file(TH_PATH(fx.consumer_root, dep_path_b), dep_pom);
+    if (write_rc != 0) {
+        cleanup_cross_maven_fixture(&fx);
+    }
+    ASSERT_EQ(write_rc, 0);
 
     cbm_store_t *consumer = cbm_store_open_path(fx.consumer_db);
     ASSERT_NOT_NULL(consumer);
@@ -6591,13 +6689,16 @@ SUITE(pipeline) {
     /* FastAPI Depends edge tracking (PR #66 port) */
     RUN_TEST(pipeline_fastapi_depends_edges);
     /* Cross-repo library dependency linking */
+    RUN_TEST(cross_repo_project_list_initial_alloc_failure_returns_empty);
     RUN_TEST(cross_repo_maven_failed_growth_preserves_capacity);
+    RUN_TEST(cross_repo_maven_growth_rejects_byte_overflow_before_realloc);
     RUN_TEST(cross_repo_maven_dependency_creates_library_edges);
     RUN_TEST(cross_repo_maven_dependency_escapes_library_edge_props);
     RUN_TEST(cross_repo_maven_dependency_management_does_not_create_library_edge);
     RUN_TEST(cross_repo_maven_commented_dependency_does_not_create_library_edge);
     RUN_TEST(cross_repo_maven_plugin_dependency_does_not_create_library_edge);
     RUN_TEST(cross_repo_maven_cleanup_preserves_unrelated_nodes);
+    RUN_TEST(cross_repo_maven_provider_rerun_preserves_incoming_used_by);
     RUN_TEST(cross_repo_maven_removed_dependency_clears_provider_used_by);
     RUN_TEST(cross_repo_maven_long_coordinates_do_not_collide);
     RUN_TEST(cross_repo_maven_fixture_restores_cache_dir);
