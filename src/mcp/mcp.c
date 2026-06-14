@@ -273,7 +273,8 @@ static const tool_def_t TOOLS[] = {
     {"index_repository",
      "Index a repository into the knowledge graph. "
      "Special mode 'cross-repo-intelligence': skip extraction, only match Routes/Channels "
-     "across projects to create CROSS_HTTP_CALLS/CROSS_ASYNC_CALLS/CROSS_CHANNEL edges. "
+     "and Maven library dependencies across projects to create CROSS_HTTP_CALLS/"
+     "CROSS_ASYNC_CALLS/CROSS_CHANNEL/CROSS_LIBRARY_DEPENDS_ON/CROSS_LIBRARY_USED_BY edges. "
      "Requires target_projects param. Ensure target projects have fresh indexes first.",
      "{\"type\":\"object\",\"properties\":{\"repo_path\":{\"type\":\"string\",\"description\":"
      "\"Path to the repository\"},"
@@ -282,7 +283,8 @@ static const tool_def_t TOOLS[] = {
      "\"default\":\"full\",\"description\":\"All modes run type-aware LSP call/usage "
      "resolution (per-file + cross-file). full: all files + similarity/semantic edges. "
      "moderate: filtered files + similarity/semantic. fast: filtered files, no "
-     "similarity/semantic. cross-repo-intelligence: match Routes/Channels across projects.\"},"
+     "similarity/semantic. cross-repo-intelligence: match Routes/Channels and Maven library "
+     "dependencies across projects.\"},"
      "\"target_projects\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},"
      "\"description\":\"Projects to search for cross-repo links (cross-repo-intelligence mode). "
      "Use [\\\"*\\\"] for all indexed projects. Run list_projects to see available projects.\"},"
@@ -1813,9 +1815,10 @@ static void append_cross_repo_summary(yyjson_mut_doc *doc, yyjson_mut_val *root,
     /* Scan edge types for any CROSS_* edges and sum them */
     int cross_total = 0;
     yyjson_mut_val *cr = yyjson_mut_obj(doc);
-    static const char *cross_types[] = {"CROSS_HTTP_CALLS",    "CROSS_ASYNC_CALLS",
-                                        "CROSS_CHANNEL",       "CROSS_GRPC_CALLS",
-                                        "CROSS_GRAPHQL_CALLS", "CROSS_TRPC_CALLS"};
+    static const char *cross_types[] = {
+        "CROSS_HTTP_CALLS",         "CROSS_ASYNC_CALLS",    "CROSS_CHANNEL",
+        "CROSS_GRPC_CALLS",         "CROSS_GRAPHQL_CALLS",  "CROSS_TRPC_CALLS",
+        "CROSS_LIBRARY_DEPENDS_ON", "CROSS_LIBRARY_USED_BY"};
     for (int t = 0; t < (int)(sizeof(cross_types) / sizeof(cross_types[0])); t++) {
         for (int i = 0; i < schema->edge_type_count; i++) {
             if (strcmp(schema->edge_types[i].type, cross_types[t]) == 0) {
@@ -2462,7 +2465,7 @@ static char *handle_cross_repo_mode(const char *repo_path, const char *args) {
     yyjson_doc_free(jdoc);
 
     int total = result.http_edges + result.async_edges + result.channel_edges + result.grpc_edges +
-                result.graphql_edges + result.trpc_edges;
+                result.graphql_edges + result.trpc_edges + result.library_edges;
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
     yyjson_mut_val *root = yyjson_mut_obj(doc);
     yyjson_mut_doc_set_root(doc, root);
@@ -2476,6 +2479,7 @@ static char *handle_cross_repo_mode(const char *repo_path, const char *args) {
     yyjson_mut_obj_add_int(doc, root, "cross_grpc_calls", result.grpc_edges);
     yyjson_mut_obj_add_int(doc, root, "cross_graphql_calls", result.graphql_edges);
     yyjson_mut_obj_add_int(doc, root, "cross_trpc_calls", result.trpc_edges);
+    yyjson_mut_obj_add_int(doc, root, "cross_library_edges", result.library_edges);
     yyjson_mut_obj_add_int(doc, root, "total_cross_edges", total);
     yyjson_mut_obj_add_real(doc, root, "elapsed_ms", result.elapsed_ms);
 

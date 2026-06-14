@@ -10,6 +10,7 @@
  * get a CROSS_* edge so the link is visible from either side.
  */
 #include "pipeline/pass_cross_repo.h"
+#include "pipeline/pass_cross_repo_maven.h"
 #include "foundation/constants.h"
 #include "foundation/log.h"
 #include "foundation/platform.h"
@@ -44,6 +45,25 @@ static CBM_TLS char cr_ibuf[CBM_SZ_32];
 static const char *cr_itoa(int v) {
     snprintf(cr_ibuf, sizeof(cr_ibuf), "%d", v);
     return cr_ibuf;
+}
+
+bool cbm_cross_repo_project_list_alloc(char ***out, int cap, void *(*malloc_fn)(size_t)) {
+    if (!out) {
+        return false;
+    }
+    *out = NULL;
+    if (cap <= 0 || !malloc_fn) {
+        return false;
+    }
+    if ((size_t)cap > SIZE_MAX / sizeof(char *)) {
+        return false;
+    }
+    char **items = malloc_fn((size_t)cap * sizeof(*items));
+    if (!items) {
+        return false;
+    }
+    *out = items;
+    return true;
 }
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
@@ -112,6 +132,20 @@ static void delete_cross_edges(cbm_store_t *store, const char *project) {
     cbm_store_delete_edges_by_type(store, project, "CROSS_GRPC_CALLS");
     cbm_store_delete_edges_by_type(store, project, "CROSS_GRAPHQL_CALLS");
     cbm_store_delete_edges_by_type(store, project, "CROSS_TRPC_CALLS");
+    cbm_store_delete_edges_by_type(store, project, "CROSS_LIBRARY_DEPENDS_ON");
+    struct sqlite3 *db = cbm_store_get_db(store);
+    if (!db) {
+        return;
+    }
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(db,
+                           "DELETE FROM nodes WHERE project=?1 AND label='Library' "
+                           "AND qualified_name GLOB '__library__*'",
+                           CBM_NOT_FOUND, &st, NULL) == SQLITE_OK) {
+        sqlite3_bind_text(st, SKIP_ONE, project, CBM_NOT_FOUND, SQLITE_STATIC);
+        sqlite3_step(st);
+        sqlite3_finalize(st);
+    }
 }
 
 /* Insert a CROSS_* edge into a store. */
@@ -561,7 +595,12 @@ static int collect_all_projects(char ***out) {
 
     int cap = CR_INIT_CAP;
     int count = 0;
-    char **projects = malloc((size_t)cap * sizeof(char *));
+    char **projects = NULL;
+    if (!cbm_cross_repo_project_list_alloc(&projects, cap, malloc)) {
+        cbm_closedir(d);
+        *out = NULL;
+        return 0;
+    }
 
     cbm_dirent_t *ent;
     while ((ent = cbm_readdir(d)) != NULL) {
@@ -576,15 +615,25 @@ static int collect_all_projects(char ***out) {
             continue;
         }
         if (count >= cap) {
-            cap *= PAIR_LEN;
-            char **tmp = realloc(projects, (size_t)cap * sizeof(char *));
+            if (cap > INT32_MAX / PAIR_LEN) {
+                break;
+            }
+            int new_cap = cap * PAIR_LEN;
+            if ((size_t)new_cap > SIZE_MAX / sizeof(*projects)) {
+                break;
+            }
+            char **tmp = realloc(projects, (size_t)new_cap * sizeof(*projects));
             if (!tmp) {
                 break;
             }
+            cap = new_cap;
             projects = tmp;
         }
         /* Strip .db extension */
         projects[count] = malloc(len - PAIR_LEN);
+        if (!projects[count]) {
+            break;
+        }
         memcpy(projects[count], ent->name, len - CR_DB_EXT_LEN);
         projects[count][len - CR_DB_EXT_LEN] = '\0';
         count++;
@@ -660,6 +709,8 @@ cbm_cross_repo_result_t cbm_cross_repo_match(const char *project, const char **t
                                "operation", "CROSS_GRAPHQL_CALLS");
         result.trpc_edges += match_typed_routes(src_store, project, tgt_store, tgt, "TRPC_CALLS",
                                                 "procedure", "procedure", "CROSS_TRPC_CALLS");
+        result.library_edges +=
+            cbm_cross_repo_match_maven_libraries(src_store, project, tgt_store, tgt);
         result.projects_scanned++;
 
         cbm_store_close(tgt_store);
@@ -677,7 +728,7 @@ cbm_cross_repo_result_t cbm_cross_repo_match(const char *project, const char **t
                         ((double)(t1.tv_nsec - t0.tv_nsec) / CR_NS_PER_MS);
 
     int total = result.http_edges + result.async_edges + result.channel_edges + result.grpc_edges +
-                result.graphql_edges + result.trpc_edges;
+                result.graphql_edges + result.trpc_edges + result.library_edges;
     cbm_log_info("cross_repo.done", "project", project, "total", cr_itoa(total));
 
     return result;
