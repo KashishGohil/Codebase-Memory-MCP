@@ -309,6 +309,29 @@ TEST(discover_skips_git_dir) {
     PASS();
 }
 
+TEST(discover_skips_antigravity_install_root_issue403) {
+    char *base = th_mktempdir("cbm_disc_ide403");
+    ASSERT(base != NULL);
+
+    char ide_root[512];
+    snprintf(ide_root, sizeof(ide_root), "%s/AppData/Local/Programs/Antigravity IDE", base);
+    th_mkdir_p(ide_root);
+    th_write_file(TH_PATH(ide_root, "resources/app/main.js"), "console.log('ide runtime');\n");
+    th_write_file(TH_PATH(ide_root, "resources/app/package.json"), "{\"name\":\"antigravity\"}\n");
+
+    cbm_discover_opts_t opts = {0};
+    cbm_file_info_t *files = NULL;
+    int count = 0;
+
+    int rc = cbm_discover(ide_root, &opts, &files, &count);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(count, 0);
+
+    cbm_discover_free(files, count);
+    th_cleanup(base);
+    PASS();
+}
+
 TEST(discover_with_gitignore) {
     char *base = th_mktempdir("cbm_disc_gi");
     ASSERT(base != NULL);
@@ -777,6 +800,7 @@ SUITE(discover) {
     /* Integration tests (cross-platform) */
     RUN_TEST(discover_simple);
     RUN_TEST(discover_skips_git_dir);
+    RUN_TEST(discover_skips_antigravity_install_root_issue403);
     RUN_TEST(discover_with_gitignore);
     RUN_TEST(discover_gitignore_dir_excluded_issue234);
     RUN_TEST(discover_max_file_size);

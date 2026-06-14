@@ -131,6 +131,32 @@ static bool str_contains(const char *s, const char *sub) {
     return strstr(s, sub) != NULL;
 }
 
+/* Windows IDE auto-index integrations can accidentally pass the IDE install
+ * directory itself as the repository root. These are not source projects and
+ * are mostly binary/runtime assets. Match on the normalized full path because
+ * cbm_should_skip_dir() only sees basenames during the walk. */
+static bool looks_like_ide_install_root(const char *path) {
+    if (!path) {
+        return false;
+    }
+
+    char normalized[CBM_SZ_4K];
+    size_t i = 0;
+    for (; path[i] && i + 1 < sizeof(normalized); i++) {
+        char c = path[i];
+        if (c == '\\') {
+            c = '/';
+        }
+        if (c >= 'A' && c <= 'Z') {
+            c = (char)(c - 'A' + 'a');
+        }
+        normalized[i] = c;
+    }
+    normalized[i] = '\0';
+
+    return strstr(normalized, "appdata/local/programs/antigravity") != NULL;
+}
+
 /* ── Public filter functions ─────────────────────── */
 
 bool cbm_should_skip_dir(const char *dirname, cbm_index_mode_t mode) {
@@ -539,6 +565,10 @@ int cbm_discover_ex(const char *repo_path, const cbm_discover_opts_t *opts, cbm_
     struct stat st;
     if (wide_stat(repo_path, &st) != 0 || !S_ISDIR(st.st_mode)) {
         return CBM_NOT_FOUND;
+    }
+
+    if (looks_like_ide_install_root(repo_path)) {
+        return 0;
     }
 
     /* Load gitignore if .git directory exists */
