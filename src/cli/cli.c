@@ -349,6 +349,48 @@ int cbm_copy_file(const char *src, const char *dst) {
     return rc == 0 ? 0 : CLI_ERR;
 }
 
+/* Return true if two paths refer to the same on-disk file. Used to avoid
+ * copying the running binary onto itself during install (cbm_copy_file would
+ * truncate it, since it opens the destination "wb" before reading the source). */
+static bool cbm_same_file(const char *a, const char *b) {
+    struct stat sa;
+    struct stat sb;
+    if (stat(a, &sa) != 0 || stat(b, &sb) != 0) {
+        return false;
+    }
+#ifdef _WIN32
+    /* st_ino is unreliable on Windows; compare normalized path strings. */
+    char na[CLI_BUF_1K];
+    char nb[CLI_BUF_1K];
+    snprintf(na, sizeof(na), "%s", a);
+    snprintf(nb, sizeof(nb), "%s", b);
+    cbm_normalize_path_sep(na);
+    cbm_normalize_path_sep(nb);
+    return strcmp(na, nb) == 0;
+#else
+    return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+#endif
+}
+
+/* Copy the running binary into the canonical install target, preserving the
+ * executable bit. When src and dst are the same on-disk file the copy is
+ * skipped: cbm_copy_file opens dst "wb" before reading src, so copying a file
+ * onto itself would truncate it to zero. Returns 0 on success or skip,
+ * CLI_ERR on failure. Exposed (non-static) as the regression surface for the
+ * `install --force` binary-swap bug (#472). */
+int cbm_copy_binary_to_target(const char *src, const char *dst) {
+    if (cbm_same_file(src, dst)) {
+        return 0; /* already in place — nothing to copy */
+    }
+    if (cbm_copy_file(src, dst) != 0) {
+        return CLI_ERR;
+    }
+#ifndef _WIN32
+    (void)chmod(dst, CLI_OCTAL_PERM);
+#endif
+    return 0;
+}
+
 /* Replace a binary file. Unlinks the old file first (handles read-only and
  * running binaries on Unix where unlink succeeds on open files). On all
  * platforms, the caller should tell the user to restart after update. */
@@ -3412,24 +3454,68 @@ int cbm_cmd_install(int argc, char **argv) {
         }
     }
 
-    /* Step 1c: macOS ad-hoc signing (in case binary was placed without signing) */
+    /* Step 1c: Place the running binary at the canonical install target.
+     * Previously install only re-signed whatever was already at the target, so
+     * `install --force` from a freshly built binary silently kept the OLD file
+     * — operators ran stale code believing they had upgraded (#472). Copy the
+     * running binary to ~/.local/bin (unless we ARE that file), then sign it. */
+    char self_path[CLI_BUF_1K] = {0};
+    cbm_detect_self_path(self_path, sizeof(self_path), home);
+
+    char bin_target[CLI_BUF_1K];
+#ifdef _WIN32
+    snprintf(bin_target, sizeof(bin_target), "%s/.local/bin/codebase-memory-mcp.exe", home);
+#else
+    snprintf(bin_target, sizeof(bin_target), "%s/.local/bin/codebase-memory-mcp", home);
+#endif
+
+    if (!cbm_same_file(self_path, bin_target)) {
+        struct stat tgt_st;
+        bool target_exists = (stat(bin_target, &tgt_st) == 0);
+        bool do_copy = !target_exists || force;
+        if (target_exists && !force) {
+            printf("A different binary already exists at:\n  %s\n", bin_target);
+            if (prompt_yn("Replace it with the binary you ran install from?")) {
+                do_copy = true;
+                force = true; /* user approved replacement for this run */
+            } else {
+                printf("Keeping existing binary; configs will point at it.\n\n");
+            }
+        }
+        if (do_copy) {
+            char bin_dir[CLI_BUF_1K];
+            snprintf(bin_dir, sizeof(bin_dir), "%s/.local/bin", home);
+            if (dry_run) {
+                printf("Would install binary -> %s\n\n", bin_target);
+            } else {
+                cbm_mkdir_p(bin_dir, CLI_OCTAL_PERM);
+                if (cbm_copy_binary_to_target(self_path, bin_target) != 0) {
+                    (void)fprintf(stderr, "error: failed to copy binary to %s\n", bin_target);
+                    return CLI_TRUE;
+                }
+                printf("Installed binary -> %s\n\n", bin_target);
+            }
+        }
+    }
+
+    /* Step 1d: macOS ad-hoc signing of the installed binary. A freshly
+     * clang-built arm64 binary is linker-signed (flags=0x20002) and gets
+     * Killed:9 when spawned by an MCP host; re-signing ad-hoc (flags=0x2)
+     * makes it launchable. Sign the target, not whatever the operator ran. */
 #ifdef __APPLE__
-    {
-        char sign_path[CLI_BUF_1K];
-        snprintf(sign_path, sizeof(sign_path), "%s/.local/bin/codebase-memory-mcp", home);
+    if (!dry_run) {
         struct stat sign_st;
-        if (stat(sign_path, &sign_st) == 0) {
-            (void)cbm_macos_adhoc_sign(sign_path);
+        if (stat(bin_target, &sign_st) == 0) {
+            if (cbm_macos_adhoc_sign(bin_target) != 0) {
+                (void)fprintf(
+                    stderr, "warning: ad-hoc signing failed — binary may not run on macOS arm64\n");
+            }
         }
     }
 #endif
 
-    /* Step 2: Binary path — detect actual location at runtime. */
-    char self_path[CLI_BUF_1K] = {0};
-    cbm_detect_self_path(self_path, sizeof(self_path), home);
-
-    /* Step 3: Install/refresh all agent configs */
-    cbm_install_agent_configs(home, self_path, force, dry_run);
+    /* Step 3: Install/refresh all agent configs, pointing at the install target. */
+    cbm_install_agent_configs(home, bin_target, force, dry_run);
 
     /* Step 4: Ensure PATH */
     char bin_dir[CLI_BUF_1K];

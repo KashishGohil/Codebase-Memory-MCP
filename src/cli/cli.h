@@ -45,6 +45,12 @@ const char *cbm_find_cli(const char *name, const char *home_dir);
 /* Copy a file from src to dst. Returns 0 on success, -1 on error. */
 int cbm_copy_file(const char *src, const char *dst);
 
+/* Copy the running binary into the canonical install target, preserving the
+ * executable bit, skipping the copy when src and dst are the same file (which
+ * would otherwise truncate the running binary). Returns 0 on success or skip,
+ * -1 on error. Regression surface for the install --force binary-swap bug. */
+int cbm_copy_binary_to_target(const char *src, const char *dst);
+
 /* Replace a binary file: unlinks the existing file first (handles read-only),
  * then creates a new file with the given data and permissions.
  * Returns 0 on success, -1 on error. */

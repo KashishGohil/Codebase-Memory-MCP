@@ -1026,6 +1026,64 @@ TEST(cli_copy_file_source_not_found) {
     PASS();
 }
 
+/* #472: install --force must copy the freshly-built binary to the target and
+ * make it executable — previously it re-signed whatever was already there. */
+TEST(cli_install_copies_binary_to_target_issue472) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-binswap-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        FAIL("cbm_mkdtemp failed");
+
+    char src[512], dst[512];
+    snprintf(src, sizeof(src), "%s/new-build", tmpdir);
+    snprintf(dst, sizeof(dst), "%s/installed", tmpdir);
+
+    write_test_file(src, "fresh build bytes");
+
+    /* Target does not exist yet → must be created with the source content. */
+    int rc = cbm_copy_binary_to_target(src, dst);
+    ASSERT_EQ(rc, 0);
+
+    const char *data = read_test_file(dst);
+    ASSERT_STR_EQ(data, "fresh build bytes");
+
+    struct stat st;
+    ASSERT_EQ(stat(dst, &st), 0);
+    ASSERT((st.st_mode & S_IXUSR) != 0); /* executable bit set */
+
+    /* Overwrite an existing (stale) target with new content. */
+    write_test_file(dst, "STALE");
+    write_test_file(src, "upgraded build bytes");
+    rc = cbm_copy_binary_to_target(src, dst);
+    ASSERT_EQ(rc, 0);
+    data = read_test_file(dst);
+    ASSERT_STR_EQ(data, "upgraded build bytes");
+
+    test_rmdir_r(tmpdir);
+    PASS();
+}
+
+/* #472: copying the running binary onto itself must NOT truncate it. */
+TEST(cli_install_same_file_guard_issue472) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-samefile-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        FAIL("cbm_mkdtemp failed");
+
+    char path[512];
+    snprintf(path, sizeof(path), "%s/self", tmpdir);
+    write_test_file(path, "must survive self-copy");
+
+    int rc = cbm_copy_binary_to_target(path, path);
+    ASSERT_EQ(rc, 0); /* skipped, not failed */
+
+    const char *data = read_test_file(path);
+    ASSERT_STR_EQ(data, "must survive self-copy"); /* intact, not zeroed */
+
+    test_rmdir_r(tmpdir);
+    PASS();
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  *  Tar.gz extraction tests (port of update_test.go)
  * ═══════════════════════════════════════════════════════════════════ */
@@ -2653,6 +2711,10 @@ SUITE(cli) {
 
     /* Full lifecycle (1 test — cli_test.go) */
     RUN_TEST(cli_install_and_uninstall);
+
+    /* Binary swap on install --force (#472) */
+    RUN_TEST(cli_install_copies_binary_to_target_issue472);
+    RUN_TEST(cli_install_same_file_guard_issue472);
 
     /* YAML parser (7 unit tests) */
     RUN_TEST(cli_yaml_parse_simple);
