@@ -395,6 +395,31 @@ bool cbm_perl_is_builtin(const char *name) {
                    sizeof(PERL_BUILTINS[0]), perl_builtin_cmp) != NULL;
 }
 
+/* Decide whether a *resolved* Perl call edge is generic-resolver noise that
+ * should be suppressed (#476). Returns true only for Perl, only for a builtin
+ * invocation or a method call, and only when the registry landed the match via
+ * a WEAK short-name strategy. High-confidence same_module / import_map matches
+ * are KEPT so a genuine same-file or imported call to a builtin-named sub still
+ * resolves. `strategy` is the cbm_resolution_t.strategy of a non-empty match;
+ * NULL/empty (no match) returns false. Pure + side-effect-free so the
+ * suppression contract is unit-testable without a full pipeline. */
+bool cbm_perl_suppress_generic_match(bool is_perl, bool is_method, const char *callee_name,
+                                     const char *strategy) {
+    if (!is_perl) {
+        return false;
+    }
+    if (!(is_method || cbm_perl_is_builtin(callee_name))) {
+        return false;
+    }
+    if (!strategy || !strategy[0]) {
+        return false;
+    }
+    if (strcmp(strategy, "same_module") == 0 || strcmp(strategy, "import_map") == 0) {
+        return false; /* high-confidence — keep the genuine edge */
+    }
+    return true; /* weak short-name match (suffix_match / unique_name / …) → drop */
+}
+
 /* ── Lifecycle ──────────────────────────────────────────────────── */
 
 cbm_registry_t *cbm_registry_new(void) {

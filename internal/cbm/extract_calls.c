@@ -372,7 +372,16 @@ static bool perl_is_identifier_callee(const char *name) {
     }
     for (const char *p = name; *p; p++) {
         unsigned char c = (unsigned char)*p;
-        if (isalnum(c) || c == '_' || c == ':') {
+        if (isalnum(c) || c == '_') {
+            continue;
+        }
+        if (c == ':') {
+            // Only the '::' package separator is allowed: require an adjacent
+            // pair, and reject a lone ':', ':::', or a trailing '::'.
+            if (p[1] != ':' || p[2] == ':' || p[2] == '\0') {
+                return false;
+            }
+            p++; // consume the second ':'; the loop's p++ moves past the pair
             continue;
         }
         return false; // '.', space, quote, '/', etc. → not a sub/method name

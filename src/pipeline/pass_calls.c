@@ -361,20 +361,22 @@ static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
         }
     }
 
-    /* Perl call-graph noise guards (#459 follow-up). Applied only after LSP
-     * resolution declined, so a real LSP-resolved call is never suppressed.
-     * Gated to Perl — other languages reach cbm_registry_resolve unchanged.
-     *   1. Builtins (push/shift/keys/...): a generic short-name match to a
-     *      project sub sharing the name is almost always a false positive.
-     *   2. Method calls ($obj->m): without a resolved receiver type the bare
-     *      short-name match is wrong; that resolution is the LSP's job. */
-    if (lang == CBM_LANG_PERL && (call->is_method || cbm_perl_is_builtin(call->callee_name))) {
-        return 0;
-    }
-
     cbm_resolution_t res = cbm_registry_resolve(ctx->registry, call->callee_name, module_qn,
                                                 imp_keys, imp_vals, imp_count);
     if (!res.qualified_name || res.qualified_name[0] == '\0') {
+        return 0;
+    }
+
+    /* Perl call-graph noise guard (#476). Perl has no LSP resolver, so the
+     * generic registry chain is the only resolver; for builtins (push/shift/
+     * keys/...) and method calls ($obj->m with an unresolved receiver), a *weak*
+     * cross-file short-name match to a project sub sharing the name is almost
+     * always a false positive. Suppress only those weak matches; KEEP the
+     * high-confidence same_module / import_map strategies so a genuine
+     * same-file or imported call to a builtin-named sub still resolves. Gated
+     * to Perl — other languages are unaffected. */
+    if (cbm_perl_suppress_generic_match(lang == CBM_LANG_PERL, call->is_method, call->callee_name,
+                                        res.strategy)) {
         return 0;
     }
     const cbm_gbuf_node_t *target_node = cbm_gbuf_find_by_qn(ctx->gbuf, res.qualified_name);

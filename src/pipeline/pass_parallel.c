@@ -1791,17 +1791,6 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
                 res.candidate_count = 1;
                 ws->lsp_overrides++;
             }
-        } else if (lang == CBM_LANG_PERL &&
-                   (call->is_method || cbm_perl_is_builtin(call->callee_name))) {
-            /* Perl call-graph noise guards (#459 follow-up), mirroring the
-             * sequential pass (pass_calls.c). LSP resolution already declined
-             * above (lsp == NULL here), so suppress the generic short-name
-             * match for Perl builtins (push/shift/keys/...) and for method
-             * calls with an unknown receiver. Leaves res empty → no edge.
-             * Gated to Perl; every other language resolves unchanged. */
-            atomic_fetch_add_explicit(&rc->time_ns_rc_resolve, extract_now_ns() - _rc_t0,
-                                      memory_order_relaxed);
-            continue;
         } else {
             res = cbm_registry_resolve(rc->registry, call->callee_name, module_qn, imp_keys,
                                        imp_vals, imp_count);
@@ -1813,6 +1802,19 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
         try_field_type_hint(rc, &res, call->callee_name, source_node->id);
         atomic_fetch_add_explicit(&rc->time_ns_rc_hint, extract_now_ns() - _rc_t0,
                                   memory_order_relaxed);
+
+        /* Perl call-graph noise guard (#476), mirroring the sequential pass
+         * (pass_calls.c). Perl has no LSP resolver; for builtins (push/shift/
+         * keys/...) and method calls ($obj->m, unresolved receiver), suppress
+         * only WEAK cross-file short-name matches and keep the high-confidence
+         * same_module / import_map strategies so a genuine same-file or
+         * imported call to a builtin-named sub still resolves. Placed after the
+         * field-type hint so a hint cannot re-introduce a suppressed edge.
+         * Gated to Perl — other languages are unaffected. */
+        if (cbm_perl_suppress_generic_match(lang == CBM_LANG_PERL, call->is_method,
+                                            call->callee_name, res.strategy)) {
+            continue;
+        }
 
         if (!res.qualified_name || res.qualified_name[0] == '\0') {
             if (cbm_service_pattern_route_method(call->callee_name) != NULL) {

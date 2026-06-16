@@ -173,6 +173,13 @@ bool cbm_registry_exists(const cbm_registry_t *r, const char *qn);
  * the name. Perl-scoped: callers gate on the file language. */
 bool cbm_perl_is_builtin(const char *name);
 
+/* Decide whether a resolved Perl call edge is generic-resolver noise to drop
+ * (#476): true only for Perl, only for a builtin/method call, and only when the
+ * match used a weak short-name strategy — high-confidence same_module/import_map
+ * matches are kept. Pure; unit-tested in test_registry.c. */
+bool cbm_perl_suppress_generic_match(bool is_perl, bool is_method, const char *callee_name,
+                                     const char *strategy);
+
 /* Get the label of a qualified name, or NULL if not found. */
 const char *cbm_registry_label_of(const cbm_registry_t *r, const char *qn);
 

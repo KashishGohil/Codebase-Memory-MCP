@@ -650,6 +650,33 @@ TEST(perl_builtin_set_rejects_project_subs) {
     PASS();
 }
 
+TEST(perl_suppress_drops_weak_builtin_and_method_matches) {
+    /* #476: a builtin/method call that landed via a WEAK short-name strategy is
+     * generic-resolver noise and must be suppressed. */
+    ASSERT_TRUE(cbm_perl_suppress_generic_match(true, false, "push", "suffix_match"));
+    ASSERT_TRUE(cbm_perl_suppress_generic_match(true, false, "keys", "unique_name"));
+    ASSERT_TRUE(cbm_perl_suppress_generic_match(true, true, "commit", "suffix_match"));
+    ASSERT_TRUE(cbm_perl_suppress_generic_match(true, true, "log", "unique_name"));
+    PASS();
+}
+
+TEST(perl_suppress_keeps_high_confidence_and_genuine_calls) {
+    /* #476: high-confidence strategies are kept so a genuine same-file/imported
+     * call to a builtin-named sub still resolves (criterion d). */
+    ASSERT_FALSE(cbm_perl_suppress_generic_match(true, false, "log", "same_module"));
+    ASSERT_FALSE(cbm_perl_suppress_generic_match(true, false, "open", "import_map"));
+    ASSERT_FALSE(cbm_perl_suppress_generic_match(true, true, "commit", "same_module"));
+    /* A genuine non-builtin function call is never suppressed (edge survives). */
+    ASSERT_FALSE(cbm_perl_suppress_generic_match(true, false, "helper", "suffix_match"));
+    /* Non-Perl languages are never affected. */
+    ASSERT_FALSE(cbm_perl_suppress_generic_match(false, false, "push", "suffix_match"));
+    ASSERT_FALSE(cbm_perl_suppress_generic_match(false, true, "commit", "suffix_match"));
+    /* No match (NULL/empty strategy) → nothing to suppress. */
+    ASSERT_FALSE(cbm_perl_suppress_generic_match(true, false, "push", NULL));
+    ASSERT_FALSE(cbm_perl_suppress_generic_match(true, true, "commit", ""));
+    PASS();
+}
+
 /* ── Suite ─────────────────────────────────────────────────────── */
 
 SUITE(registry) {
@@ -712,4 +739,6 @@ SUITE(registry) {
     /* Perl builtin guard */
     RUN_TEST(perl_builtin_set_recognizes_core_builtins);
     RUN_TEST(perl_builtin_set_rejects_project_subs);
+    RUN_TEST(perl_suppress_drops_weak_builtin_and_method_matches);
+    RUN_TEST(perl_suppress_keeps_high_confidence_and_genuine_calls);
 }
