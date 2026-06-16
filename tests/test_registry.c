@@ -626,6 +626,30 @@ TEST(fuzzy_no_import_map_passthrough) {
     PASS();
 }
 
+/* ── Perl builtin guard (#459 follow-up: call-graph noise) ───────── */
+
+TEST(perl_builtin_set_recognizes_core_builtins) {
+    /* Representative core builtins from across the sorted set. */
+    ASSERT_TRUE(cbm_perl_is_builtin("push"));
+    ASSERT_TRUE(cbm_perl_is_builtin("shift"));
+    ASSERT_TRUE(cbm_perl_is_builtin("keys"));
+    ASSERT_TRUE(cbm_perl_is_builtin("sprintf"));
+    ASSERT_TRUE(cbm_perl_is_builtin("abs"));   /* first element */
+    ASSERT_TRUE(cbm_perl_is_builtin("write")); /* last element */
+    ASSERT_TRUE(cbm_perl_is_builtin("wantarray"));
+    PASS();
+}
+
+TEST(perl_builtin_set_rejects_project_subs) {
+    /* Genuine project sub names and edge inputs must NOT be flagged. */
+    ASSERT_FALSE(cbm_perl_is_builtin("helper"));
+    ASSERT_FALSE(cbm_perl_is_builtin("process_request"));
+    ASSERT_FALSE(cbm_perl_is_builtin("Push")); /* case-sensitive */
+    ASSERT_FALSE(cbm_perl_is_builtin(""));
+    ASSERT_FALSE(cbm_perl_is_builtin(NULL));
+    PASS();
+}
+
 /* ── Suite ─────────────────────────────────────────────────────── */
 
 SUITE(registry) {
@@ -684,4 +708,8 @@ SUITE(registry) {
     RUN_TEST(fuzzy_resolve_confidence_distance);
     RUN_TEST(fuzzy_penalty_unreachable_import);
     RUN_TEST(fuzzy_no_import_map_passthrough);
+
+    /* Perl builtin guard */
+    RUN_TEST(perl_builtin_set_recognizes_core_builtins);
+    RUN_TEST(perl_builtin_set_rejects_project_subs);
 }
