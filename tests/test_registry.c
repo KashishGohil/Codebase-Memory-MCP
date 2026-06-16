@@ -264,6 +264,39 @@ TEST(resolve_same_module) {
     PASS();
 }
 
+/* A package/namespace-qualified callee whose bare name is defined in several
+ * places must resolve to the package named in the call — not collapse onto a
+ * single winner. Regression for qualified cross-file calls (e.g. Perl
+ * Foo::Bar::sub()) where the same sub name exists in multiple packages. */
+TEST(resolve_qualified_disambiguates_same_name) {
+    cbm_registry_t *r = cbm_registry_new();
+    cbm_registry_add(r, "save", "proj.lib.App.Alpha.save", "Function");
+    cbm_registry_add(r, "save", "proj.lib.App.Beta.save", "Function");
+    cbm_registry_add(r, "save", "proj.lib.App.Gamma.save", "Function");
+
+    /* Each fully-qualified call routes to its own package. */
+    cbm_resolution_t a =
+        cbm_registry_resolve(r, "App::Alpha::save", "proj.lib.App.Caller", NULL, NULL, 0);
+    ASSERT_STR_EQ(a.qualified_name, "proj.lib.App.Alpha.save");
+    ASSERT_STR_EQ(a.strategy, "qualified_suffix");
+
+    cbm_resolution_t b =
+        cbm_registry_resolve(r, "App::Beta::save", "proj.lib.App.Caller", NULL, NULL, 0);
+    ASSERT_STR_EQ(b.qualified_name, "proj.lib.App.Beta.save");
+
+    cbm_resolution_t g =
+        cbm_registry_resolve(r, "App::Gamma::save", "proj.lib.App.Caller", NULL, NULL, 0);
+    ASSERT_STR_EQ(g.qualified_name, "proj.lib.App.Gamma.save");
+
+    /* A bare call stays ambiguous (no qualifier → no disambiguation signal). */
+    cbm_resolution_t bare =
+        cbm_registry_resolve(r, "save", "proj.lib.App.Caller", NULL, NULL, 0);
+    ASSERT_TRUE(!bare.strategy || strcmp(bare.strategy, "qualified_suffix") != 0);
+
+    cbm_registry_free(r);
+    PASS();
+}
+
 TEST(resolve_import_map) {
     cbm_registry_t *r = cbm_registry_new();
     cbm_registry_add(r, "Process", "proj.pkg.worker.Process", "Function");
@@ -656,6 +689,7 @@ SUITE(registry) {
     RUN_TEST(registry_no_duplicates);
     /* Resolution */
     RUN_TEST(resolve_same_module);
+    RUN_TEST(resolve_qualified_disambiguates_same_name);
     RUN_TEST(resolve_import_map);
     RUN_TEST(resolve_import_map_bare_function);
     RUN_TEST(resolve_unique_name);

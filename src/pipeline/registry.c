@@ -587,6 +587,63 @@ static cbm_resolution_t resolve_multi_with_imports(const qn_array_t *arr, const 
     return empty_result();
 }
 
+/* Confidence for a full qualified-tail match (Strategy 3.5). A package- or
+ * namespace-qualified callee that uniquely matches one candidate's full tail is
+ * as trustworthy as a same-module hit. */
+#define CONF_QUALIFIED_SUFFIX 0.90
+
+/* When a callee is package/namespace-qualified (Foo::Bar::sub or Foo.Bar.sub),
+ * disambiguate among same-simple-name candidates by matching the FULL qualified
+ * tail against each candidate QN at a segment boundary. Returns the sole
+ * candidate whose QN equals or ends with ".<dotted-callee>", or NULL when zero
+ * or several candidates match (the caller then falls back to bare-name scoring).
+ *
+ * Fixes qualified cross-file calls collapsing onto one namespace when the bare
+ * symbol name is defined in several — e.g. Perl's Foo::Bar::run and Foo::Baz::run
+ * both reduce to "run", so the bare-name scorer would route every caller to a
+ * single winner. Language agnostic: callees with no separator return NULL and
+ * leave behavior unchanged. */
+static const char *qualified_suffix_match(const qn_array_t *arr, const char *callee_name) {
+    /* Normalize "::" → "." so the tail composes with dotted candidate QNs. */
+    char dotted[CBM_SZ_512];
+    size_t w = 0;
+    for (const char *s = callee_name; *s && w + SKIP_ONE < sizeof(dotted);) {
+        if (s[0] == ':' && s[1] == ':') {
+            dotted[w++] = '.';
+            s += 2;
+        } else {
+            dotted[w++] = *s++;
+        }
+    }
+    dotted[w] = '\0';
+    /* Must be qualified (contain a '.') — a bare name matches every candidate
+     * and carries no disambiguating signal. */
+    if (!strchr(dotted, '.')) {
+        return NULL;
+    }
+    const char *match = NULL;
+    for (int i = 0; i < arr->count; i++) {
+        const char *qn = arr->items[i];
+        size_t qlen = strlen(qn);
+        if (qlen < w) {
+            continue;
+        }
+        const char *tail = qn + (qlen - w);
+        if (strcmp(tail, dotted) != 0) {
+            continue;
+        }
+        /* Segment boundary: tail is the whole QN or is preceded by '.'. */
+        if (tail != qn && tail[-1] != '.') {
+            continue;
+        }
+        if (match) {
+            return NULL; /* ambiguous — more than one qualified tail matches */
+        }
+        match = qn;
+    }
+    return match;
+}
+
 /* Strategy 3+4: Name lookup + suffix match */
 static cbm_resolution_t resolve_name_lookup(const cbm_registry_t *r, const char *callee_name,
                                             const char *module_qn, const char **import_vals,
@@ -598,6 +655,16 @@ static cbm_resolution_t resolve_name_lookup(const cbm_registry_t *r, const char 
     }
     if (arr->count > REG_MAX_CANDIDATES) {
         return empty_result(); /* unresolvably ambiguous — see REG_MAX_CANDIDATES */
+    }
+
+    /* Strategy 3.5: a qualified callee disambiguates among multiple same-name
+     * candidates by full qualified tail, before bare-name scoring collapses
+     * them onto a single winner. */
+    if (arr->count > 1) {
+        const char *q = qualified_suffix_match(arr, callee_name);
+        if (q) {
+            return (cbm_resolution_t){q, "qualified_suffix", CONF_QUALIFIED_SUFFIX, REG_RESOLVED};
+        }
     }
 
     /* Strategy 3: unique name */
