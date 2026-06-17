@@ -398,10 +398,10 @@ void cbm_gitignore_merge(cbm_gitignore_t *dst, const cbm_gitignore_t *src) {
         if (!pat) {
             return;
         }
-        dst->patterns[dst->count].pattern  = pat;
-        dst->patterns[dst->count].negated  = src->patterns[i].negated;
+        dst->patterns[dst->count].pattern = pat;
+        dst->patterns[dst->count].negated = src->patterns[i].negated;
         dst->patterns[dst->count].dir_only = src->patterns[i].dir_only;
-        dst->patterns[dst->count].rooted   = src->patterns[i].rooted;
+        dst->patterns[dst->count].rooted = src->patterns[i].rooted;
         dst->count++;
     }
 }
