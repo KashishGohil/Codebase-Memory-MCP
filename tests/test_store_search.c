@@ -124,6 +124,20 @@ TEST(store_search_empty_label_ignored) {
     ASSERT_STR_EQ(out2.results[0].node.name, "OrderService");
     cbm_store_search_free(&out2);
 
+    /* qn_pattern shares the same WHERE builder, so empty label must be ignored
+     * there too. */
+    cbm_search_params_t qn = {.project = "test",
+                              .qn_pattern = ".*SubmitOrder",
+                              .label = "",
+                              .min_degree = -1,
+                              .max_degree = -1};
+    cbm_search_output_t out3 = {0};
+    rc = cbm_store_search(s, &qn, &out3);
+    ASSERT_EQ(rc, CBM_STORE_OK);
+    ASSERT_EQ(out3.count, 1);
+    ASSERT_STR_EQ(out3.results[0].node.name, "SubmitOrder");
+    cbm_store_search_free(&out3);
+
     cbm_store_close(s);
     PASS();
 }
