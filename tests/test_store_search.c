@@ -86,6 +86,48 @@ TEST(store_search_by_name_pattern) {
     PASS();
 }
 
+/* ── Empty-string label is ignored (issue #481) ────────────────── */
+
+/* An empty-string label must behave like an omitted label (no filter), not be
+ * applied as a literal `n.label = ''` that matches nothing. Previously a
+ * name_pattern/qn_pattern search passing label="" returned zero results, while
+ * the BM25 query path ignored the empty label — an inconsistency that made
+ * structural class/service discovery silently fail. */
+TEST(store_search_empty_label_ignored) {
+    int64_t ids[3];
+    cbm_store_t *s = setup_search_store(ids);
+
+    /* name_pattern + label="" must match the same as name_pattern alone. */
+    cbm_search_params_t empty_label = {.project = "test",
+                                       .name_pattern = ".*Submit.*",
+                                       .label = "",
+                                       .min_degree = -1,
+                                       .max_degree = -1};
+    cbm_search_output_t out = {0};
+    int rc = cbm_store_search(s, &empty_label, &out);
+    ASSERT_EQ(rc, CBM_STORE_OK);
+    ASSERT_EQ(out.count, 1);
+    ASSERT_STR_EQ(out.results[0].node.name, "SubmitOrder");
+    cbm_store_search_free(&out);
+
+    /* A non-empty label still filters: ".*Order.*" matches three names but only
+     * OrderService is a Class. */
+    cbm_search_params_t cls = {.project = "test",
+                               .name_pattern = ".*Order.*",
+                               .label = "Class",
+                               .min_degree = -1,
+                               .max_degree = -1};
+    cbm_search_output_t out2 = {0};
+    rc = cbm_store_search(s, &cls, &out2);
+    ASSERT_EQ(rc, CBM_STORE_OK);
+    ASSERT_EQ(out2.count, 1);
+    ASSERT_STR_EQ(out2.results[0].node.name, "OrderService");
+    cbm_store_search_free(&out2);
+
+    cbm_store_close(s);
+    PASS();
+}
+
 /* ── Search by file pattern ─────────────────────────────────────── */
 
 TEST(store_search_by_file_pattern) {
@@ -1234,6 +1276,7 @@ TEST(store_impact_summary_empty) {
 SUITE(store_search) {
     RUN_TEST(store_search_by_label);
     RUN_TEST(store_search_by_name_pattern);
+    RUN_TEST(store_search_empty_label_ignored);
     RUN_TEST(store_search_by_file_pattern);
     RUN_TEST(store_search_file_pattern_substring_issue200);
     RUN_TEST(store_search_pagination);
