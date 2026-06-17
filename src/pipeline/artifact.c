@@ -36,6 +36,9 @@ enum {
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 /* ── Helpers ──────────────────────────────────────────────────────── */
 
@@ -98,7 +101,11 @@ static int write_file_atomic(const char *path, const char *data, size_t len) {
         cbm_unlink(tmp);
         return CBM_NOT_FOUND;
     }
+#ifdef _WIN32
+    if (!MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+#else
     if (rename(tmp, path) != 0) {
+#endif
         cbm_unlink(tmp);
         return CBM_NOT_FOUND;
     }
