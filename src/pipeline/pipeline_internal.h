@@ -25,6 +25,14 @@
 /* Route node QN buffer size (must fit __route__METHOD__/full/url/path) */
 #define CBM_ROUTE_QN_SIZE 768
 
+/* Canonicalize route-path parameter placeholders (":id", "{id}", "<id>",
+ * "${...}") to a single "{}" token so that client call sites and server
+ * handlers rendezvous on the same Route QN regardless of framework syntax.
+ * Parameter names are intentionally discarded ("/u/{id}" and "/u/{slug}" both
+ * canonicalize to "/u/{}"). The result never exceeds the input length, so
+ * out_sz >= strlen(in) + 1 always suffices. Returns out. */
+const char *cbm_route_canon_path(const char *in, char *out, size_t out_sz);
+
 /* Time unit conversions */
 #define CBM_NS_PER_SEC 1000000000LL
 #define CBM_US_PER_SEC 1000000LL

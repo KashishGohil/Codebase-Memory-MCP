@@ -39,6 +39,7 @@ extern void suite_graph_buffer(void);
 extern void suite_registry(void);
 extern void suite_pipeline(void);
 extern void suite_fqn(void);
+extern void suite_route_canon(void);
 extern void suite_path_alias(void);
 extern void suite_watcher(void);
 extern void suite_lz4(void);
@@ -151,6 +152,7 @@ int main(void) {
     RUN_SUITE(registry);
     RUN_SUITE(pipeline);
     RUN_SUITE(fqn);
+    RUN_SUITE(route_canon);
     RUN_SUITE(path_alias);
 
     /* Watcher (M10) */

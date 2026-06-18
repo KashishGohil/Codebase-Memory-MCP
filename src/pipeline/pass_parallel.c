@@ -502,7 +502,9 @@ static void insert_def_into_gbuf(extract_worker_state_t *ws, const cbm_file_info
     if (def->route_path && def->route_path[0] != '\0') {
         const char *rm = def->route_method ? def->route_method : "ANY";
         char route_qn[CBM_ROUTE_QN_SIZE];
-        snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", rm, def->route_path);
+        char cpath[CBM_SZ_256];
+        snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", rm,
+                 cbm_route_canon_path(def->route_path, cpath, sizeof(cpath)));
         char rprops[CBM_SZ_256];
         snprintf(rprops, sizeof(rprops), "{\"method\":\"%s\",\"source\":\"decorator\"}", rm);
         int64_t route_id =
@@ -1210,12 +1212,15 @@ static int64_t build_service_route(cbm_gbuf_t *gbuf, const char *arg, const char
                                    const char *broker, cbm_svc_kind_t svc) {
     char route_qn[CBM_ROUTE_QN_SIZE];
     const char *prefix;
+    char cpath[CBM_SZ_256];
+    const char *qpath = arg;
     if (svc == CBM_SVC_HTTP) {
         prefix = method ? method : "ANY";
+        qpath = cbm_route_canon_path(arg, cpath, sizeof(cpath));
     } else {
         prefix = broker ? broker : "async";
     }
-    snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", prefix, arg);
+    snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", prefix, qpath);
     char route_props[CBM_SZ_256];
     if (method) {
         snprintf(route_props, sizeof(route_props), "{\"method\":\"%s\"}", method);
@@ -1291,7 +1296,9 @@ static void emit_route_registration(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *sou
                                     const char **ik, const char **iv, int ic) {
     const char *method = cbm_service_pattern_route_method(call->callee_name);
     char rqn[CBM_ROUTE_QN_SIZE];
-    snprintf(rqn, sizeof(rqn), "__route__%s__%s", method ? method : "ANY", route_path);
+    char cpath[CBM_SZ_256];
+    snprintf(rqn, sizeof(rqn), "__route__%s__%s", method ? method : "ANY",
+             cbm_route_canon_path(route_path, cpath, sizeof(cpath)));
     char rp[CBM_SZ_256];
     snprintf(rp, sizeof(rp), "{\"method\":\"%s\"}", method ? method : "ANY");
     int64_t rid = cbm_gbuf_upsert_node(gbuf, "Route", route_path, rqn, "", 0, 0, rp);
@@ -1384,7 +1391,9 @@ static void detect_url_in_args(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
             continue;
         }
         char route_qn[CBM_ROUTE_QN_SIZE];
-        snprintf(route_qn, sizeof(route_qn), "__route__ANY__%s", norm);
+        char cpath[CBM_SZ_256];
+        snprintf(route_qn, sizeof(route_qn), "__route__ANY__%s",
+                 cbm_route_canon_path(norm, cpath, sizeof(cpath)));
         int64_t route_id = cbm_gbuf_upsert_node(gbuf, "Route", norm, route_qn, "", 0, 0,
                                                 "{\"source\":\"arg_url\"}");
         char esc_c[CBM_SZ_256];

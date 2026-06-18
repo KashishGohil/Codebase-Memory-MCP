@@ -187,8 +187,9 @@ static void handle_route_registration(cbm_pipeline_ctx_t *ctx, const CBMCall *ca
                                       const char **imp_keys, const char **imp_vals, int imp_count) {
     const char *method = cbm_service_pattern_route_method(call->callee_name);
     char route_qn[CBM_ROUTE_QN_SIZE];
+    char cpath[CBM_SZ_256];
     snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", method ? method : "ANY",
-             call->first_string_arg);
+             cbm_route_canon_path(call->first_string_arg, cpath, sizeof(cpath)));
     char route_props[CBM_SZ_256];
     snprintf(route_props, sizeof(route_props), "{\"method\":\"%s\"}", method ? method : "ANY");
     int64_t route_id = cbm_gbuf_upsert_node(ctx->gbuf, "Route", call->first_string_arg, route_qn,
@@ -225,12 +226,15 @@ static int64_t create_svc_route_node(cbm_pipeline_ctx_t *ctx, const char *url, c
                                      const char *method, const char *broker) {
     char route_qn[CBM_ROUTE_QN_SIZE];
     const char *prefix;
+    char cpath[CBM_SZ_256];
+    const char *qpath = url;
     if (svc == CBM_SVC_HTTP) {
         prefix = method ? method : "ANY";
+        qpath = cbm_route_canon_path(url, cpath, sizeof(cpath));
     } else {
         prefix = broker ? broker : "async";
     }
-    snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", prefix, url);
+    snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", prefix, qpath);
     const char *rp;
     if (svc == CBM_SVC_HTTP) {
         rp = method ? method : "{}";
