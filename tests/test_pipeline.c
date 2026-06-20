@@ -743,6 +743,100 @@ TEST(pipeline_calls_resolution) {
     PASS();
 }
 
+/* True iff a CALLS edge exists from a node named src_name to a node named
+ * tgt_name. Used to assert cross-file call resolution survives a reindex. */
+static bool cross_file_call_exists(cbm_store_t *s, const char *project, const char *src_name,
+                                   const char *tgt_name) {
+    cbm_node_t *srcs = NULL;
+    cbm_node_t *tgts = NULL;
+    int sc = 0;
+    int tc = 0;
+    cbm_store_find_nodes_by_name(s, project, src_name, &srcs, &sc);
+    cbm_store_find_nodes_by_name(s, project, tgt_name, &tgts, &tc);
+    bool found = false;
+    for (int i = 0; i < sc && !found; i++) {
+        cbm_edge_t *edges = NULL;
+        int ec = 0;
+        cbm_store_find_edges_by_source_type(s, srcs[i].id, "CALLS", &edges, &ec);
+        for (int j = 0; j < ec && !found; j++) {
+            for (int k = 0; k < tc; k++) {
+                if (edges[j].target_id == tgts[k].id) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (edges) {
+            cbm_store_free_edges(edges, ec);
+        }
+    }
+    if (srcs) {
+        cbm_store_free_nodes(srcs, sc);
+    }
+    if (tgts) {
+        cbm_store_free_nodes(tgts, tc);
+    }
+    return found;
+}
+
+/* Regression: incremental re-index of an edited file must NOT drop inbound
+ * cross-file CALLS edges whose source lives in an UNCHANGED file.
+ *
+ * Repro: Serve() (pkg/service.go) CALLS Help() (pkg/util/helper.go). Editing
+ * helper.go purges Help's node; before the fix the cascade deleted the
+ * Serve->Help edge and never regenerated it (helper.go's callers are not
+ * re-parsed), so the edge silently vanished on every edit and the incremental
+ * graph diverged from a full reindex. */
+TEST(pipeline_incremental_preserves_cross_file_calls) {
+    if (setup_test_repo() != 0) {
+        FAIL("failed to create temp dir");
+    }
+
+    char db_path[512];
+    snprintf(db_path, sizeof(db_path), "%s/test_incr_calls.db", g_tmpdir);
+
+    /* 1. Full index. */
+    cbm_pipeline_t *p1 = cbm_pipeline_new(g_tmpdir, db_path, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p1);
+    ASSERT_EQ(cbm_pipeline_run(p1), 0);
+    const char *project = cbm_pipeline_project_name(p1);
+
+    cbm_store_t *s1 = cbm_store_open_path(db_path);
+    ASSERT_NOT_NULL(s1);
+    int calls_before = cbm_store_count_edges_by_type(s1, project, "CALLS");
+    ASSERT_GTE(calls_before, 2); /* main->Serve and Serve->Help at minimum */
+    ASSERT_TRUE(cross_file_call_exists(s1, project, "Serve", "Help"));
+    cbm_store_close(s1);
+    cbm_pipeline_free(p1);
+
+    /* 2. Edit the callee's file so the incremental classifier marks it changed
+     *    (mtime+size differ). Help's symbol + qualified name are unchanged. */
+    char helper[512];
+    snprintf(helper, sizeof(helper), "%s/pkg/util/helper.go", g_tmpdir);
+    ASSERT_EQ(th_append_file(helper, "\n// incremental regression marker\n"), 0);
+
+    /* 3. Re-run on the SAME db_path → auto-routes to incremental re-index. */
+    cbm_pipeline_t *p2 = cbm_pipeline_new(g_tmpdir, db_path, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p2);
+    ASSERT_EQ(cbm_pipeline_run(p2), 0);
+
+    /* 4. The inbound cross-file CALLS edge must survive and the total CALLS
+     *    count must not regress. (Before the fix: Serve->Help is dropped.)
+     *    NOTE: query with p2's project name — p1 (and the `project` pointer it
+     *    owned) was freed above; p1 and p2 derive the same name from g_tmpdir. */
+    const char *project2 = cbm_pipeline_project_name(p2);
+    cbm_store_t *s2 = cbm_store_open_path(db_path);
+    ASSERT_NOT_NULL(s2);
+    int calls_after = cbm_store_count_edges_by_type(s2, project2, "CALLS");
+    ASSERT_EQ(calls_after, calls_before);
+    ASSERT_TRUE(cross_file_call_exists(s2, project2, "Serve", "Help"));
+    cbm_store_close(s2);
+    cbm_pipeline_free(p2);
+
+    teardown_test_repo();
+    PASS();
+}
+
 /* ── Git history pass tests ─────────────────────────────────────── */
 
 TEST(githistory_is_trackable) {
@@ -5911,6 +6005,7 @@ SUITE(pipeline) {
     RUN_TEST(pipeline_complexity_transitive_loop_depth);
     /* Calls pass */
     RUN_TEST(pipeline_calls_resolution);
+    RUN_TEST(pipeline_incremental_preserves_cross_file_calls);
     /* Git history pass */
     RUN_TEST(githistory_is_trackable);
     RUN_TEST(githistory_compute_coupling);
