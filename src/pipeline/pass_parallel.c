@@ -413,7 +413,8 @@ static const char *resolve_as_class(const cbm_registry_t *reg, const char *name,
         return NULL;
     }
     if (strcmp(label, "Class") != 0 && strcmp(label, "Interface") != 0 &&
-        strcmp(label, "Type") != 0 && strcmp(label, "Enum") != 0) {
+        strcmp(label, "Type") != 0 && strcmp(label, "Enum") != 0 &&
+        strcmp(label, "Struct") != 0 && strcmp(label, "Actor") != 0) {
         return NULL;
     }
     return res.qualified_name;
@@ -822,6 +823,9 @@ static int register_and_link_def(cbm_pipeline_ctx_t *ctx, const CBMDefinition *d
      * Variable/Field defs are registered too so READS/WRITES can resolve. */
     if (strcmp(def->label, "Function") == 0 || strcmp(def->label, "Method") == 0 ||
         strcmp(def->label, "Class") == 0 || strcmp(def->label, "Interface") == 0 ||
+        /* Swift idiomatic type kinds — keep them registry symbols (WS2b). */
+        strcmp(def->label, "Struct") == 0 || strcmp(def->label, "Enum") == 0 ||
+        strcmp(def->label, "Actor") == 0 ||
         strcmp(def->label, "Variable") == 0 || strcmp(def->label, "Field") == 0) {
         cbm_registry_add(ctx->registry, def->name, def->qualified_name, def->label);
         (*reg_entries)++;

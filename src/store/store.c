@@ -3481,7 +3481,7 @@ static int arch_boundaries(cbm_store_t *s, const char *project, cbm_cross_pkg_bo
                            int *out_count) {
     /* Build nodeID → package map. ORDER BY id so lookup_pkg can binary-search. */
     const char *nsql = "SELECT id, qualified_name FROM nodes WHERE project=?1 AND label IN "
-                       "('Function','Method','Class') ORDER BY id";
+                       "('Function','Method','Class','Struct','Enum','Actor') ORDER BY id";
     sqlite3_stmt *nstmt = NULL;
     if (sqlite3_prepare_v2(s->db, nsql, CBM_NOT_FOUND, &nstmt, NULL) != SQLITE_OK) {
         store_set_error_sqlite(s, "arch_boundaries_nodes");
@@ -3589,7 +3589,7 @@ static int arch_boundaries(cbm_store_t *s, const char *project, cbm_cross_pkg_bo
 static int arch_packages_from_qn(cbm_store_t *s, const char *project,
                                  cbm_package_summary_t **out_arr, int *out_count) {
     const char *qsql = "SELECT qualified_name FROM nodes WHERE project=?1 AND label IN "
-                       "('Function','Method','Class')";
+                       "('Function','Method','Class','Struct','Enum','Actor')";
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(s->db, qsql, CBM_NOT_FOUND, &stmt, NULL) != SQLITE_OK) {
         store_set_error_sqlite(s, "arch_packages_qn");
@@ -4780,7 +4780,7 @@ static int cluster_rank_cmp(const void *a, const void *b) {
 static int arch_clusters(cbm_store_t *s, const char *project, cbm_architecture_info_t *out) {
     /* 1. Load Function/Method/Class nodes, ordered by id for bsearch. */
     const char *nsql = "SELECT id, name, qualified_name FROM nodes "
-                       "WHERE project=?1 AND label IN ('Function','Method','Class') "
+                       "WHERE project=?1 AND label IN ('Function','Method','Class','Struct','Enum','Actor') "
                        "ORDER BY id LIMIT ?2";
     sqlite3_stmt *st = NULL;
     if (sqlite3_prepare_v2(s->db, nsql, CBM_NOT_FOUND, &st, NULL) != SQLITE_OK) {
@@ -5778,7 +5778,7 @@ int cbm_store_vector_search(cbm_store_t *s, const char *project, const char **ke
                       " FROM node_vectors v"
                       " INNER JOIN nodes n ON n.id = v.node_id"
                       " WHERE v.project = ?2"
-                      " AND n.label IN ('Function','Method','Class')"
+                      " AND n.label IN ('Function','Method','Class','Struct','Enum','Actor')"
                       " ORDER BY score DESC"
                       " LIMIT ?3";
 

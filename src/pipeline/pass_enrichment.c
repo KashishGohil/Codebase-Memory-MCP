@@ -292,8 +292,9 @@ static void free_tagged_nodes(tagged_node_t *nodes, int count) {
 /* Phase 1: Collect decorated nodes and count word frequency. */
 static int collect_decorated_nodes(cbm_gbuf_t *gbuf, tagged_node_t **out_nodes,
                                    CBMHashTable *word_counts) {
-    static const char *labels[] = {"Function", "Method", "Class"};
-    static const int nlabels = 3;
+    static const char *labels[] = {"Function", "Method", "Class",
+                                   "Struct",   "Enum",   "Actor"};
+    static const int nlabels = 6;
     tagged_node_t *nodes = NULL;
     int node_count = 0;
     int node_cap = 0;

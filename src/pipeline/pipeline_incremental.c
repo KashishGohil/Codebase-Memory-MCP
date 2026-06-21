@@ -511,6 +511,9 @@ static void persist_hashes(cbm_store_t *store, const char *project, cbm_file_inf
 static bool incr_label_is_registry_symbol(const char *label) {
     return label && (strcmp(label, "Function") == 0 || strcmp(label, "Method") == 0 ||
                      strcmp(label, "Class") == 0 || strcmp(label, "Interface") == 0 ||
+                     /* Swift idiomatic type kinds — keep them registry symbols (WS2b). */
+                     strcmp(label, "Struct") == 0 || strcmp(label, "Enum") == 0 ||
+                     strcmp(label, "Actor") == 0 ||
                      strcmp(label, "Variable") == 0 || strcmp(label, "Field") == 0);
 }
 
