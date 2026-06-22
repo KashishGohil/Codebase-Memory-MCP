@@ -391,7 +391,11 @@ static const tool_def_t TOOLS[] = {
      "representative top_nodes, and the packages/edge_types that bind it) — use these to grasp "
      "the real architectural seams, which often cut across the folder layout.",
      "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"},\"aspects\":{\"type\":"
-     "\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"project\"]}"},
+     "\"array\",\"items\":{\"type\":\"string\",\"enum\":[\"all\",\"overview\",\"structure\","
+     "\"dependencies\",\"routes\",\"languages\",\"packages\",\"entry_points\",\"hotspots\","
+     "\"boundaries\",\"layers\",\"file_tree\",\"clusters\"]},\"description\":\"Aspects to "
+     "include. 'all' = everything; 'overview' = compact summary (all except file_tree); "
+     "omit = all.\"}},\"required\":[\"project\"]}"},
 
     {"search_code",
      "Graph-augmented code search. Finds text patterns via grep, then enriches results with "
@@ -1831,7 +1835,15 @@ static char *handle_delete_project(cbm_mcp_server_t *srv, const char *args) {
     return result;
 }
 
-/* Check if an aspect is requested (NULL aspects = all, or array contains "all" or the name). */
+/* "overview" = compact architecture summary: every aspect EXCEPT the large
+   per-file listing (file_tree), which alone dominates the payload (~275 entries)
+   and pushes the response past MAX_MCP_OUTPUT_TOKENS. */
+static bool aspect_in_overview(const char *name) {
+    return strcmp(name, "file_tree") != 0;
+}
+
+/* Check if an aspect is requested. NULL aspects = all. Array can contain "all"
+ * (everything), "overview" (everything except file_tree), or the aspect name. */
 static bool aspect_wanted(yyjson_doc *aspects_doc, yyjson_val *aspects_arr, const char *name) {
     if (!aspects_arr) {
         return true; /* no filter = all */
@@ -1841,9 +1853,10 @@ static bool aspect_wanted(yyjson_doc *aspects_doc, yyjson_val *aspects_arr, cons
     yyjson_val *val;
     while ((val = yyjson_arr_iter_next(&iter)) != NULL) {
         const char *s = yyjson_get_str(val);
-        if (s && (strcmp(s, "all") == 0 || strcmp(s, "overview") == 0 || strcmp(s, name) == 0)) {
-            return true;
-        }
+        if (!s) continue;
+        if (strcmp(s, "all") == 0) return true;
+        if (strcmp(s, "overview") == 0 && aspect_in_overview(name)) return true;
+        if (strcmp(s, name) == 0) return true;
     }
     (void)aspects_doc;
     return false;
