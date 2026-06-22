@@ -4936,7 +4936,7 @@ static bool want_aspect(const char **aspects, int aspect_count, const char *name
         return true;
     }
     for (int i = 0; i < aspect_count; i++) {
-        if (strcmp(aspects[i], "all") == 0) {
+        if (strcmp(aspects[i], "all") == 0 || strcmp(aspects[i], "overview") == 0) {
             return true;
         }
         if (strcmp(aspects[i], name) == 0) {

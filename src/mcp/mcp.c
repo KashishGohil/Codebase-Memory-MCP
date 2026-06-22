@@ -1841,7 +1841,7 @@ static bool aspect_wanted(yyjson_doc *aspects_doc, yyjson_val *aspects_arr, cons
     yyjson_val *val;
     while ((val = yyjson_arr_iter_next(&iter)) != NULL) {
         const char *s = yyjson_get_str(val);
-        if (s && (strcmp(s, "all") == 0 || strcmp(s, name) == 0)) {
+        if (s && (strcmp(s, "all") == 0 || strcmp(s, "overview") == 0 || strcmp(s, name) == 0)) {
             return true;
         }
     }
