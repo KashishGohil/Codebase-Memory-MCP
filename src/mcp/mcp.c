@@ -1207,6 +1207,7 @@ enum {
     BM25_BIND_LIMIT = 3,
     BM25_BIND_OFFSET = 4,
     BM25_BIND_INNER = 5,
+    BM25_BIND_FILE = 6,
     BM25_SQL_AUTO_LEN = -1,
     /* Inner FTS5 candidate cap.  SQLite can early-terminate a plain FTS5 query
      * (no JOIN/WHERE on outer table) of the form:
@@ -1266,11 +1267,31 @@ static int bm25_build_match(const char *query, char *out, size_t out_size) {
     return tokens;
 }
 
+static char *bm25_file_pattern_like(const char *file_pattern) {
+    if (!file_pattern) {
+        return NULL;
+    }
+    char *like = cbm_glob_to_like(file_pattern);
+    if (like && !strchr(file_pattern, '*') && !strchr(file_pattern, '?')) {
+        size_t len = strlen(like);
+        char *contains = malloc(len + MCP_SEPARATOR + SKIP_ONE);
+        if (contains) {
+            contains[0] = '%';
+            memcpy(contains + SKIP_ONE, like, len);
+            contains[len + SKIP_ONE] = '%';
+            contains[len + MCP_SEPARATOR] = '\0';
+            free(like);
+            like = contains;
+        }
+    }
+    return like;
+}
+
 /* Run the BM25 full-text search path and return the JSON result string.
  * Returns NULL if FTS5 is unavailable or the query produced no usable tokens,
  * in which case the caller falls back to the regex-based search path. */
-static char *bm25_search(cbm_store_t *store, const char *project, const char *query, int limit,
-                         int offset) {
+static char *bm25_search(cbm_store_t *store, const char *project, const char *query,
+                         const char *file_pattern, int limit, int offset) {
     sqlite3 *db = cbm_store_get_db(store);
     if (!db) {
         return NULL;
@@ -1280,6 +1301,7 @@ static char *bm25_search(cbm_store_t *store, const char *project, const char *qu
     if (tok_count == 0) {
         return NULL;
     }
+    char *file_like = bm25_file_pattern_like(file_pattern);
 
     /* BM25 ranked query using a two-step approach to enable FTS5 early termination.
      *
@@ -1310,11 +1332,13 @@ static char *bm25_search(cbm_store_t *store, const char *project, const char *qu
         "JOIN nodes n ON n.id = fts.rowid "
         "WHERE n.project = ?2 "
         "  AND n.label NOT IN ('File','Folder','Module','Section','Variable','Project') "
+        "  AND (?6 IS NULL OR n.file_path LIKE ?6) "
         "ORDER BY rank "
         "LIMIT ?3 OFFSET ?4";
 
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(db, sql, BM25_SQL_AUTO_LEN, &stmt, NULL) != SQLITE_OK) {
+        free(file_like);
         return NULL;
     }
     sqlite3_bind_text(stmt, BM25_BIND_QUERY, fts_query, BM25_SQL_AUTO_LEN, MCP_SQLITE_TRANSIENT);
@@ -1322,6 +1346,11 @@ static char *bm25_search(cbm_store_t *store, const char *project, const char *qu
     sqlite3_bind_int(stmt, BM25_BIND_LIMIT, limit > 0 ? limit : BM25_DEFAULT_LIMIT);
     sqlite3_bind_int(stmt, BM25_BIND_OFFSET, offset > 0 ? offset : 0);
     sqlite3_bind_int(stmt, BM25_BIND_INNER, BM25_INNER_LIMIT);
+    if (file_like) {
+        sqlite3_bind_text(stmt, BM25_BIND_FILE, file_like, BM25_SQL_AUTO_LEN, MCP_SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(stmt, BM25_BIND_FILE);
+    }
 
     /* Count hits within the same inner-limit window — capped at BM25_INNER_LIMIT.
      * Uses the identical subquery structure so the FTS5 early-exit applies here too. */
@@ -1336,6 +1365,7 @@ static char *bm25_search(cbm_store_t *store, const char *project, const char *qu
             "    JOIN nodes n ON n.id = fts.rowid "
             "    WHERE n.project = ?2 "
             "      AND n.label NOT IN ('File','Folder','Module','Section','Variable','Project')"
+            "      AND (?6 IS NULL OR n.file_path LIKE ?6)"
             ")";
         sqlite3_stmt *cs = NULL;
         if (sqlite3_prepare_v2(db, count_sql, BM25_SQL_AUTO_LEN, &cs, NULL) == SQLITE_OK) {
@@ -1344,6 +1374,12 @@ static char *bm25_search(cbm_store_t *store, const char *project, const char *qu
             sqlite3_bind_text(cs, BM25_BIND_PROJECT, project, BM25_SQL_AUTO_LEN,
                               MCP_SQLITE_TRANSIENT);
             sqlite3_bind_int(cs, BM25_BIND_LIMIT, BM25_INNER_LIMIT);
+            if (file_like) {
+                sqlite3_bind_text(cs, BM25_BIND_FILE, file_like, BM25_SQL_AUTO_LEN,
+                                  MCP_SQLITE_TRANSIENT);
+            } else {
+                sqlite3_bind_null(cs, BM25_BIND_FILE);
+            }
             if (sqlite3_step(cs) == SQLITE_ROW) {
                 total = sqlite3_column_int(cs, 0);
             }
@@ -1376,6 +1412,7 @@ static char *bm25_search(cbm_store_t *store, const char *project, const char *qu
         emitted++;
     }
     sqlite3_finalize(stmt);
+    free(file_like);
 
     yyjson_mut_obj_add_val(doc, root, "results", results);
     yyjson_mut_obj_add_bool(doc, root, "has_more", total > offset + emitted);
@@ -1516,7 +1553,9 @@ static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
     if (query && query[0]) {
         int q_limit = cbm_mcp_get_int_arg(args, "limit", BM25_DEFAULT_LIMIT);
         int q_offset = cbm_mcp_get_int_arg(args, "offset", 0);
-        char *bm25_json = bm25_search(store, project, query, q_limit, q_offset);
+        char *q_file_pattern = cbm_mcp_get_string_arg(args, "file_pattern");
+        char *bm25_json = bm25_search(store, project, query, q_file_pattern, q_limit, q_offset);
+        free(q_file_pattern);
         if (bm25_json) {
             free(query);
             free(project);

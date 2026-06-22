@@ -466,6 +466,62 @@ TEST(tool_search_graph_includes_node_properties) {
     PASS();
 }
 
+TEST(tool_search_graph_query_honors_file_pattern_issue552) {
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    ASSERT_NOT_NULL(srv);
+    cbm_store_t *st = cbm_mcp_server_store(srv);
+    ASSERT_NOT_NULL(st);
+
+    const char *proj = "issue-552";
+    cbm_mcp_server_set_project(srv, proj);
+    cbm_store_upsert_project(st, proj, "/tmp/issue-552");
+
+    cbm_node_t lib_status = {0};
+    lib_status.project = proj;
+    lib_status.label = "Function";
+    lib_status.name = "status";
+    lib_status.qualified_name = "issue-552.src.lib.status";
+    lib_status.file_path = "src/lib/status.c";
+    lib_status.start_line = 1;
+    lib_status.end_line = 3;
+    ASSERT_GT(cbm_store_upsert_node(st, &lib_status), 0);
+
+    cbm_node_t component_status = {0};
+    component_status.project = proj;
+    component_status.label = "Function";
+    component_status.name = "status";
+    component_status.qualified_name = "issue-552.src.components.status";
+    component_status.file_path = "src/components/status.c";
+    component_status.start_line = 1;
+    component_status.end_line = 3;
+    ASSERT_GT(cbm_store_upsert_node(st, &component_status), 0);
+
+    cbm_store_exec(st, "INSERT INTO nodes_fts(nodes_fts) VALUES('delete-all');");
+    ASSERT_EQ(cbm_store_exec(st,
+                             "INSERT INTO nodes_fts(rowid, name, qualified_name, label, "
+                             "file_path) "
+                             "SELECT id, cbm_camel_split(name), qualified_name, label, file_path "
+                             "FROM nodes;"),
+              CBM_STORE_OK);
+
+    char *resp = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":552,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"search_graph\","
+             "\"arguments\":{\"project\":\"issue-552\",\"query\":\"status\","
+             "\"file_pattern\":\"src/lib/*\",\"limit\":10}}}");
+    ASSERT_NOT_NULL(resp);
+    char *inner = extract_text_content(resp);
+    ASSERT_NOT_NULL(inner);
+    ASSERT_NOT_NULL(strstr(inner, "\"search_mode\":\"bm25\""));
+    ASSERT_NOT_NULL(strstr(inner, "\"file_path\":\"src/lib/status.c\""));
+    ASSERT_NULL(strstr(inner, "src/components/status.c"));
+
+    free(inner);
+    free(resp);
+    cbm_mcp_server_free(srv);
+    PASS();
+}
+
 TEST(tool_query_graph_basic) {
     cbm_mcp_server_t *srv = setup_mcp_with_data();
 
@@ -2062,6 +2118,7 @@ SUITE(mcp) {
     RUN_TEST(tool_unknown_tool);
     RUN_TEST(tool_search_graph_basic);
     RUN_TEST(tool_search_graph_includes_node_properties);
+    RUN_TEST(tool_search_graph_query_honors_file_pattern_issue552);
     RUN_TEST(tool_query_graph_basic);
     RUN_TEST(tool_index_status_no_project);
     RUN_TEST(tool_index_status_includes_git_metadata);
