@@ -82,13 +82,13 @@ static int git_capture(const char *repo_path, const char *git_args, char **out) 
 
     char buf[GIT_OUTPUT_MAX];
     if (!fgets(buf, sizeof(buf), fp)) {
-        cbm_pclose(fp);
-        return CBM_NOT_FOUND;
+        buf[0] = '\0';
+    } else {
+        trim_newlines(buf);
     }
-    trim_newlines(buf);
 
     int rc = cbm_pclose(fp);
-    if (rc != 0 || buf[0] == '\0') {
+    if (rc != 0) {
         return CBM_NOT_FOUND;
     }
 
@@ -263,6 +263,22 @@ int cbm_git_context_resolve(const char *path, cbm_git_context_t *out) {
         return CBM_NOT_FOUND;
     }
 
+    return 0;
+}
+
+int cbm_git_tracked_dirty(const char *path, bool *out_dirty) {
+    if (!out_dirty) {
+        return CBM_NOT_FOUND;
+    }
+    *out_dirty = false;
+    char *status = NULL;
+    int rc = git_capture(path, "status --porcelain --untracked-files=no", &status);
+    if (rc != 0) {
+        free(status);
+        return CBM_NOT_FOUND;
+    }
+    *out_dirty = status && status[0] != '\0';
+    free(status);
     return 0;
 }
 

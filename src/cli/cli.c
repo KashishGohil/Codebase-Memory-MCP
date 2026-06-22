@@ -2253,7 +2253,7 @@ static const uint32_t ZIP_MAX_UNCOMP = 500U * 1024U * 1024U;
 static unsigned char *zip_extract_entry(const unsigned char *file_data, uint16_t method,
                                         uint32_t comp_size, uint32_t uncomp_size, int *out_len) {
     if (method == ZIP_STORED) {
-        if (comp_size > ZIP_MAX_UNCOMP) {
+        if ((uint64_t)comp_size > ZIP_MAX_UNCOMP) {
             return NULL;
         }
         unsigned char *out = malloc(comp_size);
@@ -2265,7 +2265,7 @@ static unsigned char *zip_extract_entry(const unsigned char *file_data, uint16_t
         return out;
     }
     if (method == ZIP_DEFLATE) {
-        if (uncomp_size > ZIP_MAX_UNCOMP) {
+        if ((uint64_t)uncomp_size > ZIP_MAX_UNCOMP) {
             return NULL;
         }
         unsigned char *out = malloc(uncomp_size);
