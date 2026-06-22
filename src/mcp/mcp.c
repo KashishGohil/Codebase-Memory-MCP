@@ -1835,6 +1835,27 @@ static char *handle_delete_project(cbm_mcp_server_t *srv, const char *args) {
     return result;
 }
 
+/* Canonical list of valid aspect tokens for get_architecture.
+ * SSOT consumed by both the JSON-Schema enum (advisory, client-side)
+ * and the server-side validation (authoritative). Update both together
+ * if the aspect set changes. */
+static const char *VALID_ASPECTS[] = {
+    "all", "overview",
+    "structure", "dependencies", "routes",
+    "languages", "packages", "entry_points",
+    "hotspots", "boundaries", "layers",
+    "file_tree", "clusters",
+    NULL
+};
+
+static bool aspect_is_valid(const char *name) {
+    if (!name) return false;
+    for (int i = 0; VALID_ASPECTS[i]; i++) {
+        if (strcmp(name, VALID_ASPECTS[i]) == 0) return true;
+    }
+    return false;
+}
+
 /* "overview" = compact architecture summary: every aspect EXCEPT the large
    per-file listing (file_tree), which alone dominates the payload (~275 entries)
    and pushes the response past MAX_MCP_OUTPUT_TOKENS. */
@@ -1926,6 +1947,25 @@ static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
             if (s && aspects_strs_count < MCP_COL_16) {
                 aspects_strs[aspects_strs_count++] = s;
             }
+        }
+    }
+
+    /* Server-side validation: reject unknown aspect tokens with a model-friendly
+     * error listing the valid values. The JSON Schema enum on this tool is
+     * advisory — not every MCP client validates client-side (Claude Code does
+     * not), so silent-empty was the failure mode before this check. */
+    for (int i = 0; i < aspects_strs_count; i++) {
+        if (!aspect_is_valid(aspects_strs[i])) {
+            char msg[512];
+            snprintf(msg, sizeof(msg),
+                "Unknown aspect '%s'. Valid: all, overview, structure, "
+                "dependencies, routes, languages, packages, entry_points, "
+                "hotspots, boundaries, layers, file_tree, clusters.",
+                aspects_strs[i]);
+            char *err = cbm_mcp_text_result(msg, true);
+            free(project);
+            if (aspects_doc) yyjson_doc_free(aspects_doc);
+            return err;
         }
     }
 
