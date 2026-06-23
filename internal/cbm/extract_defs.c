@@ -3259,6 +3259,37 @@ static void extract_class_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec
         }
     }
 
+    // Swift: tree-sitter-swift emits ONE `class_declaration` node for
+    // class/struct/enum/actor, distinguished only by the `declaration_kind`
+    // keyword field. Relabel to the idiomatic kind (struct→Struct, enum→Enum,
+    // actor→Actor; class stays Class, protocol is already Interface) so the graph
+    // distinguishes Swift type kinds (codegraph parity). The new labels are added
+    // to the registry + resolve_as_class allowlists, so type/CALLS/INHERITS
+    // resolution is unaffected. Scoped to Swift only. (WS2b)
+    if (ctx->language == CBM_LANG_SWIFT && strcmp(label, "Class") == 0) {
+        TSNode decl_kind = ts_node_child_by_field_name(node, TS_FIELD("declaration_kind"));
+        const char *kw = ts_node_is_null(decl_kind) ? "" : ts_node_type(decl_kind);
+        if (strcmp(kw, "struct") == 0) {
+            label = "Struct";
+        } else if (strcmp(kw, "enum") == 0) {
+            label = "Enum";
+        } else if (strcmp(kw, "actor") == 0) {
+            label = "Actor";
+        } else if (strcmp(kw, "extension") == 0) {
+            /* An `extension` parses as class_declaration whose `name` is the
+             * EXTENDED type, sharing that type's FQN. Pushing a type def here would
+             * CLOBBER the real type's label via the UNIQUE(project,qualified_name)
+             * last-write-wins upsert (e.g. `struct X{}` then `extension X:P{}` →
+             * X relabeled back to Class) and phantom-node a type defined elsewhere.
+             * Extract its members (they attach to the extended type's QN) but emit
+             * NO type def for the extension itself. (WS2b review fix) */
+            extract_class_methods(ctx, node, class_qn, spec);
+            extract_class_fields(ctx, node, class_qn, spec);
+            extract_class_variables(ctx, node, spec);
+            return;
+        }
+    }
+
     CBMDefinition def;
     memset(&def, 0, sizeof(def));
     def.name = name;
@@ -4946,6 +4977,12 @@ static void push_class_body_children(TSNode node, const CBMLangSpec *spec, walk_
         TSNode child = ts_node_child(node, ci);
         const char *ck = ts_node_type(child);
         if (strcmp(ck, "field_declaration_list") == 0 || strcmp(ck, "class_body") == 0 ||
+            // Swift enum/protocol bodies (`enum_class_body` / `protocol_body`) are type-body
+            // containers extract_class_def already extracts members from (it finds them via the
+            // "body" field, which this child-type scan doesn't). Route them through the
+            // nested-class path here too, so enum statics / protocol members aren't ALSO
+            // re-walked and emitted as top-level Functions (the Method/Function dup-node bug, WS2a).
+            strcmp(ck, "enum_class_body") == 0 || strcmp(ck, "protocol_body") == 0 ||
             strcmp(ck, "declaration_list") == 0 || strcmp(ck, "body") == 0 ||
             strcmp(ck, "block") == 0 || strcmp(ck, "suite") == 0 ||
             // Groovy class bodies are a `closure` node; routing through the
