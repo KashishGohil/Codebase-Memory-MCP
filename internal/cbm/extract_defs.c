@@ -5812,11 +5812,13 @@ void cbm_extract_dbt_jinja(CBMExtractCtx *ctx) {
     // {% macro %} defs. A file that defines macros is a macro library, not a model.
     int macro_count = scan_jinja_macro_defs(ctx);
 
-    // For a model (not a macro library), emit a name-addressable Model node so
-    // that {{ ref('this_model') }} in other files resolves to it (and source as
-    // the origin of the lineage edge).
+    // A dbt model is a .sql file (the SQL host path). For such a model (not a
+    // macro library), emit a name-addressable Model node so that
+    // {{ ref('this_model') }} in other files resolves to it. A plain Jinja
+    // template (.jinja/.j2 -> CBM_LANG_JINJA2) is not a dbt model, so no Model
+    // node is emitted there.
     const char *enclosing_qn = ctx->module_qn;
-    if (macro_count == 0) {
+    if (is_sql && macro_count == 0) {
         char *model_name = dbt_name_from_path(ctx->arena, ctx->rel_path);
         if (model_name && model_name[0]) {
             CBMDefinition def;

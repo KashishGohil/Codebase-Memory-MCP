@@ -1472,13 +1472,13 @@ TEST(dbt_jinja_macro_defs) {
 }
 
 TEST(dbt_jinja_ref_lineage) {
-    /* {{ ref('m') }} / {{ source('s','t') }} become usages (ref_name = the last
-     * string arg); the model file also yields a name-addressable Model def. */
+    /* On the JINJA2 path, {{ ref('m') }} / {{ source('s','t') }} become usages
+     * (ref_name = the last string arg). No Model node here: a Model node is a
+     * dbt concept emitted only on the .sql (SQL host) path. */
     CBMFileResult *r = extract("SELECT * FROM {{ ref('stg_users') }}\n"
                                "JOIN {{ source('raw', 'events') }} USING (id)\n",
                                CBM_LANG_JINJA2, "t", "models/dim_users.sql");
     ASSERT_NOT_NULL(r);
-    ASSERT(has_def(r, "Model", "dim_users"));
     int found_stg = 0, found_events = 0;
     for (int i = 0; i < r->usages.count; i++) {
         if (!r->usages.items[i].ref_name) {
