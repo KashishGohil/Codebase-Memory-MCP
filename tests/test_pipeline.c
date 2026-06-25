@@ -21,6 +21,8 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <dirent.h>  /* opendir/readdir — corrupt-DB preservation regression #557 */
+#include <sqlite3.h> /* sqlite3_exec — corrupt-DB preservation regression #557 */
 #include "graph_buffer/graph_buffer.h"
 #include "yyjson/yyjson.h"
 
@@ -269,6 +271,56 @@ TEST(pipeline_structure_nodes) {
 
     cbm_store_close(s);
     cbm_pipeline_free(p);
+    teardown_test_repo();
+    PASS();
+}
+
+/* #557: on re-index, a project DB that fails the integrity check must be
+ * PRESERVED (renamed to <db>.corrupt.<ts>), not silently deleted, so the
+ * user can recover. Also guards the TOCTOU refactor of
+ * try_incremental_or_delete_db (existence derived from a query-mode open
+ * instead of a prior stat()) — the preserve behavior must survive it. */
+TEST(pipeline_reindex_preserves_corrupt_db_issue557) {
+    if (setup_test_repo() != 0) {
+        FAIL("failed to create temp dir");
+    }
+
+    char db_path[512];
+    snprintf(db_path, sizeof(db_path), "%s/test.db", g_tmpdir);
+
+    /* 1. Index once to produce a valid DB. */
+    cbm_pipeline_t *p1 = cbm_pipeline_new(g_tmpdir, db_path, CBM_MODE_FAST);
+    ASSERT_NOT_NULL(p1);
+    ASSERT_EQ(cbm_pipeline_run(p1), 0);
+    cbm_pipeline_free(p1);
+
+    /* 2. Corrupt it: a numeric root_path trips cbm_store_check_integrity
+     *    (same trigger as the store_integrity_corrupt_bad_path unit test). */
+    cbm_store_t *s = cbm_store_open_path(db_path);
+    ASSERT_NOT_NULL(s);
+    sqlite3_exec(cbm_store_get_db(s), "UPDATE projects SET root_path = '826';", NULL, NULL, NULL);
+    ASSERT_FALSE(cbm_store_check_integrity(s));
+    cbm_store_close(s);
+
+    /* 3. Re-index: the corrupt DB must be preserved, not unlink()'d. */
+    cbm_pipeline_t *p2 = cbm_pipeline_new(g_tmpdir, db_path, CBM_MODE_FAST);
+    ASSERT_NOT_NULL(p2);
+    ASSERT_EQ(cbm_pipeline_run(p2), 0);
+    cbm_pipeline_free(p2);
+
+    /* 4. A test.db.corrupt.<ts> sidecar must have been created. */
+    bool found_corrupt = false;
+    DIR *d = opendir(g_tmpdir);
+    ASSERT_NOT_NULL(d);
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (strncmp(ent->d_name, "test.db.corrupt.", 16) == 0) {
+            found_corrupt = true;
+        }
+    }
+    closedir(d);
+    ASSERT_TRUE(found_corrupt);
+
     teardown_test_repo();
     PASS();
 }
@@ -6091,6 +6143,7 @@ SUITE(pipeline) {
     RUN_TEST(store_bulk_persistence);
     /* Integration: structure pass */
     RUN_TEST(pipeline_structure_nodes);
+    RUN_TEST(pipeline_reindex_preserves_corrupt_db_issue557);
     RUN_TEST(pipeline_committed_counts_match_persisted);
     RUN_TEST(pipeline_structure_edges);
     RUN_TEST(pipeline_branch_root_structure);
