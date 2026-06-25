@@ -7,8 +7,10 @@
 #include "test_framework.h"
 #include <cypher/cypher.h>
 #include <store/store.h>
+#include "../src/foundation/compat.h" // cbm_setenv — execution-guard tests (#601)
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 /* ══════════════════════════════════════════════════════════════════
  *  LEXER TESTS
@@ -2521,6 +2523,87 @@ TEST(cypher_multi_prop_projection_no_alias) {
     PASS();
 }
 
+/* ── #601: execution guards (working-set cap + wall-clock timeout) ── */
+
+/* A whole-graph driving set must be rejected with a clear error rather than an
+ * unbounded allocation / hang. A large max_rows pushes bind_cap past the
+ * working-set cap deterministically (the early guard fires before any large
+ * malloc), so no big graph is needed to exercise it. */
+TEST(cypher_exec_guard_caps_huge_driving_set) {
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+
+    int rc = cbm_cypher_execute(s, "MATCH (a)-[:CALLS]->(b) RETURN a.name", "test", 110000, &r);
+    ASSERT_LT(rc, 0);
+    ASSERT_NOT_NULL(r.error);
+    ASSERT_NOT_NULL(strstr(r.error, "working-set"));
+
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
+/* The guards must not change ordinary directed queries. */
+TEST(cypher_exec_guard_normal_query_unaffected) {
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+
+    int rc = cbm_cypher_execute(s, "MATCH (f:Function)-[:CALLS]->(g) RETURN f.name, count(g)",
+                                "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_GT(r.row_count, 0);
+    ASSERT_NULL(r.error);
+
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
+/* The wall-clock timeout must trip on an expansion that outlasts its budget.
+ * A few thousand nodes expanded under a 1 ms budget (kept below the cap via a
+ * modest max_rows) exceeds the deadline deterministically under the ASan test
+ * build, where each binding copy + edge lookup is far slower than native. */
+TEST(cypher_exec_guard_timeout_trips) {
+    cbm_store_t *s = cbm_store_open_memory();
+    cbm_store_upsert_project(s, "test", "/tmp/test");
+    enum { GUARD_N = 3000 };
+    int64_t ids[GUARD_N];
+    for (int i = 0; i < GUARD_N; i++) {
+        char name[32];
+        char qn[48];
+        snprintf(name, sizeof(name), "F%d", i);
+        snprintf(qn, sizeof(qn), "test.F%d", i);
+        cbm_node_t n = {.project = "test",
+                        .label = "Function",
+                        .name = name,
+                        .qualified_name = qn,
+                        .file_path = "f.go"};
+        ids[i] = cbm_store_upsert_node(s, &n);
+    }
+    for (int i = 0; i < GUARD_N; i++) {
+        cbm_edge_t e = {.project = "test",
+                        .source_id = ids[i],
+                        .target_id = ids[(i + 1) % GUARD_N],
+                        .type = "CALLS"};
+        cbm_store_insert_edge(s, &e);
+    }
+
+    cbm_setenv("CBM_CYPHER_TIMEOUT_MS", "1", 1);
+    cbm_cypher_result_t r = {0};
+    /* max_rows 5000 keeps bind_cap below the working-set cap, so the timeout
+     * (not the cap) is the guard that trips. */
+    int rc = cbm_cypher_execute(s, "MATCH (a)-[:CALLS]->(b) RETURN a.name", "test", 5000, &r);
+    cbm_unsetenv("CBM_CYPHER_TIMEOUT_MS");
+
+    ASSERT_LT(rc, 0);
+    ASSERT_NOT_NULL(r.error);
+    ASSERT_NOT_NULL(strstr(r.error, "time"));
+
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
 /* ══════════════════════════════════════════════════════════════════ */
 
 SUITE(cypher) {
@@ -2677,6 +2760,9 @@ SUITE(cypher) {
     /* Phase 8: UNION */
     RUN_TEST(cypher_exec_union);
     RUN_TEST(cypher_exec_union_all);
+    RUN_TEST(cypher_exec_guard_caps_huge_driving_set);
+    RUN_TEST(cypher_exec_guard_normal_query_unaffected);
+    RUN_TEST(cypher_exec_guard_timeout_trips);
     RUN_TEST(cypher_parse_union);
     /* Phase 9: UNWIND */
     RUN_TEST(cypher_parse_unwind);
