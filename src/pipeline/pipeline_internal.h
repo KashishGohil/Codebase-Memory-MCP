@@ -543,6 +543,11 @@ atomic_int *cbm_pipeline_cancelled_ptr(cbm_pipeline_t *p);
 /* Record committed graph size (#334 gate axis) from the incremental path,
  * which cannot see the opaque cbm_pipeline struct. Call before the dump. */
 void cbm_pipeline_set_committed_counts(cbm_pipeline_t *p, int nodes, int edges);
+/* ADR (project_summaries) content captured from the old DB before a rewrite,
+ * so the incremental dump path can re-insert it and manage_adr survives
+ * re-indexing (#516). Returns NULL when no ADR was stored. Borrowed — do not
+ * free. */
+const char *cbm_pipeline_carried_adr(const cbm_pipeline_t *p);
 
 /* Parse a gRPC stub call "<service-stub>.<method>" into the canonical proto
  * service name + method. Returns true ONLY when a recognized gRPC stub/client

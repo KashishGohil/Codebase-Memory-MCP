@@ -325,6 +325,102 @@ TEST(pipeline_reindex_preserves_corrupt_db_issue557) {
     PASS();
 }
 
+/* #516 helpers: store an ADR into project_summaries, and check it survived. */
+static void store_test_adr_516(const char *db_path, const char *project) {
+    cbm_store_t *s = cbm_store_open_path(db_path);
+    if (s) {
+        cbm_store_adr_store(s, project, "# ADR\nDecision: keep me.");
+        cbm_store_close(s);
+    }
+}
+static bool adr_survives_516(const char *db_path, const char *project) {
+    cbm_store_t *s = cbm_store_open_path(db_path);
+    if (!s) {
+        return false;
+    }
+    cbm_adr_t adr = {0};
+    bool ok = (cbm_store_adr_get(s, project, &adr) == CBM_STORE_OK) && adr.content &&
+              strstr(adr.content, "keep me") != NULL;
+    cbm_store_adr_free(&adr);
+    cbm_store_close(s);
+    return ok;
+}
+
+/* #516: an ADR stored via manage_adr must survive a FULL re-index. The dump
+ * writes an empty project_summaries, so the ADR has to be carried across. */
+TEST(pipeline_full_reindex_preserves_adr_issue516) {
+    if (setup_test_repo() != 0) {
+        FAIL("failed to create temp dir");
+    }
+    char db_path[512];
+    snprintf(db_path, sizeof(db_path), "%s/test.db", g_tmpdir);
+
+    cbm_pipeline_t *p1 = cbm_pipeline_new(g_tmpdir, db_path, CBM_MODE_FAST);
+    ASSERT_NOT_NULL(p1);
+    ASSERT_EQ(cbm_pipeline_run(p1), 0);
+    char project[256];
+    snprintf(project, sizeof(project), "%s", cbm_pipeline_project_name(p1));
+    store_test_adr_516(db_path, project);
+
+    /* Add files so file_count exceeds the incremental threshold → full dump. */
+    for (int i = 0; i < 4; i++) {
+        char fp[600];
+        snprintf(fp, sizeof(fp), "%s/extra%d.go", g_tmpdir, i);
+        FILE *f = fopen(fp, "w");
+        if (f) {
+            fprintf(f, "package main\nfunc Extra%d() {}\n", i);
+            fclose(f);
+        }
+    }
+    cbm_pipeline_t *p2 = cbm_pipeline_new(g_tmpdir, db_path, CBM_MODE_FAST);
+    ASSERT_NOT_NULL(p2);
+    ASSERT_EQ(cbm_pipeline_run(p2), 0);
+
+    ASSERT_TRUE(adr_survives_516(db_path, project));
+
+    cbm_pipeline_free(p2);
+    cbm_pipeline_free(p1);
+    teardown_test_repo();
+    PASS();
+}
+
+/* #516: the same must hold on the INCREMENTAL re-index path (a changed file,
+ * same file count). The original report missed this second dump site. */
+TEST(pipeline_incremental_reindex_preserves_adr_issue516) {
+    if (setup_test_repo() != 0) {
+        FAIL("failed to create temp dir");
+    }
+    char db_path[512];
+    snprintf(db_path, sizeof(db_path), "%s/test.db", g_tmpdir);
+
+    cbm_pipeline_t *p1 = cbm_pipeline_new(g_tmpdir, db_path, CBM_MODE_FAST);
+    ASSERT_NOT_NULL(p1);
+    ASSERT_EQ(cbm_pipeline_run(p1), 0);
+    char project[256];
+    snprintf(project, sizeof(project), "%s", cbm_pipeline_project_name(p1));
+    store_test_adr_516(db_path, project);
+
+    /* Modify one existing file (file count unchanged) → incremental dump. */
+    char fp[600];
+    snprintf(fp, sizeof(fp), "%s/main.go", g_tmpdir);
+    FILE *f = fopen(fp, "w");
+    ASSERT_NOT_NULL(f);
+    fprintf(f, "package main\n\nimport \"pkg\"\n\n"
+               "func main() {\n\tpkg.Serve()\n\tpkg.Serve()\n}\n");
+    fclose(f);
+
+    cbm_pipeline_t *p2 = cbm_pipeline_new(g_tmpdir, db_path, CBM_MODE_FAST);
+    ASSERT_NOT_NULL(p2);
+    ASSERT_EQ(cbm_pipeline_run(p2), 0);
+
+    ASSERT_TRUE(adr_survives_516(db_path, project));
+
+    cbm_pipeline_free(p2);
+    cbm_pipeline_free(p1);
+    teardown_test_repo();
+    PASS();
+}
+
 TEST(pipeline_structure_edges) {
     if (setup_test_repo() != 0) {
         FAIL("failed to create temp dir");
@@ -1326,7 +1422,7 @@ TEST(usages_creates_edges) {
     /* Check for USAGE edges */
     cbm_edge_t *edges = NULL;
     int edge_count = 0;
-    rc = cbm_store_find_edges_by_type(s, project, "USAGE", &edges, &edge_count);
+    cbm_store_find_edges_by_type(s, project, "USAGE", &edges, &edge_count);
 
     bool found_usage = false;
     for (int i = 0; i < edge_count; i++) {
@@ -6144,6 +6240,8 @@ SUITE(pipeline) {
     /* Integration: structure pass */
     RUN_TEST(pipeline_structure_nodes);
     RUN_TEST(pipeline_reindex_preserves_corrupt_db_issue557);
+    RUN_TEST(pipeline_full_reindex_preserves_adr_issue516);
+    RUN_TEST(pipeline_incremental_reindex_preserves_adr_issue516);
     RUN_TEST(pipeline_committed_counts_match_persisted);
     RUN_TEST(pipeline_structure_edges);
     RUN_TEST(pipeline_branch_root_structure);

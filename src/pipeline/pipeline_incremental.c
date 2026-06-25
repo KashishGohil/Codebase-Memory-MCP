@@ -627,7 +627,7 @@ static void run_postpasses(cbm_pipeline_ctx_t *ctx, cbm_file_info_t *changed_fil
 static void dump_and_persist(cbm_gbuf_t *gbuf, const char *db_path, const char *project,
                              cbm_file_info_t *files, int file_count,
                              const cbm_file_hash_t *mode_skipped, int mode_skipped_count,
-                             const char *repo_path) {
+                             const char *repo_path, const char *carried_adr) {
     struct timespec t;
     cbm_clock_gettime(CLOCK_MONOTONIC, &t);
 
@@ -646,6 +646,12 @@ static void dump_and_persist(cbm_gbuf_t *gbuf, const char *db_path, const char *
     cbm_store_t *hash_store = cbm_store_open_path(db_path);
     if (hash_store) {
         persist_hashes(hash_store, project, files, file_count, mode_skipped, mode_skipped_count);
+
+        /* Re-insert the ADR carried across the rewrite (#516). Like the full
+         * dump in pipeline.c, the btree dump wrote an empty project_summaries. */
+        if (carried_adr) {
+            cbm_store_adr_store(hash_store, project, carried_adr);
+        }
 
         /* FTS5 rebuild after incremental dump.  The btree dump path bypasses
          * any triggers that could have kept nodes_fts synchronized, so we
@@ -851,7 +857,7 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
     cbm_pipeline_set_committed_counts(p, cbm_gbuf_node_count(existing),
                                       cbm_gbuf_edge_count(existing));
     dump_and_persist(existing, db_path, project, files, file_count, mode_skipped,
-                     mode_skipped_count, cbm_pipeline_repo_path(p));
+                     mode_skipped_count, cbm_pipeline_repo_path(p), cbm_pipeline_carried_adr(p));
     free_mode_skipped(mode_skipped, mode_skipped_count);
     cbm_gbuf_free(existing);
 

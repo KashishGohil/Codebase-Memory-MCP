@@ -97,6 +97,11 @@ struct cbm_pipeline {
     /* Committed graph size at dump time (-1 = dump did not run). #334 gate axis. */
     int committed_nodes;
     int committed_edges;
+
+    /* ADR (project_summaries) content read from the old DB before a rewrite,
+     * re-inserted after the dump so manage_adr survives re-indexing (#516).
+     * NULL when no ADR was stored. Owned by the pipeline; freed in _free. */
+    char *carried_adr;
 };
 
 /* ── Global pkgmap (one active pipeline at a time) ─────────────── */
@@ -182,6 +187,7 @@ void cbm_pipeline_free(cbm_pipeline_t *p) {
     p->excluded_dirs = NULL;
     p->excluded_count = 0;
     free(p->branch_qn);
+    free(p->carried_adr);
     cbm_git_context_free(&p->git_ctx);
     /* gbuf, store, registry freed during/after run */
     /* Defensively free userconfig in case run() was never called or panicked */
@@ -205,6 +211,10 @@ const char *cbm_pipeline_project_name(const cbm_pipeline_t *p) {
 
 const char *cbm_pipeline_repo_path(const cbm_pipeline_t *p) {
     return p ? p->repo_path : NULL;
+}
+
+const char *cbm_pipeline_carried_adr(const cbm_pipeline_t *p) {
+    return p ? p->carried_adr : NULL;
 }
 
 atomic_int *cbm_pipeline_cancelled_ptr(cbm_pipeline_t *p) {
@@ -795,6 +805,18 @@ static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *file
         free(db_path);
         return CBM_NOT_FOUND;
     }
+    /* Capture the stored ADR (project_summaries) before any rewrite. Both the
+     * full dump (dump_and_persist_hashes) and the incremental dump
+     * (dump_and_persist) serialize a fresh DB with an empty project_summaries,
+     * so the ADR must be carried across and re-inserted afterwards (#516).
+     * This is the single point that opens the old DB for both paths. */
+    cbm_adr_t carried = {0};
+    if (cbm_store_adr_get(check_store, p->project_name, &carried) == CBM_STORE_OK &&
+        carried.content) {
+        free(p->carried_adr);
+        p->carried_adr = strdup(carried.content);
+    }
+    cbm_store_adr_free(&carried);
     if (cbm_store_check_integrity(check_store)) {
         cbm_file_hash_t *hashes = NULL;
         int hash_count = 0;
@@ -909,6 +931,12 @@ static int dump_and_persist_hashes(cbm_pipeline_t *p, const cbm_file_info_t *fil
                 cbm_store_upsert_file_hash(hash_store, p->project_name, files[i].rel_path, "",
                                            stat_mtime_ns(&fst), fst.st_size);
             }
+        }
+
+        /* Re-insert the ADR carried across the rewrite (#516). The fresh dump
+         * wrote an empty project_summaries, mirroring the file_hashes restore. */
+        if (p->carried_adr) {
+            cbm_store_adr_store(hash_store, p->project_name, p->carried_adr);
         }
 
         /* FTS5 backfill: populate nodes_fts with camelCase-split names.
