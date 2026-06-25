@@ -454,6 +454,94 @@ TEST(project_name_consecutive_colons) {
     PASS();
 }
 
+TEST(project_name_percent_encodes_cjk) {
+    char *name = cbm_project_name_from_path(
+        "/Users/yunxin/Desktop/\xE5\xBC\x80\xE5\x8F\x91/\xE5\x90\x8E\xE7\xAB\xAF");
+    ASSERT_NOT_NULL(name);
+    ASSERT_TRUE(name[0] != '\0');
+    ASSERT_TRUE(strncmp(name, "Users-yunxin-Desktop-", strlen("Users-yunxin-Desktop-")) == 0);
+    ASSERT_TRUE(strstr(name, "%E5%BC%80%E5%8F%91") != NULL);
+    ASSERT_TRUE(strstr(name, "%E5%90%8E%E7%AB%AF") != NULL);
+    ASSERT_TRUE(cbm_validate_project_name(name));
+    free(name);
+    PASS();
+}
+
+TEST(project_name_distinct_cjk_dirs) {
+    char *dev = cbm_project_name_from_path("/p/\xE5\xBC\x80\xE5\x8F\x91");
+    char *backend = cbm_project_name_from_path("/p/\xE5\x90\x8E\xE7\xAB\xAF");
+    ASSERT_NOT_NULL(dev);
+    ASSERT_NOT_NULL(backend);
+    ASSERT_TRUE(strcmp(dev, backend) != 0);
+    free(dev);
+    free(backend);
+    PASS();
+}
+
+TEST(project_name_ascii_regression_space) {
+    ASSERT_FQN(cbm_project_name_from_path("/home/u/my project"), "home-u-my-project");
+    PASS();
+}
+
+TEST(project_name_validator_percent_and_rejections) {
+    ASSERT_TRUE(cbm_validate_project_name("Users-dev-%E5%BC%80%E5%8F%91"));
+    ASSERT_TRUE(!cbm_validate_project_name("a/b"));
+    ASSERT_TRUE(!cbm_validate_project_name("a\\b"));
+    ASSERT_TRUE(!cbm_validate_project_name("a..b"));
+    ASSERT_TRUE(!cbm_validate_project_name(".hidden"));
+    PASS();
+}
+
+/* A deep CJK path percent-encodes to many bytes; the slug must stay bounded
+ * (under the OS filename limit) yet remain validator-safe and distinct. */
+TEST(project_name_long_cjk_is_bounded) {
+    /* 60 repetitions of 开 (3 bytes -> "%E5%BC%80", 9 chars each) => far over the
+     * cap before bounding. */
+    char buf[1 + (60 * 3) + 1];
+    char *p = buf;
+    *p++ = '/';
+    for (int i = 0; i < 60; i++) {
+        *p++ = (char)0xE5;
+        *p++ = (char)0xBC;
+        *p++ = (char)0x80;
+    }
+    *p = '\0';
+    char *name = cbm_project_name_from_path(buf);
+    ASSERT_NOT_NULL(name);
+    ASSERT_TRUE(strlen(name) <= 200);
+    ASSERT_TRUE(cbm_validate_project_name(name));
+    free(name);
+    PASS();
+}
+
+/* Two distinct long CJK paths must still map to distinct bounded slugs. */
+TEST(project_name_long_cjk_distinct) {
+    char a[1 + (60 * 3) + 1];
+    char b[1 + (60 * 3) + 1];
+    char *pa = a;
+    char *pb = b;
+    *pa++ = '/';
+    *pb++ = '/';
+    for (int i = 0; i < 60; i++) {
+        *pa++ = (char)0xE5;
+        *pa++ = (char)0xBC;
+        *pa++ = (char)0x80; /* 开 */
+        *pb++ = (char)0xE5;
+        *pb++ = (char)0x90;
+        *pb++ = (char)0x8E; /* 后 */
+    }
+    *pa = '\0';
+    *pb = '\0';
+    char *na = cbm_project_name_from_path(a);
+    char *nb = cbm_project_name_from_path(b);
+    ASSERT_NOT_NULL(na);
+    ASSERT_NOT_NULL(nb);
+    ASSERT_TRUE(strcmp(na, nb) != 0);
+    free(na);
+    free(nb);
+    PASS();
+}
+
 /* issue #349: every derived project name must satisfy cbm_validate_project_name,
  * else the project is indexed + shown by list_projects but resolve_store rejects
  * the name → index_status/search_graph report project-not-found. */
@@ -582,4 +670,10 @@ SUITE(fqn) {
     RUN_TEST(project_name_colon_only);
     RUN_TEST(project_name_backslash_only);
     RUN_TEST(project_name_consecutive_colons);
+    RUN_TEST(project_name_percent_encodes_cjk);
+    RUN_TEST(project_name_distinct_cjk_dirs);
+    RUN_TEST(project_name_ascii_regression_space);
+    RUN_TEST(project_name_validator_percent_and_rejections);
+    RUN_TEST(project_name_long_cjk_is_bounded);
+    RUN_TEST(project_name_long_cjk_distinct);
 }

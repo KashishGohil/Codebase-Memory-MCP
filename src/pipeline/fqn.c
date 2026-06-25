@@ -11,12 +11,22 @@
 #include <stdbool.h>
 #include <stddef.h> // NULL
 #include <stdio.h>
+#include <stdint.h> // SIZE_MAX
 #include <stdlib.h>
 #include <string.h> // strdup
 
 /* Maximum path segments in a FQN (CBM_SZ_256 slots total, -2 for project + name) */
 #define FQN_MAX_PATH_SEGS 254
 #define FQN_MAX_DIR_SEGS 255
+
+/* Cap the derived project name well under the common 255-byte filename-component
+ * limit (the name is later used as "<cache_dir>/<name>.db"). Percent-encoding
+ * non-ASCII bytes can triple the byte length, so a deep CJK path could otherwise
+ * exceed the limit and make the .db file un-openable (ENAMETOOLONG). When the
+ * slug is too long we truncate and append a short hash of the full slug so that
+ * distinct paths still map to distinct, recoverable names. */
+#define PROJECT_NAME_MAX_LEN 200
+#define PROJECT_NAME_HASH_HEX 8
 
 /* ── Internal helpers ─────────────────────────────────────────────── */
 
@@ -324,28 +334,46 @@ char *cbm_project_name_from_path(const char *abs_path) {
         return strdup("root");
     }
 
-    /* Work on mutable copy */
-    char *path = strdup(abs_path);
-    size_t len = strlen(path);
+    char *source = strdup(abs_path);
+    if (!source) {
+        return NULL;
+    }
+    cbm_normalize_path_sep(source);
 
-    /* Normalize path separators */
-    cbm_normalize_path_sep(path);
+    size_t len = strlen(source);
+    if (len > (SIZE_MAX - SKIP_ONE) / 3) {
+        free(source);
+        return NULL;
+    }
 
-    /* Map every character cbm_validate_project_name would reject to '-'. The
-     * validator (used by resolve_store via project_db_path) allows only
-     * [A-Za-z0-9._-], so anything else — path separators, ':', spaces, '@',
-     * '+', unicode bytes, … — must be normalized here. Otherwise a repo like
-     * "/home/u/my project" yields the name "home-u-my project": indexing
-     * creates the DB and it shows in list_projects, but resolve_store rejects
-     * the space and reports project-not-found (#349). */
+    /* Map path bytes to a cbm_validate_project_name-safe slug. ASCII behavior
+     * stays as before: only [A-Za-z0-9._-] is copied, while separators, ':',
+     * spaces, '@', '+', literal '%', ... become '-'. Non-ASCII UTF-8 bytes are
+     * percent-encoded so distinct path segments keep identifying data. */
+    char *path = malloc((len * 3) + SKIP_ONE);
+    if (!path) {
+        free(source);
+        return NULL;
+    }
+    static const char hex[] = "0123456789ABCDEF";
+    char *out = path;
     for (size_t i = 0; i < len; i++) {
-        unsigned char c = (unsigned char)path[i];
+        unsigned char c = (unsigned char)source[i];
         bool safe = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
                     c == '.' || c == '_' || c == '-';
-        if (!safe) {
-            path[i] = '-';
+        if (safe) {
+            *out++ = (char)c;
+        } else if (c >= 0x80) {
+            *out++ = '%';
+            *out++ = hex[c >> 4];
+            *out++ = hex[c & 0x0F];
+        } else {
+            *out++ = '-';
         }
     }
+    *out = '\0';
+    free(source);
+    len = (size_t)(out - path);
 
     /* Collapse consecutive dashes, and consecutive dots (the validator also
      * rejects any ".." sequence). */
@@ -375,6 +403,33 @@ char *cbm_project_name_from_path(const char *abs_path) {
     if (*start == '\0') {
         free(path);
         return strdup("root");
+    }
+
+    /* Bound the slug so "<cache_dir>/<name>.db" stays within the OS filename
+     * limit. On truncation, append "-<8 hex>" (FNV-1a of the full slug) so two
+     * long paths that share a prefix still produce distinct names. */
+    size_t cur = strlen(start);
+    if (cur > PROJECT_NAME_MAX_LEN) {
+        uint32_t h = 2166136261u; /* FNV-1a offset basis */
+        for (size_t i = 0; i < cur; i++) {
+            h ^= (unsigned char)start[i];
+            h *= 16777619u; /* FNV-1a prime */
+        }
+        size_t keep = PROJECT_NAME_MAX_LEN - (PROJECT_NAME_HASH_HEX + SKIP_ONE);
+        /* Don't end the kept prefix on a '-' (would collide with the separator
+         * and could leave a dangling dash before the hash). */
+        while (keep > 0 && start[keep - SKIP_ONE] == '-') {
+            keep--;
+        }
+        char *result = malloc(keep + SKIP_ONE + PROJECT_NAME_HASH_HEX + SKIP_ONE);
+        if (!result) {
+            free(path);
+            return NULL;
+        }
+        memcpy(result, start, keep);
+        snprintf(result + keep, SKIP_ONE + PROJECT_NAME_HASH_HEX + SKIP_ONE, "-%08x", h);
+        free(path);
+        return result;
     }
 
     char *result = strdup(start);
