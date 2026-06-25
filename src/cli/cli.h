@@ -128,6 +128,7 @@ typedef struct {
     bool cursor;      /* ~/.cursor/ exists */
     bool openclaw;    /* ~/.openclaw/ exists */
     bool kiro;        /* ~/.kiro/ exists */
+    bool codebuddy;   /* ~/.codebuddy/ exists */
 } cbm_detected_agents_t;
 
 /* Detect which coding agents are installed.
@@ -181,6 +182,15 @@ int cbm_upsert_claude_hooks(const char *settings_path);
  * Returns 0 on success. */
 int cbm_remove_claude_hooks(const char *settings_path);
 
+/* Upsert a PreToolUse hook in ~/.codebuddy/settings.json for CodeBuddy.
+ * Adds a Grep|Glob matcher that reminds to use MCP tools.
+ * Returns 0 on success. */
+int cbm_upsert_codebuddy_hooks(const char *settings_path);
+
+/* Remove our PreToolUse hook from CodeBuddy settings.json.
+ * Returns 0 on success. */
+int cbm_remove_codebuddy_hooks(const char *settings_path);
+
 /* Write the PreToolUse gate shim to <home>/.claude/hooks/. The shim is a thin
  * wrapper that invokes the compiled `hook-augment` and writes to stdout only —
  * it must never create a predictable temp/state file (issue #384). Exposed for
@@ -202,6 +212,8 @@ int cbm_upsert_codex_hooks(const char *config_path);
 int cbm_remove_codex_hooks(const char *config_path);
 int cbm_upsert_gemini_session_hooks(const char *settings_path);
 int cbm_remove_gemini_session_hooks(const char *settings_path);
+int cbm_upsert_codebuddy_session_hooks(const char *settings_path);
+int cbm_remove_codebuddy_session_hooks(const char *settings_path);
 
 /* ── PATH management ──────────────────────────────────────────── */
 

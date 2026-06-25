@@ -1558,6 +1558,63 @@ TEST(cli_detect_agents_finds_codex) {
     PASS();
 }
 
+TEST(cli_detect_agents_finds_codebuddy) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        FAIL("cbm_mkdtemp failed");
+
+    char dir[512];
+    snprintf(dir, sizeof(dir), "%s/.codebuddy", tmpdir);
+    test_mkdirp(dir);
+
+    /* Unset CODEBUDDY_CONFIG_DIR so detection is exercised against home_dir/.codebuddy */
+    const char *saved = getenv("CODEBUDDY_CONFIG_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    cbm_unsetenv("CODEBUDDY_CONFIG_DIR");
+
+    cbm_detected_agents_t agents = cbm_detect_agents(tmpdir);
+    ASSERT_TRUE(agents.codebuddy);
+
+    if (saved_copy) {
+        cbm_setenv("CODEBUDDY_CONFIG_DIR", saved_copy, 1);
+        free(saved_copy);
+    }
+
+    test_rmdir_r(tmpdir);
+    PASS();
+}
+
+TEST(cli_detect_agents_finds_codebuddy_via_env) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        FAIL("cbm_mkdtemp failed");
+
+    /* Config dir lives OUTSIDE home_dir/.codebuddy, pointed at by CODEBUDDY_CONFIG_DIR. */
+    char ccd[512];
+    snprintf(ccd, sizeof(ccd), "%s/custom-codebuddy", tmpdir);
+    test_mkdirp(ccd);
+
+    const char *saved = getenv("CODEBUDDY_CONFIG_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    cbm_setenv("CODEBUDDY_CONFIG_DIR", ccd, 1);
+
+    /* home_dir has no .codebuddy, but detection must still find CodeBuddy via the env var. */
+    cbm_detected_agents_t agents = cbm_detect_agents(tmpdir);
+    ASSERT_TRUE(agents.codebuddy);
+
+    if (saved_copy) {
+        cbm_setenv("CODEBUDDY_CONFIG_DIR", saved_copy, 1);
+        free(saved_copy);
+    } else {
+        cbm_unsetenv("CODEBUDDY_CONFIG_DIR");
+    }
+
+    test_rmdir_r(tmpdir);
+    PASS();
+}
+
 /* issue #222: Cursor (~/.cursor/) must be detected so install/update registers
  * the MCP server in ~/.cursor/mcp.json — previously it was never discovered. */
 TEST(cli_detect_agents_finds_cursor_issue222) {
@@ -1666,6 +1723,29 @@ TEST(cli_gemini_session_hook_parity) {
     ASSERT(strstr(d, "search_graph") != NULL);
 
     ASSERT_EQ(cbm_remove_gemini_session_hooks(cfg), 0);
+    d = read_test_file(cfg);
+    ASSERT_NULL(strstr(d, "SessionStart"));
+
+    test_rmdir_r(tmpdir);
+    PASS();
+}
+
+TEST(cli_codebuddy_session_hook_parity) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-codebuddyhook-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        FAIL("cbm_mkdtemp failed");
+
+    char cfg[512];
+    snprintf(cfg, sizeof(cfg), "%s/settings.json", tmpdir);
+
+    ASSERT_EQ(cbm_upsert_codebuddy_session_hooks(cfg), 0);
+    const char *d = read_test_file(cfg);
+    ASSERT_NOT_NULL(d);
+    ASSERT(strstr(d, "SessionStart") != NULL);
+    ASSERT(strstr(d, "search_graph") != NULL);
+
+    ASSERT_EQ(cbm_remove_codebuddy_session_hooks(cfg), 0);
     d = read_test_file(cfg);
     ASSERT_NULL(strstr(d, "SessionStart"));
 
@@ -2320,6 +2400,50 @@ TEST(cli_remove_claude_hooks) {
     PASS();
 }
 
+TEST(cli_upsert_codebuddy_hook_fresh) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-codebuddy-hook-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        FAIL("cbm_mkdtemp failed");
+
+    char settingspath[512];
+    snprintf(settingspath, sizeof(settingspath), "%s/settings.json", tmpdir);
+
+    int rc = cbm_upsert_codebuddy_hooks(settingspath);
+    ASSERT_EQ(rc, 0);
+
+    const char *data = read_test_file(settingspath);
+    ASSERT_NOT_NULL(data);
+    ASSERT(strstr(data, "PreToolUse") != NULL);
+    ASSERT(strstr(data, "\"Grep|Glob\"") != NULL);
+    ASSERT(strstr(data, "Glob|Read") == NULL);
+    ASSERT(strstr(data, "cbm-code-discovery-gate") != NULL);
+
+    test_rmdir_r(tmpdir);
+    PASS();
+}
+
+TEST(cli_remove_codebuddy_hooks) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-codebuddy-hook-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        FAIL("cbm_mkdtemp failed");
+
+    char settingspath[512];
+    snprintf(settingspath, sizeof(settingspath), "%s/settings.json", tmpdir);
+
+    cbm_upsert_codebuddy_hooks(settingspath);
+    int rc = cbm_remove_codebuddy_hooks(settingspath);
+    ASSERT_EQ(rc, 0);
+
+    const char *data = read_test_file(settingspath);
+    ASSERT_NOT_NULL(data);
+    ASSERT(strstr(data, "Grep|Glob|Read") == NULL);
+
+    test_rmdir_r(tmpdir);
+    PASS();
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  *  Group D: Pre-Tool Hook Upsert — Gemini CLI / Antigravity
  * ═══════════════════════════════════════════════════════════════════ */
@@ -2747,10 +2871,13 @@ SUITE(cli) {
     RUN_TEST(cli_detect_agents_finds_claude);
     RUN_TEST(cli_detect_agents_finds_claude_via_env);
     RUN_TEST(cli_detect_agents_finds_codex);
+    RUN_TEST(cli_detect_agents_finds_codebuddy);
+    RUN_TEST(cli_detect_agents_finds_codebuddy_via_env);
     RUN_TEST(cli_detect_agents_finds_cursor_issue222);
     RUN_TEST(cli_install_plan_receipt_no_mutation_issue388);
     RUN_TEST(cli_codex_session_hook_issue330);
     RUN_TEST(cli_gemini_session_hook_parity);
+    RUN_TEST(cli_codebuddy_session_hook_parity);
     RUN_TEST(cli_detect_agents_finds_gemini);
     RUN_TEST(cli_detect_agents_finds_zed);
     RUN_TEST(cli_detect_agents_finds_antigravity);
@@ -2789,6 +2916,10 @@ SUITE(cli) {
     RUN_TEST(cli_upsert_claude_hook_replace);
     RUN_TEST(cli_upsert_claude_hook_preserves_others);
     RUN_TEST(cli_remove_claude_hooks);
+
+    /* CodeBuddy hooks (2 tests — group D) */
+    RUN_TEST(cli_upsert_codebuddy_hook_fresh);
+    RUN_TEST(cli_remove_codebuddy_hooks);
 
     /* Gemini CLI hooks (4 tests — group D) */
     RUN_TEST(cli_upsert_gemini_hook_fresh);

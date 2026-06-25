@@ -276,6 +276,75 @@ print()
     fi
 }
 
+configure_codebuddy() {
+    echo ""
+    local binary_path="${INSTALL_DIR}/${BINARY_NAME}"
+    local codebuddy_config_dir="${CODEBUDDY_CONFIG_DIR:-$HOME/.codebuddy}"
+    local mcp_file="${codebuddy_config_dir}/.mcp.json"
+
+    printf "%s" "${BOLD}Configure CodeBuddy to use codebase-memory-mcp? [y/N] ${RESET}"
+    read -r answer
+    if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+        echo ""
+        info "Add this to ${mcp_file}:"
+        echo ""
+        echo '  {'
+        echo '    "mcpServers": {'
+        echo '      "codebase-memory-mcp": {'
+        echo '        "type": "stdio",'
+        echo "        \"command\": \"${binary_path}\""
+        echo '      }'
+        echo '    }'
+        echo '  }'
+        return
+    fi
+
+    local mcp_entry
+    mcp_entry=$(cat <<JSONEOF
+{"type":"stdio","command":"${binary_path}"}
+JSONEOF
+)
+
+    mkdir -p "$(dirname "$mcp_file")"
+
+    if command -v jq &>/dev/null; then
+        if [ -f "$mcp_file" ]; then
+            local tmp
+            tmp=$(mktemp)
+            jq --argjson entry "$mcp_entry" '.mcpServers["codebase-memory-mcp"] = $entry' "$mcp_file" > "$tmp"
+            mv "$tmp" "$mcp_file"
+        else
+            echo "{}" | jq --argjson entry "$mcp_entry" '.mcpServers["codebase-memory-mcp"] = $entry' > "$mcp_file"
+        fi
+        ok "Updated ${mcp_file}"
+    elif command -v python3 &>/dev/null; then
+        python3 -c "
+import json, os
+path = os.path.expanduser('$mcp_file')
+data = {}
+if os.path.exists(path):
+    with open(path) as f:
+        data = json.load(f)
+data.setdefault('mcpServers', {})['codebase-memory-mcp'] = json.loads('$mcp_entry')
+with open(path, 'w') as f:
+    json.dump(data, f, indent=2)
+print()
+"
+        ok "Updated ${mcp_file}"
+    else
+        warn "Neither jq nor python3 found — cannot auto-configure."
+        echo ""
+        info "Add this to ${mcp_file} manually:"
+        echo ""
+        echo '  "mcpServers": {'
+        echo '    "codebase-memory-mcp": {'
+        echo '      "type": "stdio",'
+        echo "      \"command\": \"${binary_path}\""
+        echo '    }'
+        echo '  }'
+    fi
+}
+
 # --- PATH check ---
 
 check_path() {
@@ -317,6 +386,7 @@ else
 fi
 
 configure_claude
+configure_codebuddy
 check_path
 
 # --- Git hooks ---

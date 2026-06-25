@@ -16,8 +16,8 @@ $InstallDir = Join-Path $env:LOCALAPPDATA "codebase-memory-mcp"
 # --- Helpers ---
 
 function Write-Ok($msg)   { Write-Host "  $msg" -ForegroundColor Green }
-function Write-Fail($msg)  { Write-Host "  $msg" -ForegroundColor Red }
-function Write-Warn($msg)  { Write-Host "  $msg" -ForegroundColor Yellow }
+function Write-Fail($msg) { Write-Host "  $msg" -ForegroundColor Red }
+function Write-Warn($msg) { Write-Host "  $msg" -ForegroundColor Yellow }
 
 function Read-SettingsJson($Path) {
     # PS5.1-compatible: ConvertFrom-Json returns PSCustomObject, not Hashtable.
@@ -77,6 +77,36 @@ function Configure-ClaudeCode($McpConfig) {
     } else {
         Write-Host ""
         Write-Host "  Add this to your .mcp.json or %USERPROFILE%\.claude\settings.json:" -ForegroundColor White
+        Write-Host ""
+        $snippet = @{ mcpServers = @{ "codebase-memory-mcp" = $McpConfig } }
+        $snippet | ConvertTo-Json -Depth 10 | Write-Host
+    }
+}
+
+function Configure-CodeBuddy($McpConfig) {
+    Write-Host ""
+    $answer = Read-Host "Configure CodeBuddy to use codebase-memory-mcp? [y/N]"
+    $codebuddyDir = if ($env:CODEBUDDY_CONFIG_DIR) { $env:CODEBUDDY_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".codebuddy" }
+    $mcpPath = Join-Path $codebuddyDir ".mcp.json"
+    $mcpDir = Split-Path $mcpPath -Parent
+
+    if ($answer -match '^[Yy]$') {
+        if (-not (Test-Path $mcpDir)) {
+            New-Item -ItemType Directory -Path $mcpDir -Force | Out-Null
+        }
+
+        $settings = Read-SettingsJson $mcpPath
+
+        if (-not $settings.Contains("mcpServers")) {
+            $settings["mcpServers"] = [ordered]@{}
+        }
+
+        $settings["mcpServers"]["codebase-memory-mcp"] = $McpConfig
+        Write-SettingsJson $mcpPath $settings
+        Write-Ok "Updated $mcpPath"
+    } else {
+        Write-Host ""
+        Write-Host "  Add this to $mcpPath:" -ForegroundColor White
         Write-Host ""
         $snippet = @{ mcpServers = @{ "codebase-memory-mcp" = $McpConfig } }
         $snippet | ConvertTo-Json -Depth 10 | Write-Host
@@ -233,9 +263,10 @@ if ($FromSource) {
     }
 
     Configure-ClaudeCode $mcpConfig
+    Configure-CodeBuddy $mcpConfig
 
     Write-Host ""
-    Write-Ok "Done! Restart Claude Code and verify with /mcp"
+    Write-Ok "Done! Restart Claude Code or CodeBuddy and verify with /mcp"
     Write-Host ""
     Write-Host "  To uninstall:" -ForegroundColor White
     Write-Host "    wsl.exe -- rm $wslBinaryPath"
@@ -309,16 +340,17 @@ if ($FromSource) {
         }
     }
 
-    # Configure Claude Code
+    # Configure Claude Code / CodeBuddy
     $mcpConfig = [ordered]@{
         type    = "stdio"
         command = $binaryPath
     }
 
     Configure-ClaudeCode $mcpConfig
+    Configure-CodeBuddy $mcpConfig
 
     Write-Host ""
-    Write-Ok "Done! Restart Claude Code and verify with /mcp"
+    Write-Ok "Done! Restart Claude Code or CodeBuddy and verify with /mcp"
     Write-Host ""
     Write-Host "  To uninstall:" -ForegroundColor White
     Write-Host "    Remove-Item -Recurse -Force '$InstallDir'"

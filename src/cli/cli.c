@@ -1056,6 +1056,22 @@ static void cbm_claude_user_root(const char *home_dir, char *out, size_t out_sz)
     }
 }
 
+/* Resolve the CodeBuddy config dir.
+ * Honors $CODEBUDDY_CONFIG_DIR; falls back to "$home_dir/.codebuddy". */
+static void cbm_codebuddy_config_dir(const char *home_dir, char *out, size_t out_sz) {
+    if (out_sz == 0) {
+        return;
+    }
+    out[0] = '\0';
+    char env_buf[CLI_BUF_1K];
+    const char *env = cbm_safe_getenv("CODEBUDDY_CONFIG_DIR", env_buf, sizeof(env_buf), NULL);
+    if (env && env[0]) {
+        snprintf(out, out_sz, "%s", env);
+    } else if (home_dir && home_dir[0]) {
+        snprintf(out, out_sz, "%s/.codebuddy", home_dir);
+    }
+}
+
 /* Build the hook command string written into Claude Code's settings.json.
  * Honors $CLAUDE_CONFIG_DIR. When CLAUDE_CONFIG_DIR is unset, preserves the
  * legacy tilde-expanded form so settings.json stays portable across HOME values. */
@@ -1070,6 +1086,23 @@ static void cbm_resolve_hook_command(const char *script_name, char *out, size_t 
         snprintf(out, out_sz, "%s/hooks/%s", env, script_name);
     } else {
         snprintf(out, out_sz, "~/.claude/hooks/%s", script_name);
+    }
+}
+
+/* Build the hook command string written into CodeBuddy's settings.json.
+ * Honors $CODEBUDDY_CONFIG_DIR. When CODEBUDDY_CONFIG_DIR is unset, preserves the
+ * tilde-expanded form so settings.json stays portable across HOME values. */
+static void cbm_resolve_codebuddy_hook_command(const char *script_name, char *out, size_t out_sz) {
+    if (out_sz == 0) {
+        return;
+    }
+    out[0] = '\0';
+    char env_buf[CLI_BUF_1K];
+    const char *env = cbm_safe_getenv("CODEBUDDY_CONFIG_DIR", env_buf, sizeof(env_buf), NULL);
+    if (env && env[0]) {
+        snprintf(out, out_sz, "%s/hooks/%s", env, script_name);
+    } else {
+        snprintf(out, out_sz, "~/.codebuddy/hooks/%s", script_name);
     }
 }
 
@@ -1142,6 +1175,10 @@ cbm_detected_agents_t cbm_detect_agents(const char *home_dir) {
     /* Kiro: ~/.kiro/ */
     snprintf(path, sizeof(path), "%s/.kiro", home_dir);
     agents.kiro = dir_exists(path);
+
+    /* CodeBuddy: ~/.codebuddy/ (or $CODEBUDDY_CONFIG_DIR) */
+    cbm_codebuddy_config_dir(home_dir, path, sizeof(path));
+    agents.codebuddy = path[0] != '\0' && dir_exists(path);
 
     return agents;
 }
@@ -1692,6 +1729,9 @@ int cbm_remove_antigravity_mcp(const char *config_path) {
  * in-process deadline well under this. */
 #define CMM_HOOK_TIMEOUT_SEC 5
 
+/* SessionStart reminder script name (installed to hooks/ dir). */
+#define CMM_SESSION_REMINDER_SCRIPT "cbm-session-reminder"
+
 /* Old matcher values from previous versions — recognized during upgrade so
  * upsert/remove can clean them up before inserting the current matcher.
  * Per-agent lists (no shared global): each caller passes its own. */
@@ -1899,6 +1939,38 @@ int cbm_remove_claude_hooks(const char *settings_path) {
     });
 }
 
+/* ── CodeBuddy pre-tool hooks ───────────────────────────────── */
+
+/* CodeBuddy uses the same hook format as Claude Code.
+ * Old matchers shared with Claude Code since the hook format is identical. */
+static const char *const cmm_codebuddy_old_matchers[] = {
+    "Grep|Glob|Read|Search",
+    "Grep|Glob|Read",
+    NULL,
+};
+
+int cbm_upsert_codebuddy_hooks(const char *settings_path) {
+    char command[CLI_BUF_1K];
+    cbm_resolve_codebuddy_hook_command(CMM_HOOK_GATE_SCRIPT, command, sizeof(command));
+    return upsert_hooks_json((hooks_upsert_args_t){
+        .settings_path = settings_path,
+        .hook_event = "PreToolUse",
+        .matcher_str = CMM_HOOK_MATCHER,
+        .command_str = command,
+        .old_matchers = cmm_codebuddy_old_matchers,
+        .timeout_sec = CMM_HOOK_TIMEOUT_SEC,
+    });
+}
+
+int cbm_remove_codebuddy_hooks(const char *settings_path) {
+    return remove_hooks_json((hooks_remove_args_t){
+        .settings_path = settings_path,
+        .hook_event = "PreToolUse",
+        .matcher_str = CMM_HOOK_MATCHER,
+        .old_matchers = cmm_codebuddy_old_matchers,
+    });
+}
+
 /* Install the search-augmenter shim to ~/.claude/hooks/.
  * The shim is a thin wrapper that delegates to `<binary> hook-augment`,
  * which adds graph context to Grep/Glob calls. It NEVER blocks a tool call:
@@ -1953,8 +2025,126 @@ void cbm_install_hook_gate_script(const char *home, const char *binary_path) {
 #endif
 }
 
-/* SessionStart hook: remind agent to use MCP tools on every context reset. */
-#define CMM_SESSION_REMINDER_SCRIPT "cbm-session-reminder"
+/* Install the search-augmenter shim to ~/.codebuddy/hooks/.
+ * Same logic as cbm_install_hook_gate_script but for CodeBuddy. */
+static void cbm_install_codebuddy_hook_gate_script(const char *home, const char *binary_path) {
+    if (!home || !binary_path) {
+        return;
+    }
+    if (strchr(binary_path, '"') != NULL) {
+        return;
+    }
+    char config_dir[CLI_BUF_1K];
+    cbm_codebuddy_config_dir(home, config_dir, sizeof(config_dir));
+    if (!config_dir[0]) {
+        return;
+    }
+    char hooks_dir[CLI_BUF_1K];
+    snprintf(hooks_dir, sizeof(hooks_dir), "%s/hooks", config_dir);
+    cbm_mkdir_p(hooks_dir, CLI_OCTAL_PERM);
+
+    char script_path[CLI_BUF_1K];
+    snprintf(script_path, sizeof(script_path), "%s/" CMM_HOOK_GATE_SCRIPT, hooks_dir);
+
+    FILE *f = fopen(script_path, "w");
+    if (!f) {
+        return;
+    }
+    (void)fprintf(f,
+                  "#!/bin/bash\n"
+                  "# codebase-memory-mcp search augmenter (CodeBuddy PreToolUse).\n"
+                  "# Despite the name this NEVER blocks a tool call - it only adds\n"
+                  "# graph context. Any failure is silent (exit 0, no output).\n"
+                  "BIN=\"%s\"\n"
+                  "[ -x \"$BIN\" ] || exit 0\n"
+                  "\"$BIN\" hook-augment 2>/dev/null\n"
+                  "exit 0\n",
+                  binary_path);
+#ifndef _WIN32
+    fchmod(fileno(f), CLI_OCTAL_PERM);
+#endif
+    (void)fclose(f);
+#ifdef _WIN32
+    chmod(script_path, CLI_OCTAL_PERM);
+#endif
+}
+
+/* Install SessionStart reminder script to ~/.codebuddy/hooks/.
+ * Same logic as cbm_install_session_reminder_script but for CodeBuddy. */
+static void cbm_install_codebuddy_session_reminder_script(const char *home) {
+    if (!home) {
+        return;
+    }
+    char config_dir[CLI_BUF_1K];
+    cbm_codebuddy_config_dir(home, config_dir, sizeof(config_dir));
+    if (!config_dir[0]) {
+        return;
+    }
+    char hooks_dir[CLI_BUF_1K];
+    snprintf(hooks_dir, sizeof(hooks_dir), "%s/hooks", config_dir);
+    cbm_mkdir_p(hooks_dir, CLI_OCTAL_PERM);
+
+    char script_path[CLI_BUF_1K];
+    snprintf(script_path, sizeof(script_path), "%s/" CMM_SESSION_REMINDER_SCRIPT, hooks_dir);
+
+    FILE *f = fopen(script_path, "w");
+    if (!f) {
+        return;
+    }
+    (void)fprintf(
+        f, "#!/bin/bash\n"
+           "# SessionStart hook: remind agent to use codebase-memory-mcp tools.\n"
+           "# Installed by codebase-memory-mcp. Fires on startup/resume/clear/compact.\n"
+           "cat << 'REMINDER'\n"
+           "CRITICAL - Code Discovery Protocol:\n"
+           "1. ALWAYS use codebase-memory-mcp tools FIRST for ANY code exploration:\n"
+           "   - search_graph(name_pattern/label/qn_pattern) to find functions/classes/routes\n"
+           "   - trace_path(function_name, mode=calls|data_flow|cross_service) for call chains\n"
+           "   - get_code_snippet(qualified_name) for exact symbol source (precise ranges)\n"
+           "   - query_graph(query) for complex Cypher patterns\n"
+           "   - get_architecture(aspects) for project structure\n"
+           "   - search_code(pattern) for text search (graph-augmented grep)\n"
+           "2. Use Grep/Glob/Read freely for text, configs, non-code files, and\n"
+           "   always Read a file before editing it.\n"
+           "3. If a project is not indexed yet, run index_repository FIRST.\n"
+           "REMINDER\n");
+#ifndef _WIN32
+    fchmod(fileno(f), CLI_OCTAL_PERM);
+#endif
+    (void)fclose(f);
+#ifdef _WIN32
+    chmod(script_path, CLI_OCTAL_PERM);
+#endif
+}
+
+int cbm_upsert_codebuddy_session_hooks(const char *settings_path) {
+    static const char *matchers[] = {"startup", "resume", "clear", "compact"};
+    int rc = 0;
+    for (size_t i = 0; i < sizeof(matchers) / sizeof(matchers[0]); i++) {
+        if (upsert_hooks_json((hooks_upsert_args_t){
+                .settings_path = settings_path,
+                .hook_event = "SessionStart",
+                .matcher_str = matchers[i],
+                .command_str = CMM_SESSION_REMINDER_CMD,
+            }) != 0) {
+            rc = CLI_ERR;
+        }
+    }
+    return rc;
+}
+
+int cbm_remove_codebuddy_session_hooks(const char *settings_path) {
+    static const char *matchers[] = {"startup", "resume", "clear", "compact"};
+    int rc = 0;
+    for (size_t i = 0; i < sizeof(matchers) / sizeof(matchers[0]); i++) {
+        if (remove_hooks_json((hooks_remove_args_t){.settings_path = settings_path,
+                                                    .hook_event = "SessionStart",
+                                                    .matcher_str = matchers[i]}) != 0) {
+            rc = CLI_ERR;
+        }
+    }
+    return rc;
+}
 
 static void cbm_install_session_reminder_script(const char *home) {
     if (!home) {
@@ -2008,10 +2198,12 @@ static int cbm_upsert_session_hooks(const char *settings_path) {
     cbm_resolve_hook_command(CMM_SESSION_REMINDER_SCRIPT, command, sizeof(command));
     int rc = 0;
     for (int i = 0; i < NUM_DIRS; i++) {
-        if (upsert_hooks_json((hooks_upsert_args_t){.settings_path = settings_path,
-                                                    .hook_event = "SessionStart",
-                                                    .matcher_str = matchers[i],
-                                                    .command_str = command}) != 0) {
+        if (upsert_hooks_json((hooks_upsert_args_t){
+                .settings_path = settings_path,
+                .hook_event = "SessionStart",
+                .matcher_str = matchers[i],
+                .command_str = command,
+            }) != 0) {
             rc = CLI_ERR;
         }
     }
@@ -2934,6 +3126,7 @@ static void print_detected_agents(const cbm_detected_agents_t *a) {
         {a->cursor, "Cursor"},
         {a->openclaw, "OpenClaw"},
         {a->kiro, "Kiro"},
+        {a->codebuddy, "CodeBuddy"},
     };
     printf("Detected agents:");
     bool any = false;
@@ -3058,6 +3251,73 @@ static void install_claude_code_config(const char *home, const char *binary_path
         if (strcmp(legacy_dir, config_dir) != 0 && dir_exists(legacy_dir)) {
             (void)fprintf(stderr,
                           "  note: $CLAUDE_CONFIG_DIR=%s used; legacy %s still exists.\n"
+                          "        Remove stale {skills,hooks,settings.json,.mcp.json} there if "
+                          "no longer needed.\n",
+                          config_dir, legacy_dir);
+        }
+    }
+}
+
+/* Install CodeBuddy-specific configs (skills, MCP, hooks).
+ * Mirrors Claude Code, but MCP lives in .codebuddy/.mcp.json. */
+static void install_codebuddy_config(const char *home, const char *binary_path, bool force,
+                                     bool dry_run) {
+    char config_dir[CLI_BUF_1K];
+    cbm_codebuddy_config_dir(home, config_dir, sizeof(config_dir));
+
+    char skills_dir[CLI_BUF_1K];
+    snprintf(skills_dir, sizeof(skills_dir), "%s/skills", config_dir);
+
+    /* Plan mode: record the planned writes and return without mutating (#388). */
+    if (g_install_plan) {
+        char p[CLI_BUF_1K];
+        plan_record("CodeBuddy", "skills", skills_dir);
+        snprintf(p, sizeof(p), "%s/.mcp.json", config_dir);
+        plan_record("CodeBuddy", "mcp_config", p);
+        snprintf(p, sizeof(p), "%s/settings.json", config_dir);
+        plan_record("CodeBuddy", "mcp_config", p);
+        snprintf(p, sizeof(p), "%s/hooks/%s", config_dir, CMM_HOOK_GATE_SCRIPT);
+        plan_record("CodeBuddy", "hook", p);
+        snprintf(p, sizeof(p), "%s/hooks/%s", config_dir, CMM_SESSION_REMINDER_SCRIPT);
+        plan_record("CodeBuddy", "hook", p);
+        return;
+    }
+
+    printf("CodeBuddy:\n");
+
+    int skill_count = cbm_install_skills(skills_dir, force, dry_run);
+    printf("  skills: %d installed\n", skill_count);
+
+    if (cbm_remove_old_monolithic_skill(skills_dir, dry_run)) {
+        printf("  removed old monolithic skill\n");
+    }
+
+    char mcp_path[CLI_BUF_1K];
+    snprintf(mcp_path, sizeof(mcp_path), "%s/.mcp.json", config_dir);
+    if (!dry_run) {
+        cbm_install_editor_mcp(binary_path, mcp_path);
+    }
+    printf("  mcp: %s\n", mcp_path);
+
+    char settings_path[CLI_BUF_1K];
+    snprintf(settings_path, sizeof(settings_path), "%s/settings.json", config_dir);
+    if (!dry_run) {
+        cbm_upsert_codebuddy_hooks(settings_path);
+        cbm_install_codebuddy_hook_gate_script(home, binary_path);
+        cbm_install_codebuddy_session_reminder_script(home);
+        cbm_upsert_codebuddy_session_hooks(settings_path);
+    }
+    printf("  hooks: PreToolUse (Grep/Glob search-graph augmenter, non-blocking)\n");
+    printf("  hooks: SessionStart (MCP usage reminder on startup/resume/clear/compact)\n");
+
+    /* Migration nudge: when CODEBUDDY_CONFIG_DIR is set and a legacy ~/.codebuddy tree
+     * still exists, mention it so users can clean up stale artifacts. */
+    if (home && home[0]) {
+        char legacy_dir[CLI_BUF_1K];
+        snprintf(legacy_dir, sizeof(legacy_dir), "%s/.codebuddy", home);
+        if (strcmp(legacy_dir, config_dir) != 0 && dir_exists(legacy_dir)) {
+            (void)fprintf(stderr,
+                          "  note: $CODEBUDDY_CONFIG_DIR=%s used; legacy %s still exists.\n"
                           "        Remove stale {skills,hooks,settings.json,.mcp.json} there if "
                           "no longer needed.\n",
                           config_dir, legacy_dir);
@@ -3259,6 +3519,9 @@ static void cbm_install_agent_configs(const char *home, const char *binary_path,
     if (agents.claude_code) {
         install_claude_code_config(home, binary_path, force, dry_run);
     }
+    if (agents.codebuddy) {
+        install_codebuddy_config(home, binary_path, force, dry_run);
+    }
     install_cli_agent_configs(&agents, home, binary_path, dry_run);
     install_editor_agent_configs(&agents, home, binary_path, dry_run);
 }
@@ -3346,6 +3609,7 @@ char *cbm_build_install_plan_json(const char *home, const char *binary_path) {
         {det.cursor, "cursor"},
         {det.openclaw, "openclaw"},
         {det.kiro, "kiro"},
+        {det.codebuddy, "codebuddy"},
     };
 
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
@@ -3574,6 +3838,32 @@ static void uninstall_claude_code(const char *home, bool dry_run) {
     printf("  removed PreToolUse + SessionStart hooks\n");
 }
 
+/* Remove CodeBuddy agent configs. */
+static void uninstall_codebuddy(const char *home, bool dry_run) {
+    char config_dir[CLI_BUF_1K];
+    cbm_codebuddy_config_dir(home, config_dir, sizeof(config_dir));
+
+    char skills_dir[CLI_BUF_1K];
+    snprintf(skills_dir, sizeof(skills_dir), "%s/skills", config_dir);
+    int removed = cbm_remove_skills(skills_dir, dry_run);
+    printf("CodeBuddy: removed %d skill(s)\n", removed);
+
+    char mcp_path[CLI_BUF_1K];
+    snprintf(mcp_path, sizeof(mcp_path), "%s/.mcp.json", config_dir);
+    if (!dry_run) {
+        cbm_remove_editor_mcp(mcp_path);
+    }
+    printf("  removed MCP config entry\n");
+
+    char settings_path[CLI_BUF_1K];
+    snprintf(settings_path, sizeof(settings_path), "%s/settings.json", config_dir);
+    if (!dry_run) {
+        cbm_remove_codebuddy_hooks(settings_path);
+        cbm_remove_codebuddy_session_hooks(settings_path);
+    }
+    printf("  removed PreToolUse + SessionStart hooks\n");
+}
+
 /* Remove MCP + instructions for a generic agent. */
 
 typedef struct {
@@ -3742,6 +4032,9 @@ int cbm_cmd_uninstall(int argc, char **argv) {
     cbm_detected_agents_t agents = cbm_detect_agents(home);
     if (agents.claude_code) {
         uninstall_claude_code(home, dry_run);
+    }
+    if (agents.codebuddy) {
+        uninstall_codebuddy(home, dry_run);
     }
     uninstall_cli_agents(&agents, home, dry_run);
     uninstall_editor_agents(&agents, home, dry_run);
