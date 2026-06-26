@@ -77,6 +77,7 @@ extern void suite_repro_grammar_build(void);
 extern void suite_repro_grammar_shells(void);
 extern void suite_repro_grammar_scientific(void);
 extern void suite_repro_grammar_markup(void);
+extern void suite_repro_grammar_misc(void);
 /* Per-LSP-pass resolution-strategy invariants */
 extern void suite_repro_lsp_c_cpp(void);
 extern void suite_repro_lsp_go_py(void);
@@ -144,6 +145,7 @@ int main(void) {
     RUN_SUITE(repro_grammar_shells);
     RUN_SUITE(repro_grammar_scientific);
     RUN_SUITE(repro_grammar_markup);
+    RUN_SUITE(repro_grammar_misc);
     RUN_SUITE(repro_lsp_c_cpp);
     RUN_SUITE(repro_lsp_go_py);
     RUN_SUITE(repro_lsp_ts);

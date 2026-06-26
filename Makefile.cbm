@@ -440,6 +440,7 @@ TEST_REPRO_SRCS = \
     tests/repro/repro_grammar_shells.c \
     tests/repro/repro_grammar_scientific.c \
     tests/repro/repro_grammar_markup.c \
+    tests/repro/repro_grammar_misc.c \
     tests/repro/repro_lsp_c_cpp.c \
     tests/repro/repro_lsp_go_py.c \
     tests/repro/repro_lsp_ts.c \
