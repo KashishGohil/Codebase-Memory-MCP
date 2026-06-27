@@ -150,10 +150,9 @@ static const char *generic_keywords[] = {
  * which are ordinary built-in functions invoked as calls. Using the generic
  * list would wrongly drop `include`/`require` call edges, so Puppet gets its
  * own reserved-word set that omits them. */
-static const char *puppet_keywords[] = {
-    "true",   "false", "undef",  "if",    "elsif", "else", "unless", "case",
-    "and",    "or",    "in",     "node",  "class", "define", "inherits", "default",
-    "return", NULL};
+static const char *puppet_keywords[] = {"true",   "false",  "undef",    "if",      "elsif",  "else",
+                                        "unless", "case",   "and",      "or",      "in",     "node",
+                                        "class",  "define", "inherits", "default", "return", NULL};
 
 // True when `label` names a type-like container definition (see cbm.h). Single
 // source of truth for the type-resolution / registry / IMPLEMENTS / LSP-type
@@ -884,9 +883,7 @@ const char *cbm_enclosing_func_qn(CBMArena *a, TSNode node, CBMLanguage lang, co
             if (!cname || !cname[0]) {
                 continue;
             }
-            class_chain = class_chain
-                              ? cbm_arena_sprintf(a, "%s.%s", cname, class_chain)
-                              : cname;
+            class_chain = class_chain ? cbm_arena_sprintf(a, "%s.%s", cname, class_chain) : cname;
         }
         if (class_chain) {
             const char *class_qn = cbm_fqn_compute(a, project, rel_path, class_chain);

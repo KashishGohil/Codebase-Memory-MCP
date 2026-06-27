@@ -1430,8 +1430,8 @@ static const char *kconfig_module_types[] = {"source", NULL};
 /* `anonymous_python_function` is the tree-sitter-bitbake node for a
  * `python do_foo() {...}` task; `function_definition` is a `do_foo() {...}`
  * shell task. (`recipe` is the file root, not a function.) */
-static const char *bitbake_func_types[] = {"function_definition",
-                                           "anonymous_python_function", NULL};
+static const char *bitbake_func_types[] = {"function_definition", "anonymous_python_function",
+                                           NULL};
 static const char *bitbake_var_types[] = {"variable_assignment", NULL};
 static const char *bitbake_call_types[] = {"call", NULL};
 static const char *bitbake_import_types[] = {

@@ -452,10 +452,9 @@ static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
         cbm_svc_kind_t esvc = cbm_service_pattern_match(call->callee_name);
         if (esvc == CBM_SVC_HTTP || esvc == CBM_SVC_ASYNC) {
             const char *u = call->first_string_arg;
-            bool has_url_or_topic =
-                u && u[0] != '\0' &&
-                (u[0] == '/' || strstr(u, "://") != NULL ||
-                 (esvc == CBM_SVC_ASYNC && strlen(u) > PAIR_LEN));
+            bool has_url_or_topic = u && u[0] != '\0' &&
+                                    (u[0] == '/' || strstr(u, "://") != NULL ||
+                                     (esvc == CBM_SVC_ASYNC && strlen(u) > PAIR_LEN));
             if (has_url_or_topic) {
                 cbm_resolution_t svc_res = {.qualified_name = call->callee_name,
                                             .confidence = PC_SVC_PATTERN_CONF,
@@ -492,9 +491,9 @@ static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
     cbm_svc_kind_t svc = cbm_service_pattern_match(res.qualified_name);
     if (svc == CBM_SVC_HTTP || svc == CBM_SVC_ASYNC) {
         const char *u = call->first_string_arg;
-        bool has_url_or_topic =
-            u && u[0] != '\0' &&
-            (u[0] == '/' || strstr(u, "://") != NULL || (svc == CBM_SVC_ASYNC && strlen(u) > PAIR_LEN));
+        bool has_url_or_topic = u && u[0] != '\0' &&
+                                (u[0] == '/' || strstr(u, "://") != NULL ||
+                                 (svc == CBM_SVC_ASYNC && strlen(u) > PAIR_LEN));
         if (has_url_or_topic) {
             emit_http_async_edge(ctx, call, source_node, NULL, &res, svc);
             return SKIP_ONE;

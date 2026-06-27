@@ -608,8 +608,7 @@ static TSNode resolve_toplevel_arrow_name(TSNode node, const char *kind) {
         return null_node;
     }
     const char *pk = ts_node_type(parent);
-    if (strcmp(pk, "variable_declarator") == 0 ||
-        strcmp(pk, "public_field_definition") == 0) {
+    if (strcmp(pk, "variable_declarator") == 0 || strcmp(pk, "public_field_definition") == 0) {
         /* `const f = () => {}` and the class-field form `f = () => {}` both name
          * the arrow via the parent's `name` child (#new_ts_class_field_arrow):
          * resolving it lets push_boundary_scopes push a SCOPE_FUNC so in-body
@@ -861,8 +860,8 @@ TSNode cbm_resolve_func_name(TSNode node, CBMLanguage lang) {
          * field (the field is only populated for the bare `function foo()` form).
          * func_name_node() already handled the field case above; here we cover the
          * function_name child so local functions also produce a Function def. */
-        if (lang == CBM_LANG_TEAL && (strcmp(kind, "function_statement") == 0 ||
-                                      strcmp(kind, "function_signature") == 0)) {
+        if (lang == CBM_LANG_TEAL &&
+            (strcmp(kind, "function_statement") == 0 || strcmp(kind, "function_signature") == 0)) {
             TSNode fn = cbm_find_child_by_kind(node, "function_name");
             if (!ts_node_is_null(fn)) {
                 return fn;
@@ -3784,9 +3783,8 @@ static TSNode resolve_method_name(TSNode child, CBMLanguage lang) {
     // Pony: `fun`/`be`/`new` members are `method`/`constructor`/`ffi_method`
     // nodes with no `name` field; the name is the first plain `identifier` child
     // (mirrors the free-function case in cbm_resolve_func_name).
-    if (lang == CBM_LANG_PONY &&
-        (strcmp(ck, "method") == 0 || strcmp(ck, "constructor") == 0 ||
-         strcmp(ck, "ffi_method") == 0)) {
+    if (lang == CBM_LANG_PONY && (strcmp(ck, "method") == 0 || strcmp(ck, "constructor") == 0 ||
+                                  strcmp(ck, "ffi_method") == 0)) {
         return cbm_find_child_by_kind(child, "identifier");
     }
 
@@ -4925,8 +4923,7 @@ static void extract_var_names(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec
      * named by its module_path. The default fallback misses both (no `name`
      * field; child is a require_spec, not a bare identifier). */
     case CBM_LANG_GOMOD:
-        if (strcmp(kind, "require_directive") == 0 ||
-            strcmp(kind, "replace_directive") == 0) {
+        if (strcmp(kind, "require_directive") == 0 || strcmp(kind, "replace_directive") == 0) {
             uint32_t rc = ts_node_named_child_count(node);
             for (uint32_t i = 0; i < rc; i++) {
                 TSNode spec = ts_node_named_child(node, i);

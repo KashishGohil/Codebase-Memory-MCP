@@ -96,14 +96,26 @@ static bool lisp_head_is_def(const char *t) {
     if (!t) {
         return false;
     }
-    static const char *heads[] = {
-        "defn",          "defn-",          "def",
-        "defmacro",      "defmulti",       "defmethod",
-        "defprotocol",   "defrecord",      "deftype",
-        "definterface",  "defonce",        "define",
-        "define-syntax", "define-values",  "define-syntax-rule",
-        "define-struct", "define-record-type", "define/contract",
-        "struct",        NULL};
+    static const char *heads[] = {"defn",
+                                  "defn-",
+                                  "def",
+                                  "defmacro",
+                                  "defmulti",
+                                  "defmethod",
+                                  "defprotocol",
+                                  "defrecord",
+                                  "deftype",
+                                  "definterface",
+                                  "defonce",
+                                  "define",
+                                  "define-syntax",
+                                  "define-values",
+                                  "define-syntax-rule",
+                                  "define-struct",
+                                  "define-record-type",
+                                  "define/contract",
+                                  "struct",
+                                  NULL};
     for (int i = 0; heads[i]; i++) {
         if (strcmp(t, heads[i]) == 0) {
             return true;
@@ -265,8 +277,7 @@ static const char *compute_func_qn(CBMExtractCtx *ctx, TSNode node, const CBMLan
      * is available to read the attribute. Other CFML func nodes (embedded
      * CFScript function_declaration/_expression) fall through to the shared
      * resolver below. */
-    if (ctx->language == CBM_LANG_CFML &&
-        strcmp(ts_node_type(node), "cf_function_tag") == 0) {
+    if (ctx->language == CBM_LANG_CFML && strcmp(ts_node_type(node), "cf_function_tag") == 0) {
         return compute_cfml_func_qn(ctx, node);
     }
 
