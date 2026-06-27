@@ -367,6 +367,29 @@ static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
 
     /* LSP-resolved calls take precedence over registry-textual matching. */
     const CBMResolvedCall *lsp = cbm_pipeline_find_lsp_resolution(lsp_calls, call);
+    /* TEMP LSPDIAG2 — characterize remaining LSP-strategy reds (remove after). */
+    {
+        printf("[LSPDIAG2] lang=%d enc=%s callee=%s lsp=%s arr=%d\n", (int)lang,
+               call->enclosing_func_qn ? call->enclosing_func_qn : "(null)",
+               call->callee_name ? call->callee_name : "(null)", lsp ? "HIT" : "miss",
+               lsp_calls ? lsp_calls->count : -1);
+        if (lsp) {
+            const cbm_gbuf_node_t *_tn =
+                cbm_pipeline_lsp_target_node(ctx->gbuf, ctx->project_name, lsp->callee_qn);
+            printf("[LSPDIAG2]   HIT strat=%s callee_qn=%s target=%s\n",
+                   lsp->strategy ? lsp->strategy : "(null)",
+                   lsp->callee_qn ? lsp->callee_qn : "(null)",
+                   _tn ? "resolved" : "NULL(no-edge)");
+        } else if (lsp_calls) {
+            for (int _k = 0; _k < lsp_calls->count && _k < 5; _k++) {
+                printf("[LSPDIAG2]   miss rc[%d] caller=%s callee_qn=%s strat=%s\n", _k,
+                       lsp_calls->items[_k].caller_qn ? lsp_calls->items[_k].caller_qn : "(null)",
+                       lsp_calls->items[_k].callee_qn ? lsp_calls->items[_k].callee_qn : "(null)",
+                       lsp_calls->items[_k].strategy ? lsp_calls->items[_k].strategy : "(null)");
+            }
+        }
+    }
+    /* END TEMP LSPDIAG2 */
     if (lsp) {
         const cbm_gbuf_node_t *target_node =
             cbm_pipeline_lsp_target_node(ctx->gbuf, ctx->project_name, lsp->callee_qn);
