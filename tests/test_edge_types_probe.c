@@ -198,6 +198,20 @@ TEST(handles_fastapi_python) {
     PASS();
 }
 
+/* DRF action (Python) — @action decorator on ViewSet methods */
+TEST(handles_drf_action_python) {
+    static const EtFile f[] = {
+        {"viewsets.py",
+         "from rest_framework.decorators import action\n"
+         "from rest_framework.viewsets import ViewSet\n\n"
+         "class CustomerTaskViewSet(ViewSet):\n"
+         "    @action(detail=True, methods=[\"post\"])\n"
+         "    def approve_draft_with_charge(self, request, pk=None):\n"
+         "        pass\n"}};
+    ASSERT_TRUE(et_edge_present(f, 1, "HANDLES", 1));
+    PASS();
+}
+
 /* Express (JS/TS) — route registration must resolve to a callee QN containing
  * the "express" library substring AND pass the handler as an identifier (not an
  * inline-object method, which is never registered as a resolvable node).  We use
@@ -1371,6 +1385,7 @@ SUITE(edge_types_probe) {
     /* HANDLES — route→handler across web frameworks (8 frameworks) */
     RUN_TEST(handles_flask_python);
     RUN_TEST(handles_fastapi_python);
+    RUN_TEST(handles_drf_action_python);
     RUN_TEST(handles_express_ts);
     RUN_TEST(handles_fastify_js);
     RUN_TEST(handles_gin_go);

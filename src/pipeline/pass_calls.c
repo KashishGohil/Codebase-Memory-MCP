@@ -214,7 +214,7 @@ static void handle_route_registration(cbm_pipeline_ctx_t *ctx, const CBMCall *ca
                 char esc_h[CBM_SZ_512];
                 cbm_json_escape(esc_h, sizeof(esc_h), hres.qualified_name);
                 snprintf(hprops, sizeof(hprops), "{\"handler\":\"%s\"}", esc_h);
-                cbm_gbuf_insert_edge(ctx->gbuf, handler->id, route_id, "HANDLES", hprops);
+                cbm_gbuf_insert_edge(ctx->gbuf, route_id, handler->id, "HANDLES", hprops);
             }
         }
     }

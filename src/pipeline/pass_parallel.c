@@ -514,7 +514,7 @@ static void insert_def_into_gbuf(extract_worker_state_t *ws, const cbm_file_info
         char esc_h[CBM_SZ_512];
         cbm_json_escape(esc_h, sizeof(esc_h), def->qualified_name);
         snprintf(hprops, sizeof(hprops), "{\"handler\":\"%s\"}", esc_h);
-        cbm_gbuf_insert_edge(ws->local_gbuf, func_id, route_id, "HANDLES", hprops);
+        cbm_gbuf_insert_edge(ws->local_gbuf, route_id, func_id, "HANDLES", hprops);
     }
 }
 
@@ -1321,7 +1321,7 @@ static void emit_route_registration(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *sou
                 char esc_h2[CBM_SZ_512];
                 cbm_json_escape(esc_h2, sizeof(esc_h2), hres.qualified_name);
                 snprintf(hp, sizeof(hp), "{\"handler\":\"%s\"}", esc_h2);
-                cbm_gbuf_insert_edge(gbuf, h->id, rid, "HANDLES", hp);
+                cbm_gbuf_insert_edge(gbuf, rid, h->id, "HANDLES", hp);
             }
         }
     }
