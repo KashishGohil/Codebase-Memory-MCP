@@ -1192,9 +1192,11 @@ static TSNode find_drf_kwarg_in_args(CBMArena *a, TSNode args, const char *kwarg
     uint32_t nc = ts_node_named_child_count(args);
     for (uint32_t ai = 0; ai < nc; ai++) {
         TSNode child = ts_node_named_child(args, ai);
-        if (strcmp(ts_node_type(child), "keyword_argument") != 0) continue;
+        if (strcmp(ts_node_type(child), "keyword_argument") != 0)
+            continue;
         TSNode name_node = ts_node_child_by_field_name(child, TS_FIELD("name"));
-        if (ts_node_is_null(name_node)) continue;
+        if (ts_node_is_null(name_node))
+            continue;
         char *name = cbm_node_text(a, name_node, source);
         if (name && strcmp(name, kwarg_name) == 0) {
             return ts_node_child_by_field_name(child, TS_FIELD("value"));
@@ -1235,18 +1237,23 @@ static bool try_drf_action_decorator(CBMArena *a, TSNode dchild, const char *sou
         uint32_t mc = ts_node_named_child_count(methods_val);
         for (uint32_t mi = 0; mi < mc && !method; mi++) {
             TSNode item = ts_node_named_child(methods_val, mi);
-            if (strcmp(ts_node_type(item), "string") != 0) continue;
+            if (strcmp(ts_node_type(item), "string") != 0)
+                continue;
             char *text = cbm_node_text(a, item, source);
-            if (!text) continue;
+            if (!text)
+                continue;
             int tlen = (int)strlen(text);
-            if (tlen < PAIR_CHARS || (text[0] != '"' && text[0] != '\'')) continue;
+            if (tlen < PAIR_CHARS || (text[0] != '"' && text[0] != '\''))
+                continue;
             char inner[CBM_SZ_16];
             int ilen = tlen - PAIR_CHARS;
-            if (ilen <= 0 || ilen >= (int)sizeof(inner)) continue;
+            if (ilen <= 0 || ilen >= (int)sizeof(inner))
+                continue;
             memcpy(inner, text + SKIP_CHAR, (size_t)ilen);
             inner[ilen] = '\0';
             for (int ci = 0; inner[ci]; ci++) {
-                if (inner[ci] >= 'a' && inner[ci] <= 'z') inner[ci] -= 32;
+                if (inner[ci] >= 'a' && inner[ci] <= 'z')
+                    inner[ci] -= 32;
             }
             method = cbm_arena_strdup(a, inner);
         }
