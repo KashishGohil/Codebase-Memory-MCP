@@ -2444,6 +2444,15 @@ static const CBMType *kt_eval_navigation_expression_type(KotlinLSPContext *ctx, 
                     cbm_registry_lookup_type(ctx->registry, recv_qn);
                 strat = (recv_rt && recv_rt->is_object) ? "lsp_kt_static" : "lsp_kt_method";
             }
+            /* A call through the lambda implicit parameter `it` (e.g. inside
+             * `x.let { it.m() }`) is lambda-scoped dispatch, not a plain method. */
+            if (kt_node_is(receiver_node, "identifier") ||
+                kt_node_is(receiver_node, "simple_identifier")) {
+                char *rtext = kt_node_text(ctx, receiver_node);
+                if (rtext && strcmp(rtext, "it") == 0) {
+                    strat = "lsp_kt_lambda_it";
+                }
+            }
             kt_emit_resolved(ctx, rf->qualified_name, strat, KT_CONF_METHOD);
             if (rf->signature && rf->signature->kind == CBM_TYPE_FUNC &&
                 rf->signature->data.func.return_types && rf->signature->data.func.return_types[0]) {
