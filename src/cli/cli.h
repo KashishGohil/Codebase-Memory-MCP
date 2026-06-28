@@ -128,6 +128,7 @@ typedef struct {
     bool cursor;      /* ~/.cursor/ exists */
     bool openclaw;    /* ~/.openclaw/ exists */
     bool kiro;        /* ~/.kiro/ exists */
+    bool pi;          /* ~/.pi/agent/ exists */
 } cbm_detected_agents_t;
 
 /* Detect which coding agents are installed.

@@ -1143,6 +1143,10 @@ cbm_detected_agents_t cbm_detect_agents(const char *home_dir) {
     snprintf(path, sizeof(path), "%s/.kiro", home_dir);
     agents.kiro = dir_exists(path);
 
+    /* Pi: ~/.pi/agent/ */
+    snprintf(path, sizeof(path), "%s/.pi/agent", home_dir);
+    agents.pi = dir_exists(path);
+
     return agents;
 }
 
@@ -2934,6 +2938,7 @@ static void print_detected_agents(const cbm_detected_agents_t *a) {
         {a->cursor, "Cursor"},
         {a->openclaw, "OpenClaw"},
         {a->kiro, "Kiro"},
+        {a->pi, "Pi"},
     };
     printf("Detected agents:");
     bool any = false;
