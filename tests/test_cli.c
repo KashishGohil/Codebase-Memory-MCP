@@ -1774,6 +1774,23 @@ TEST(cli_detect_agents_finds_kiro) {
     PASS();
 }
 
+TEST(cli_detect_agents_finds_pi) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        FAIL("cbm_mkdtemp failed");
+
+    char dir[512];
+    snprintf(dir, sizeof(dir), "%s/.pi/agent", tmpdir);
+    test_mkdirp(dir);
+
+    cbm_detected_agents_t agents = cbm_detect_agents(tmpdir);
+    ASSERT_TRUE(agents.pi);
+
+    test_rmdir_r(tmpdir);
+    PASS();
+}
+
 TEST(cli_detect_agents_none_found) {
     char tmpdir[256];
     snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
@@ -1796,6 +1813,7 @@ TEST(cli_detect_agents_none_found) {
     ASSERT_FALSE(agents.antigravity);
     ASSERT_FALSE(agents.kilocode);
     ASSERT_FALSE(agents.kiro);
+    ASSERT_FALSE(agents.pi);
 
     if (saved_ccd_copy) {
         cbm_setenv("CLAUDE_CONFIG_DIR", saved_ccd_copy, 1);
@@ -1999,6 +2017,54 @@ TEST(cli_upsert_antigravity_mcp_replace) {
                     "{\"mcpServers\":{\"codebase-memory-mcp\":{\"command\":\"/old/path\"}}}");
 
     int rc = cbm_upsert_antigravity_mcp("/new/path/codebase-memory-mcp", configpath);
+    ASSERT_EQ(rc, 0);
+
+    const char *data = read_test_file(configpath);
+    ASSERT_NOT_NULL(data);
+    ASSERT(strstr(data, "/old/path") == NULL);
+    ASSERT(strstr(data, "/new/path/codebase-memory-mcp") != NULL);
+
+    test_rmdir_r(tmpdir);
+    PASS();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  Group B: MCP Config Upsert — Pi agent
+ * ═══════════════════════════════════════════════════════════════════ */
+
+TEST(cli_upsert_pi_mcp_fresh) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-pi-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        FAIL("cbm_mkdtemp failed");
+
+    char configpath[512];
+    snprintf(configpath, sizeof(configpath), "%s/mcp.json", tmpdir);
+
+    int rc = cbm_upsert_pi_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
+    ASSERT_EQ(rc, 0);
+
+    const char *data = read_test_file(configpath);
+    ASSERT_NOT_NULL(data);
+    ASSERT(strstr(data, "mcpServers") != NULL);
+    ASSERT(strstr(data, "codebase-memory-mcp") != NULL);
+
+    test_rmdir_r(tmpdir);
+    PASS();
+}
+
+TEST(cli_upsert_pi_mcp_replace) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-pi-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        FAIL("cbm_mkdtemp failed");
+
+    char configpath[512];
+    snprintf(configpath, sizeof(configpath), "%s/mcp.json", tmpdir);
+    write_test_file(configpath,
+                    "{\"mcpServers\":{\"codebase-memory-mcp\":{\"command\":\"/old/path\"}}}");
+
+    int rc = cbm_upsert_pi_mcp("/new/path/codebase-memory-mcp", configpath);
     ASSERT_EQ(rc, 0);
 
     const char *data = read_test_file(configpath);
@@ -2756,6 +2822,7 @@ SUITE(cli) {
     RUN_TEST(cli_detect_agents_finds_antigravity);
     RUN_TEST(cli_detect_agents_finds_kilocode);
     RUN_TEST(cli_detect_agents_finds_kiro);
+    RUN_TEST(cli_detect_agents_finds_pi);
     RUN_TEST(cli_detect_agents_none_found);
 
     /* Codex MCP config upsert (3 tests — group B) */
@@ -2773,6 +2840,10 @@ SUITE(cli) {
     /* Antigravity MCP config upsert (2 tests — group B) */
     RUN_TEST(cli_upsert_antigravity_mcp_fresh);
     RUN_TEST(cli_upsert_antigravity_mcp_replace);
+
+    /* Pi agent MCP config upsert (2 tests — group B) */
+    RUN_TEST(cli_upsert_pi_mcp_fresh);
+    RUN_TEST(cli_upsert_pi_mcp_replace);
 
     /* Instructions file upsert (6 tests — group C) */
     RUN_TEST(cli_upsert_instructions_fresh);
