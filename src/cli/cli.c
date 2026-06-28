@@ -3252,6 +3252,11 @@ static void install_editor_agent_configs(const cbm_detected_agents_t *agents, co
         install_generic_agent_config("Kiro", binary_path, cp, NULL, dry_run,
                                      cbm_install_editor_mcp);
     }
+    if (agents->pi) {
+        char cp[CLI_BUF_1K];
+        snprintf(cp, sizeof(cp), "%s/.pi/agent/mcp.json", home);
+        install_generic_agent_config("Pi", binary_path, cp, NULL, dry_run, cbm_install_editor_mcp);
+    }
 }
 
 static void cbm_install_agent_configs(const char *home, const char *binary_path, bool force,
@@ -3351,6 +3356,7 @@ char *cbm_build_install_plan_json(const char *home, const char *binary_path) {
         {det.cursor, "cursor"},
         {det.openclaw, "openclaw"},
         {det.kiro, "kiro"},
+        {det.pi, "pi"},
     };
 
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
@@ -3723,6 +3729,12 @@ static void uninstall_editor_agents(const cbm_detected_agents_t *agents, const c
         char cp[CLI_BUF_1K];
         snprintf(cp, sizeof(cp), "%s/.kiro/settings/mcp.json", home);
         uninstall_agent_mcp_instr((mcp_uninstall_args_t){"Kiro", cp, NULL}, dry_run,
+                                  cbm_remove_editor_mcp);
+    }
+    if (agents->pi) {
+        char cp[CLI_BUF_1K];
+        snprintf(cp, sizeof(cp), "%s/.pi/agent/mcp.json", home);
+        uninstall_agent_mcp_instr((mcp_uninstall_args_t){"Pi", cp, NULL}, dry_run,
                                   cbm_remove_editor_mcp);
     }
 }
