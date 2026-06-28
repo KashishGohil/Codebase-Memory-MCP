@@ -27,6 +27,7 @@ enum { CBM_DIR_PERMS = 0755, PL_RING = 4, PL_RING_MASK = 3, PL_SEQ_PASSES = 6, P
 #include "foundation/platform.h"
 #include "foundation/compat_fs.h"
 #include "foundation/log.h"
+#include "foundation/str_util.h"
 #include "foundation/hash_table.h"
 #include "foundation/compat.h"
 #include "foundation/compat_thread.h"
@@ -173,6 +174,27 @@ void cbm_pipeline_set_persistence(cbm_pipeline_t *p, bool enabled) {
     if (p) {
         p->persistence = enabled;
     }
+}
+
+bool cbm_pipeline_set_project_name(cbm_pipeline_t *p, const char *name) {
+    if (!p || !name || !name[0]) {
+        return false;
+    }
+
+    char *normalized = cbm_project_name_from_path(name);
+    if (!normalized) {
+        return false;
+    }
+    if (!cbm_validate_project_name(normalized)) {
+        free(normalized);
+        return false;
+    }
+
+    free(p->project_name);
+    p->project_name = normalized;
+    free(p->branch_qn);
+    p->branch_qn = cbm_git_context_branch_qn(p->project_name, &p->git_ctx);
+    return true;
 }
 
 void cbm_pipeline_free(cbm_pipeline_t *p) {

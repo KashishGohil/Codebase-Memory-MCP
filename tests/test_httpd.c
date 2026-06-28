@@ -14,6 +14,8 @@
 #include "../src/foundation/compat_fs.h"
 #include "../src/foundation/compat_thread.h"
 #include "../src/foundation/log.h"
+#include "../src/foundation/platform.h"
+#include "../src/cli/cli.h"
 #include "../src/ui/http_server.h"
 #include "test_framework.h"
 #include "test_helpers.h"
@@ -560,6 +562,61 @@ TEST(ui_server_browse_traversal_probe) {
     PASS();
 }
 
+TEST(ui_server_ui_config_detects_zh_accept_language) {
+    th_server_t ts;
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    char resp[4096];
+    int n = th_http(cbm_http_server_port(ts.srv),
+                    "GET /api/ui-config HTTP/1.1\r\n"
+                    "Accept-Language: zh-CN,zh;q=0.9,en;q=0.8\r\n"
+                    "\r\n",
+                    resp, sizeof(resp));
+    ASSERT_TRUE(n > 0);
+    ASSERT_EQ(th_status(resp), 200);
+    ASSERT_NOT_NULL(strstr(resp, "\"lang\":\"zh\""));
+
+    th_server_stop(&ts);
+    PASS();
+}
+
+TEST(ui_server_ui_config_prefers_config_lang) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_httpd_cfg_XXXXXX");
+    char *td = cbm_mkdtemp(tmpdir);
+    ASSERT_NOT_NULL(td);
+
+    char *old_home = getenv("HOME") ? strdup(getenv("HOME")) : NULL;
+    cbm_setenv("HOME", td, 1);
+
+    char cache_dir[1024];
+    snprintf(cache_dir, sizeof(cache_dir), "%s", cbm_resolve_cache_dir());
+    cbm_config_t *cfg = cbm_config_open(cache_dir);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_EQ(cbm_config_set(cfg, CBM_CONFIG_UI_LANG, "zh"), 0);
+    cbm_config_close(cfg);
+
+    th_server_t ts;
+    ASSERT_EQ(th_server_start(&ts), 0);
+
+    char resp[4096];
+    int n = th_http(cbm_http_server_port(ts.srv),
+                    "GET /api/ui-config HTTP/1.1\r\n"
+                    "Accept-Language: en-US,en;q=0.9\r\n"
+                    "\r\n",
+                    resp, sizeof(resp));
+    ASSERT_TRUE(n > 0);
+    ASSERT_EQ(th_status(resp), 200);
+    ASSERT_NOT_NULL(strstr(resp, "\"lang\":\"zh\""));
+
+    th_server_stop(&ts);
+    if (old_home) {
+        cbm_setenv("HOME", old_home, 1);
+        free(old_home);
+    }
+    PASS();
+}
+
 TEST(ui_server_slow_request_hits_deadline) {
     th_server_t ts;
     ASSERT_EQ(th_server_start(&ts), 0);
@@ -660,6 +717,8 @@ SUITE(httpd) {
     RUN_TEST(ui_server_encoded_slash_not_routed);
     RUN_TEST(ui_server_nul_in_target_rejected);
     RUN_TEST(ui_server_browse_traversal_probe);
+    RUN_TEST(ui_server_ui_config_detects_zh_accept_language);
+    RUN_TEST(ui_server_ui_config_prefers_config_lang);
     RUN_TEST(ui_server_slow_request_hits_deadline);
     RUN_TEST(ui_server_access_log_redacts_query);
     RUN_TEST(ui_server_stop_joins_cleanly);

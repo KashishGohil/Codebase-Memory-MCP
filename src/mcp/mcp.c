@@ -325,6 +325,8 @@ static const tool_def_t TOOLS[] = {
      "\"target_projects\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},"
      "\"description\":\"Projects to search for cross-repo links (cross-repo-intelligence mode). "
      "Use [\\\"*\\\"] for all indexed projects. Run list_projects to see available projects.\"},"
+     "\"name\":{\"type\":\"string\",\"description\":"
+     "\"Override the derived project name. Unicode is preserved and unsafe path characters are normalized.\"},"
      "\"persistence\":{\"type\":\"boolean\",\"default\":false,\"description\":"
      "\"Write compressed artifact to .codebase-memory/graph.db.zst for team sharing. "
      "Teammates can bootstrap from the artifact instead of full re-indexing.\"}"
@@ -2919,15 +2921,18 @@ static bool build_index_success_response(cbm_mcp_server_t *srv, yyjson_mut_doc *
 static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
     char *repo_path = cbm_mcp_get_string_arg(args, "repo_path");
     char *mode_str = cbm_mcp_get_string_arg(args, "mode");
+    char *name_override = cbm_mcp_get_string_arg(args, "name");
     cbm_normalize_path_sep(repo_path);
 
     if (!repo_path) {
         free(mode_str);
+        free(name_override);
         return cbm_mcp_text_result("repo_path is required", true);
     }
 
     if (mode_str && strcmp(mode_str, "cross-repo-intelligence") == 0) {
         free(mode_str);
+        free(name_override);
         char *result = handle_cross_repo_mode(repo_path, args);
         free(repo_path);
         return result;
@@ -2945,9 +2950,17 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
 
     cbm_pipeline_t *p = cbm_pipeline_new(repo_path, NULL, mode);
     if (!p) {
+        free(name_override);
         free(repo_path);
         return cbm_mcp_text_result("failed to create pipeline", true);
     }
+    if (name_override && name_override[0] && !cbm_pipeline_set_project_name(p, name_override)) {
+        cbm_pipeline_free(p);
+        free(name_override);
+        free(repo_path);
+        return cbm_mcp_text_result("invalid project name", true);
+    }
+    free(name_override);
     cbm_pipeline_set_persistence(p, persistence);
 
     char *project_name = heap_strdup(cbm_pipeline_project_name(p));

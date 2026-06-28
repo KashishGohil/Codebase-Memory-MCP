@@ -207,6 +207,16 @@ TEST(mcp_tools_list_latest_metadata) {
     PASS();
 }
 
+TEST(mcp_index_repository_declares_name_override_issue571) {
+    char *json = cbm_mcp_tools_list();
+    ASSERT_NOT_NULL(json);
+    ASSERT_NOT_NULL(strstr(json, "\"index_repository\""));
+    ASSERT_NOT_NULL(strstr(json, "\"name\":{\"type\":\"string\""));
+    ASSERT_NOT_NULL(strstr(json, "Override the derived project name"));
+    free(json);
+    PASS();
+}
+
 TEST(mcp_tools_array_schemas_have_items) {
     /* VS Code 1.112+ rejects array schemas without "items" (see
      * https://github.com/microsoft/vscode/issues/248810).
@@ -2417,6 +2427,7 @@ SUITE(mcp) {
     RUN_TEST(mcp_initialize_response);
     RUN_TEST(mcp_tools_list);
     RUN_TEST(mcp_tools_list_latest_metadata);
+    RUN_TEST(mcp_index_repository_declares_name_override_issue571);
     RUN_TEST(mcp_tools_array_schemas_have_items);
     RUN_TEST(mcp_text_result);
     RUN_TEST(mcp_text_result_skips_structured_content_for_plain_text);

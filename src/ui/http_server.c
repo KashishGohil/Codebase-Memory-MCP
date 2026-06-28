@@ -19,6 +19,7 @@
 #include "ui/layout3d.h"
 #include "mcp/mcp.h"
 #include "store/store.h"
+#include "cli/cli.h"
 /* pipeline.h no longer needed — indexing runs as subprocess */
 #include "foundation/log.h"
 #include "foundation/platform.h"
@@ -79,6 +80,33 @@ static void update_cors(const cbm_http_req_t *req) {
                  "Access-Control-Allow-Headers: Content-Type\r\n");
     }
     snprintf(g_cors_json, sizeof(g_cors_json), "%sContent-Type: application/json\r\n", g_cors);
+}
+
+static const char *detect_ui_lang(const char *accept_language) {
+    if (accept_language && (strstr(accept_language, "zh-CN") || strstr(accept_language, "zh"))) {
+        return "zh";
+    }
+    return "en";
+}
+
+static void handle_ui_config(cbm_http_conn_t *c, const cbm_http_req_t *req) {
+    const char *lang = NULL;
+    char cache_dir[1024];
+    snprintf(cache_dir, sizeof(cache_dir), "%s", cbm_resolve_cache_dir());
+    cbm_config_t *cfg = cbm_config_open(cache_dir);
+    if (cfg) {
+        const char *pinned = cbm_config_get(cfg, CBM_CONFIG_UI_LANG, "auto");
+        if (strcmp(pinned, "zh") == 0 || strcmp(pinned, "en") == 0) {
+            lang = pinned;
+        }
+    }
+
+    char lang_buf[8];
+    snprintf(lang_buf, sizeof(lang_buf), "%s", lang ? lang : detect_ui_lang(req->accept_language));
+    if (cfg) {
+        cbm_config_close(cfg);
+    }
+    cbm_http_replyf(c, 200, g_cors_json, "{\"lang\":\"%s\"}", lang_buf);
 }
 
 /* ── Server state ─────────────────────────────────────────────── */
@@ -398,6 +426,26 @@ static void handle_process_kill(cbm_http_conn_t *c, const cbm_http_req_t *req) {
 
 #include <dirent.h>
 
+static void append_roots_json(char *buf, size_t bufsz, int *pos) {
+    *pos += snprintf(buf + *pos, bufsz - (size_t)*pos, ",\"roots\":[");
+#ifdef _WIN32
+    DWORD drives = GetLogicalDrives();
+    int count = 0;
+    for (int i = 0; i < 26; i++) {
+        if (!(drives & (1u << i))) {
+            continue;
+        }
+        if (count++ > 0) {
+            buf[(*pos)++] = ',';
+        }
+        *pos += snprintf(buf + *pos, bufsz - (size_t)*pos, "\"%c:/\"", 'A' + i);
+    }
+#else
+    *pos += snprintf(buf + *pos, bufsz - (size_t)*pos, "\"/\"");
+#endif
+    *pos += snprintf(buf + *pos, bufsz - (size_t)*pos, "]");
+}
+
 /* GET /api/browse?path=/some/dir — list subdirectories for file picker */
 static void handle_browse(cbm_http_conn_t *c, const cbm_http_req_t *req) {
     char path[1024] = {0};
@@ -469,7 +517,9 @@ static void handle_browse(cbm_http_conn_t *c, const cbm_http_req_t *req) {
     {
         char esc_parent[2048];
         cbm_json_escape(esc_parent, (int)sizeof(esc_parent), parent);
-        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "],\"parent\":\"%s\"}", esc_parent);
+        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "],\"parent\":\"%s\"", esc_parent);
+        append_roots_json(buf, sizeof(buf), &pos);
+        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "}");
     }
     cbm_http_replyf(c, 200, g_cors_json, "%s", buf);
 }
@@ -703,21 +753,18 @@ static void *index_thread_fn(void *arg) {
 
     char log_file[256];
 
-    /* JSON-escape root_path to prevent injection via double-quotes or backslashes */
+    /* JSON-escape root_path and optional project name. */
     char escaped_path[2048];
-    {
-        const char *s = job->root_path;
-        size_t j = 0;
-        for (; *s && j < sizeof(escaped_path) - 2; s++) {
-            if (*s == '"' || *s == '\\') {
-                escaped_path[j++] = '\\';
-            }
-            escaped_path[j++] = *s;
-        }
-        escaped_path[j] = '\0';
-    }
+    cbm_json_escape(escaped_path, (int)sizeof(escaped_path), job->root_path);
+    char escaped_name[512];
+    cbm_json_escape(escaped_name, (int)sizeof(escaped_name), job->project_name);
     char json_arg[4096];
-    snprintf(json_arg, sizeof(json_arg), "{\"repo_path\":\"%s\"}", escaped_path);
+    if (job->project_name[0]) {
+        snprintf(json_arg, sizeof(json_arg), "{\"repo_path\":\"%s\",\"name\":\"%s\"}", escaped_path,
+                 escaped_name);
+    } else {
+        snprintf(json_arg, sizeof(json_arg), "{\"repo_path\":\"%s\"}", escaped_path);
+    }
 
 #ifdef _WIN32
     snprintf(log_file, sizeof(log_file), "%s\\cbm_index_%d.log",
@@ -843,7 +890,7 @@ static void *index_thread_fn(void *arg) {
     return NULL;
 }
 
-/* POST /api/index — body: {"root_path": "/abs/path"} → starts background indexing */
+/* POST /api/index — body: {"root_path": "/abs/path", "project_name": "..."} */
 static void handle_index_start(cbm_http_conn_t *c, const cbm_http_req_t *req) {
     if (req->body_len == 0 || req->body_len > 4096) {
         cbm_http_replyf(c, 400, g_cors_json, "{\"error\":\"invalid body\"}");
@@ -863,6 +910,9 @@ static void handle_index_start(cbm_http_conn_t *c, const cbm_http_req_t *req) {
         return;
     }
     const char *rpath = yyjson_get_str(v_path);
+    yyjson_val *v_project_name = yyjson_obj_get(root, "project_name");
+    const char *project_name =
+        yyjson_is_str(v_project_name) ? yyjson_get_str(v_project_name) : "";
 
     /* Check path exists */
     if (!cbm_is_dir(rpath)) {
@@ -888,6 +938,7 @@ static void handle_index_start(cbm_http_conn_t *c, const cbm_http_req_t *req) {
 
     index_job_t *job = &g_index_jobs[slot];
     snprintf(job->root_path, sizeof(job->root_path), "%s", rpath);
+    snprintf(job->project_name, sizeof(job->project_name), "%s", project_name);
     job->error_msg[0] = '\0';
     atomic_store(&job->status, 1);
     yyjson_doc_free(doc);
@@ -1340,6 +1391,12 @@ static void dispatch_request(cbm_http_server_t *srv, cbm_http_conn_t *c,
     /* GET /api/index-status → check indexing progress */
     if (is_get && cbm_http_path_match(req->path, "/api/index-status")) {
         handle_index_status(c);
+        return;
+    }
+
+    /* GET /api/ui-config → language and local UI preferences */
+    if (is_get && cbm_http_path_match(req->path, "/api/ui-config")) {
+        handle_ui_config(c, req);
         return;
     }
 

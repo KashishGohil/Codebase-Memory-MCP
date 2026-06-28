@@ -63,6 +63,9 @@ void cbm_pipeline_cancel(cbm_pipeline_t *p);
  * owned by the pipeline. Valid until cbm_pipeline_free(). */
 const char *cbm_pipeline_project_name(const cbm_pipeline_t *p);
 
+/* Override the derived project name with a sanitized user-provided label. */
+bool cbm_pipeline_set_project_name(cbm_pipeline_t *p, const char *name);
+
 /* Get the index mode (CBM_MODE_FULL, CBM_MODE_MODERATE, CBM_MODE_FAST). */
 int cbm_pipeline_get_mode(const cbm_pipeline_t *p);
 

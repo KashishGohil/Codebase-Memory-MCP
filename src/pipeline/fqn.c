@@ -340,8 +340,8 @@ char *cbm_project_name_from_path(const char *abs_path) {
      * the space and reports project-not-found (#349). */
     for (size_t i = 0; i < len; i++) {
         unsigned char c = (unsigned char)path[i];
-        bool safe = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-                    c == '.' || c == '_' || c == '-';
+        bool safe = (c >= 0x80) || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                    (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
         if (!safe) {
             path[i] = '-';
         }
