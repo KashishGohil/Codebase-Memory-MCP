@@ -178,7 +178,7 @@ TEST(canonical_root_linked_worktree) {
     if (git_run(main_tmp, wt_cmd) != 0) {
         th_rmtree(wt_tmp);
         th_rmtree(main_tmp);
-        SKIP("git worktree add failed — git may be too old or worktrees not supported");
+        FAIL("git worktree add failed (git 2.5+ required)");
     }
 
     cbm_git_context_t ctx = {0};
