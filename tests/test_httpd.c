@@ -353,8 +353,8 @@ TEST(httpd_resolves_bare_binary_path_from_path) {
     cbm_setenv("PATH", td, 1);
 
     char resolved[1024];
-    ASSERT_TRUE(cbm_http_server_resolve_binary_path("codebase-memory-mcp", resolved,
-                                                    sizeof(resolved)));
+    ASSERT_TRUE(
+        cbm_http_server_resolve_binary_path("codebase-memory-mcp", resolved, sizeof(resolved)));
     ASSERT_STR_EQ(resolved, exe);
 
     if (old_path) {

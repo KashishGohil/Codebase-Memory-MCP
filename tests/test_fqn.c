@@ -484,9 +484,8 @@ TEST(project_name_encodes_unicode_segments_issue571) {
         "\xe5\x90\x8e\xe7\xab\xaf/"
         "\xe4\xbf\xa1\xe7\xa7\x9f\xe9\xa3\x8e\xe6\x8e\xa7\xe9\x80\x9a\xe5\x90\x8e\xe7\xab\xaf");
     ASSERT_NOT_NULL(got);
-    ASSERT_STR_EQ(got,
-                  "Users-yunxin-Desktop-e5bc80e58f91-e5908ee7abaf-"
-                  "e4bfa1e7a79fe9a38ee68ea7e9809ae5908ee7abaf");
+    ASSERT_STR_EQ(got, "Users-yunxin-Desktop-e5bc80e58f91-e5908ee7abaf-"
+                       "e4bfa1e7a79fe9a38ee68ea7e9809ae5908ee7abaf");
     ASSERT_TRUE(cbm_validate_project_name(got));
     free(got);
     PASS();

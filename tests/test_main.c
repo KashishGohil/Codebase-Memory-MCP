@@ -28,11 +28,11 @@ static bool suite_requested(const char *name) {
     return false;
 }
 
-#define RUN_SELECTED_SUITE(name)         \
-    do {                                 \
-        if (suite_requested(#name)) {    \
-            RUN_SUITE(name);             \
-        }                                \
+#define RUN_SELECTED_SUITE(name)      \
+    do {                              \
+        if (suite_requested(#name)) { \
+            RUN_SUITE(name);          \
+        }                             \
     } while (0)
 
 /* Forward declarations of suite functions */

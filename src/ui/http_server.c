@@ -925,8 +925,7 @@ static void handle_index_start(cbm_http_conn_t *c, const cbm_http_req_t *req) {
     }
     const char *rpath = yyjson_get_str(v_path);
     yyjson_val *v_project_name = yyjson_obj_get(root, "project_name");
-    const char *project_name =
-        yyjson_is_str(v_project_name) ? yyjson_get_str(v_project_name) : "";
+    const char *project_name = yyjson_is_str(v_project_name) ? yyjson_get_str(v_project_name) : "";
 
     /* Check path exists */
     if (!cbm_is_dir(rpath)) {

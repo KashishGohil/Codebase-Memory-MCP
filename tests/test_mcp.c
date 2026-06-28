@@ -608,11 +608,11 @@ TEST(tool_search_graph_query_honors_file_pattern_issue552) {
                              "FROM nodes;"),
               CBM_STORE_OK);
 
-    char *resp = cbm_mcp_server_handle(
-        srv, "{\"jsonrpc\":\"2.0\",\"id\":552,\"method\":\"tools/call\","
-             "\"params\":{\"name\":\"search_graph\","
-             "\"arguments\":{\"project\":\"issue-552\",\"query\":\"status\","
-             "\"file_pattern\":\"src/lib/*\",\"limit\":10}}}");
+    char *resp =
+        cbm_mcp_server_handle(srv, "{\"jsonrpc\":\"2.0\",\"id\":552,\"method\":\"tools/call\","
+                                   "\"params\":{\"name\":\"search_graph\","
+                                   "\"arguments\":{\"project\":\"issue-552\",\"query\":\"status\","
+                                   "\"file_pattern\":\"src/lib/*\",\"limit\":10}}}");
     ASSERT_NOT_NULL(resp);
     char *inner = extract_text_content(resp);
     ASSERT_NOT_NULL(inner);
@@ -943,11 +943,11 @@ TEST(tool_get_architecture_path_scoping) {
     ASSERT_NOT_NULL(inner_root);
     ASSERT_NOT_NULL(strstr(inner_root, "Django"));
 
-    char *resp_scoped = cbm_mcp_server_handle(
-        srv, "{\"jsonrpc\":\"2.0\",\"id\":93,\"method\":\"tools/call\","
-             "\"params\":{\"name\":\"get_architecture\","
-             "\"arguments\":{\"project\":\"arch-path\",\"path\":\"apps/hoa\","
-             "\"aspects\":[\"packages\"]}}}");
+    char *resp_scoped =
+        cbm_mcp_server_handle(srv, "{\"jsonrpc\":\"2.0\",\"id\":93,\"method\":\"tools/call\","
+                                   "\"params\":{\"name\":\"get_architecture\","
+                                   "\"arguments\":{\"project\":\"arch-path\",\"path\":\"apps/hoa\","
+                                   "\"aspects\":[\"packages\"]}}}");
     ASSERT_NOT_NULL(resp_scoped);
     char *inner_scoped = extract_text_content(resp_scoped);
     ASSERT_NOT_NULL(inner_scoped);
