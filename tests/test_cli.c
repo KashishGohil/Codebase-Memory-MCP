@@ -1774,6 +1774,28 @@ TEST(cli_detect_agents_finds_kiro) {
     PASS();
 }
 
+TEST(cli_detect_agents_finds_pi) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        FAIL("cbm_mkdtemp failed");
+
+    char dir[512];
+
+    /* ~/.pi alone (without the agent/ subdir) must not trigger detection. */
+    snprintf(dir, sizeof(dir), "%s/.pi", tmpdir);
+    test_mkdirp(dir);
+    ASSERT_FALSE(cbm_detect_agents(tmpdir).pi);
+
+    /* ~/.pi/agent/ present → Pi detected. */
+    snprintf(dir, sizeof(dir), "%s/.pi/agent", tmpdir);
+    test_mkdirp(dir);
+    ASSERT_TRUE(cbm_detect_agents(tmpdir).pi);
+
+    test_rmdir_r(tmpdir);
+    PASS();
+}
+
 TEST(cli_detect_agents_none_found) {
     char tmpdir[256];
     snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
@@ -1796,6 +1818,7 @@ TEST(cli_detect_agents_none_found) {
     ASSERT_FALSE(agents.antigravity);
     ASSERT_FALSE(agents.kilocode);
     ASSERT_FALSE(agents.kiro);
+    ASSERT_FALSE(agents.pi);
 
     if (saved_ccd_copy) {
         cbm_setenv("CLAUDE_CONFIG_DIR", saved_ccd_copy, 1);
@@ -2756,6 +2779,7 @@ SUITE(cli) {
     RUN_TEST(cli_detect_agents_finds_antigravity);
     RUN_TEST(cli_detect_agents_finds_kilocode);
     RUN_TEST(cli_detect_agents_finds_kiro);
+    RUN_TEST(cli_detect_agents_finds_pi);
     RUN_TEST(cli_detect_agents_none_found);
 
     /* Codex MCP config upsert (3 tests — group B) */
