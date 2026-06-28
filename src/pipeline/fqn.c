@@ -366,7 +366,12 @@ char *cbm_project_name_from_path(const char *abs_path) {
     /* Map every character cbm_validate_project_name would reject. The
      * validator (used by resolve_store via project_db_path) allows only
      * [A-Za-z0-9._-], so anything else — path separators, ':', spaces, '@',
+<<<<<<< Updated upstream
      * '+', … — must be normalized here. Otherwise a repo like
+=======
+     * '+', … — must be normalized here. Non-ASCII (UTF-8) bytes are kept so
+     * CJK/Unicode names survive (#571). Otherwise a repo like
+>>>>>>> Stashed changes
      * "/home/u/my project" yields the name "home-u-my project": indexing
      * creates the DB and it shows in list_projects, but resolve_store rejects
      * the space and reports project-not-found (#349).
@@ -386,6 +391,7 @@ char *cbm_project_name_from_path(const char *abs_path) {
     for (size_t i = 0; i < len; i++) {
         unsigned char c = (unsigned char)path[i];
         bool safe = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+<<<<<<< Updated upstream
                     c == '.' || c == '_' || c == '-';
         if (safe) {
             mapped[mlen++] = (char)c;
@@ -394,6 +400,11 @@ char *cbm_project_name_from_path(const char *abs_path) {
             mapped[mlen++] = hex_digits[c & 0xF];
         } else {
             mapped[mlen++] = '-';
+=======
+                    c == '.' || c == '_' || c == '-' || c >= 0x80; /* #571: keep UTF-8 */
+        if (!safe) {
+            path[i] = '-';
+>>>>>>> Stashed changes
         }
     }
     mapped[mlen] = '\0';

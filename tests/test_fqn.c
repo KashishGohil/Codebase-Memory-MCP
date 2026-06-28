@@ -400,6 +400,17 @@ TEST(project_name_leading_trailing_slashes) {
     PASS();
 }
 
+TEST(project_name_preserves_unicode) {
+    /* #571: non-ASCII (CJK) path components must be preserved, not stripped to
+     * dashes, and the result must still pass cbm_validate_project_name. */
+    char *n = cbm_project_name_from_path("/home/u/\xe6\x88\x91\xe7\x9a\x84\xe9\xa1\xb9\xe7\x9b\xae");
+    ASSERT_NOT_NULL(n);
+    ASSERT_STR_EQ(n, "home-u-\xe6\x88\x91\xe7\x9a\x84\xe9\xa1\xb9\xe7\x9b\xae");
+    ASSERT_TRUE(cbm_validate_project_name(n));
+    free(n);
+    PASS();
+}
+
 TEST(project_name_empty) {
     ASSERT_FQN(cbm_project_name_from_path(""), "root");
     PASS();
@@ -573,6 +584,7 @@ SUITE(fqn) {
     RUN_TEST(project_name_leading_trailing_slashes);
     RUN_TEST(project_name_empty);
     RUN_TEST(project_name_null);
+    RUN_TEST(project_name_preserves_unicode);
     RUN_TEST(project_name_all_slashes);
     RUN_TEST(project_name_single_segment);
     RUN_TEST(project_name_mixed_separators);
