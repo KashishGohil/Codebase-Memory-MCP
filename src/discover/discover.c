@@ -585,6 +585,76 @@ static int wide_stat(const char *path, struct stat *st) {
 #endif
 }
 
+/* Resolve the real git directory from a linked worktree's .git file.
+ * Linked worktrees have a .git *file* (not directory) containing
+ * "gitdir: <absolute-path>" pointing to the worktree-specific git dir
+ * under the main repo's .git/worktrees/<name>/.
+ * Returns true and writes the resolved path into `out` on success.
+ * Fixes issue #689: .git/info/exclude and core.excludesFile were ignored
+ * inside linked worktrees because the .git-is-directory check failed. */
+static bool resolve_git_dir_from_dotgit_file(const char *repo_path, char *out, size_t out_sz) {
+    char dotgit_path[CBM_SZ_4K];
+    snprintf(dotgit_path, sizeof(dotgit_path), "%s/.git", repo_path);
+
+    struct stat st;
+    if (wide_stat(dotgit_path, &st) != 0 || !S_ISREG(st.st_mode)) {
+        return false;
+    }
+
+    FILE *f = fopen(dotgit_path, "r");
+    if (!f) {
+        return false;
+    }
+
+    char line[CBM_SZ_4K];
+    if (!fgets(line, sizeof(line), f)) {
+        fclose(f);
+        return false;
+    }
+    fclose(f);
+
+    /* Trim trailing newlines/carriage returns. */
+    size_t len = strlen(line);
+    while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+        line[--len] = '\0';
+    }
+
+    /* Format: "gitdir: <path>" — extract the path portion. */
+    const char *prefix = "gitdir:";
+    size_t prefix_len = strlen(prefix);
+    if (strncmp(line, prefix, prefix_len) != 0) {
+        return false;
+    }
+
+    const char *gitdir = line + prefix_len;
+    while (*gitdir == ' ' || *gitdir == '\t') {
+        gitdir++;
+    }
+    if (*gitdir == '\0') {
+        return false;
+    }
+
+    /* Absolute path: use directly. Relative: resolve against repo root. */
+    if (gitdir[0] == '/') {
+        snprintf(out, out_sz, "%s", gitdir);
+#ifdef _WIN32
+    } else if (gitdir[0] == '\\' && gitdir[1] == '\\') {
+        snprintf(out, out_sz, "%s", gitdir);
+#endif
+    } else {
+        snprintf(out, out_sz, "%s/%s", repo_path, gitdir);
+    }
+    cbm_normalize_path_sep(out);
+
+    /* Verify the resolved directory actually exists. */
+    struct stat resolved_st;
+    if (wide_stat(out, &resolved_st) != 0 || !S_ISDIR(resolved_st.st_mode)) {
+        return false;
+    }
+
+    return out[0] != '\0';
+}
+
 /* Stat a path, skipping symlinks. Returns 0 on success, -1 to skip. */
 static int safe_stat(const char *abs_path, struct stat *st) {
 #ifdef _WIN32
@@ -763,31 +833,53 @@ int cbm_discover_ex(const char *repo_path, const cbm_discover_opts_t *opts, cbm_
         return CBM_NOT_FOUND;
     }
 
-    /* Load gitignore sources when a .git directory is present.
+    /* Load gitignore sources when a .git directory or file is present.
      * Sources merged in order (later patterns win on conflict):
      *   1. <repo>/.gitignore        — committed exclusions
-     *   2. <repo>/.git/info/exclude — per-clone exclusions, not committed
+     *   2. <gitdir>/info/exclude    — per-clone exclusions, not committed
      * Both are folded into a single matcher so all downstream call paths
      * remain unchanged.  Fixes issue #489: OOM on repos whose worktrees
-     * are excluded only via .git/info/exclude (e.g. Sandcastle). */
+     * are excluded only via .git/info/exclude (e.g. Sandcastle).
+     * Fixes issue #689: linked worktrees have a .git *file* (not directory)
+     * pointing to the real git dir; exclude/config resolution must follow
+     * the gitdir pointer. */
     cbm_gitignore_t *gitignore = NULL;
     char gi_path[CBM_SZ_4K];
     snprintf(gi_path, sizeof(gi_path), "%s/.git", repo_path);
     struct stat gi_stat;
-    bool is_git_repo = wide_stat(gi_path, &gi_stat) == 0 && S_ISDIR(gi_stat.st_mode);
+    bool is_git_repo = wide_stat(gi_path, &gi_stat) == 0;
+    bool is_git_dir = is_git_repo && S_ISDIR(gi_stat.st_mode);
+    bool is_git_file = is_git_repo && S_ISREG(gi_stat.st_mode);
     bool has_git_config = false;
+    /* Resolved git directory: same as repo_path/.git for regular repos,
+     * or the worktree-specific dir from the gitdir: pointer for linked worktrees. */
+    char resolved_git_dir[CBM_SZ_4K];
+    resolved_git_dir[0] = '\0';
+
+    if (is_git_file) {
+        /* Linked worktree: .git is a file with "gitdir: <path>" */
+        if (!resolve_git_dir_from_dotgit_file(repo_path, resolved_git_dir,
+                                              sizeof(resolved_git_dir))) {
+            is_git_file = false; /* Malformed .git file — treat as non-git */
+        }
+    }
+    if (is_git_dir) {
+        snprintf(resolved_git_dir, sizeof(resolved_git_dir), "%s/.git", repo_path);
+    }
+    is_git_repo = is_git_dir || is_git_file;
+
     /* Always honour the .gitignore at the indexed-directory root, even when the
      * directory is not a git repo root (e.g. indexing a sub-package directly).
-     * The .git/info/exclude and global-excludes sources still require .git/.
+     * The info/exclude and global-excludes sources still require a valid git dir.
      * Fixes issue #510: a root .gitignore was silently ignored without .git/. */
     snprintf(gi_path, sizeof(gi_path), "%s/.gitignore", repo_path);
     gitignore = cbm_gitignore_load(gi_path);
     if (is_git_repo) {
-        snprintf(gi_path, sizeof(gi_path), "%s/.git/config", repo_path);
+        snprintf(gi_path, sizeof(gi_path), "%s/config", resolved_git_dir);
         has_git_config = wide_stat(gi_path, &gi_stat) == 0 && S_ISREG(gi_stat.st_mode);
 
         char exc_path[CBM_SZ_4K];
-        snprintf(exc_path, sizeof(exc_path), "%s/.git/info/exclude", repo_path);
+        snprintf(exc_path, sizeof(exc_path), "%s/info/exclude", resolved_git_dir);
         cbm_gitignore_t *git_exclude = cbm_gitignore_load(exc_path);
         if (git_exclude) {
             if (!gitignore) {
@@ -795,7 +887,7 @@ int cbm_discover_ex(const char *repo_path, const cbm_discover_opts_t *opts, cbm_
             } else {
                 /* On allocation failure the merge is atomic (dst unchanged), so
                  * the .gitignore patterns still apply; the exclude patterns are
-                 * simply skipped — same as if .git/info/exclude were absent. */
+                 * simply skipped — same as if info/exclude were absent. */
                 (void)cbm_gitignore_merge(gitignore, git_exclude);
                 cbm_gitignore_free(git_exclude);
             }
