@@ -188,6 +188,23 @@ int cbm_exec_no_shell(const char *const *argv) {
     return (int)_spawnvp(_P_WAIT, argv[0], argv);
 }
 
+FILE *cbm_fopen(const char *path, const char *mode) {
+    wchar_t *wpath = cbm_utf8_to_wide(path);
+    if (!wpath) {
+        return NULL;
+    }
+    /* mode is always short ASCII ("rb"/"wb"/...): widen byte-for-byte. */
+    wchar_t wmode[8];
+    size_t i = 0;
+    for (; mode && mode[i] && i < (sizeof(wmode) / sizeof(wmode[0])) - 1; i++) {
+        wmode[i] = (wchar_t)(unsigned char)mode[i];
+    }
+    wmode[i] = L'\0';
+    FILE *f = _wfopen(wpath, wmode);
+    free(wpath);
+    return f;
+}
+
 #else /* POSIX */
 
 /* ── POSIX implementation ────────────────────────────────── */
@@ -316,6 +333,10 @@ int cbm_exec_no_shell(const char *const *argv) {
         return WEXITSTATUS(status);
     }
     return CBM_NOT_FOUND; /* killed by signal */
+}
+
+FILE *cbm_fopen(const char *path, const char *mode) {
+    return fopen(path, mode);
 }
 
 #endif /* _WIN32 */

@@ -41,6 +41,13 @@ int cbm_pclose(FILE *f);
 
 /* ── File operations ──────────────────────────────────────────── */
 
+/* Portable fopen. On Windows, `path` is UTF-8 and is widened to UTF-16 for
+ * _wfopen, so non-ASCII paths (e.g. a CJK repo dir) open correctly regardless of
+ * the active ANSI code page. Plain fopen() on Windows interprets the bytes in the
+ * ACP, so a UTF-8 CJK path fails to open — which silently breaks file content
+ * reads during indexing. POSIX: a thin fopen() wrapper. Returns NULL on error. */
+FILE *cbm_fopen(const char *path, const char *mode);
+
 /* Create directory (and parents). mode is ignored on Windows. Returns true on success. */
 bool cbm_mkdir_p(const char *path, int mode);
 

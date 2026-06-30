@@ -19,6 +19,7 @@
 #include "graph_buffer/graph_buffer.h"
 #include "foundation/log.h"
 #include "foundation/compat.h"
+#include "foundation/compat_fs.h" // cbm_fopen
 #include "cbm.h"
 
 #include <stdio.h>
@@ -26,7 +27,7 @@
 #include <string.h>
 
 static char *read_file(const char *path, int *out_len) {
-    FILE *f = fopen(path, "rb");
+    FILE *f = cbm_fopen(path, "rb"); /* wide-open on Windows: handles non-ASCII (CJK) paths */
     if (!f) {
         return NULL;
     }
