@@ -1112,6 +1112,8 @@ static const char *extract_docstring(CBMArena *a, TSNode node, const char *sourc
 }
 
 static TSNode find_jvm_modifiers(TSNode node, CBMLanguage lang);
+static TSNode annotation_name_node(TSNode annotation);
+static TSNode annotation_args_node(TSNode annotation);
 
 /* HTTP method names recognized in decorator calls (e.g., @router.post → "POST") */
 static const char *decorator_method_name(const char *attr_text) {
@@ -1196,38 +1198,155 @@ static TSNode find_decorator_args(TSNode call_node) {
     return args;
 }
 
+/* Unquote a route path string node; returns arena path if it starts with '/', else NULL. */
+static const char *route_path_from_string_node(CBMArena *a, TSNode arg, const char *source) {
+    const char *ak = ts_node_type(arg);
+    if (strcmp(ak, "string") != 0 && strcmp(ak, "string_literal") != 0 &&
+        strcmp(ak, "interpreted_string_literal") != 0) {
+        return NULL;
+    }
+    char *path = cbm_node_text(a, arg, source);
+    if (!path) {
+        return NULL;
+    }
+    int plen = (int)strlen(path);
+    if (plen >= PAIR_CHARS && (path[0] == '"' || path[0] == '\'')) {
+        path = cbm_arena_strndup(a, path + SKIP_CHAR, (size_t)(plen - PAIR_CHARS));
+    }
+    if (path && path[0] == '/') {
+        return path;
+    }
+    return NULL;
+}
+
 // Extract route path from decorator arguments (first string that starts with /).
 static const char *extract_route_path_from_args(CBMArena *a, TSNode args, const char *source) {
     uint32_t nc = ts_node_named_child_count(args);
     for (uint32_t ai = 0; ai < nc && ai < DECORATOR_SCAN_LIMIT; ai++) {
         TSNode arg = ts_node_named_child(args, ai);
         const char *ak = ts_node_type(arg);
+        /* Java @RequestMapping(value = "/api") → element_value_pair */
+        if (strcmp(ak, "element_value_pair") == 0) {
+            TSNode id = cbm_find_child_by_kind(arg, "identifier");
+            if (!ts_node_is_null(id)) {
+                char *idtxt = cbm_node_text(a, id, source);
+                if (idtxt && strcmp(idtxt, "value") == 0) {
+                    TSNode val = ts_node_child_by_field_name(arg, TS_FIELD("value"));
+                    if (!ts_node_is_null(val)) {
+                        const char *p = route_path_from_string_node(a, val, source);
+                        if (p) {
+                            return p;
+                        }
+                        TSNode sl = cbm_find_child_by_kind(val, "string_literal");
+                        if (!ts_node_is_null(sl)) {
+                            p = route_path_from_string_node(a, sl, source);
+                            if (p) {
+                                return p;
+                            }
+                        }
+                    }
+                }
+            }
+            continue;
+        }
         /* Kotlin wraps each annotation argument in a `value_argument` node
          * (and supports the named form `value = "/x"`); unwrap to the string. */
         if (strcmp(ak, "value_argument") == 0) {
             TSNode s = cbm_find_child_by_kind(arg, "string_literal");
-            if (ts_node_is_null(s)) {
-                continue;
+            if (!ts_node_is_null(s)) {
+                const char *p = route_path_from_string_node(a, s, source);
+                if (p) {
+                    return p;
+                }
             }
-            arg = s;
-            ak = ts_node_type(arg);
-        }
-        if (strcmp(ak, "string") != 0 && strcmp(ak, "string_literal") != 0 &&
-            strcmp(ak, "interpreted_string_literal") != 0) {
             continue;
         }
-        char *path = cbm_node_text(a, arg, source);
-        if (path) {
-            int plen = (int)strlen(path);
-            if (plen >= PAIR_CHARS && (path[0] == '"' || path[0] == '\'')) {
-                path = cbm_arena_strndup(a, path + SKIP_CHAR, (size_t)(plen - PAIR_CHARS));
+        const char *p = route_path_from_string_node(a, arg, source);
+        if (p) {
+            return p;
+        }
+    }
+    return NULL;
+}
+
+/* True when the annotation is a class-level path prefix (@RequestMapping, @Path). */
+static bool annotation_is_class_route_prefix(const char *name) {
+    return name && (strcmp(name, "RequestMapping") == 0 || strcmp(name, "Path") == 0);
+}
+
+/* Scan class/declaration annotations for @RequestMapping / @Path prefix (issue #734). */
+static const char *extract_class_route_prefix(CBMArena *a, TSNode class_node, const char *source,
+                                              const CBMLangSpec *spec) {
+    if (!spec->decorator_node_types || !spec->decorator_node_types[0]) {
+        return NULL;
+    }
+    TSNode prev = ts_node_prev_sibling(class_node);
+    while (!ts_node_is_null(prev)) {
+        if (!cbm_kind_in_set(prev, spec->decorator_node_types)) {
+            break;
+        }
+        TSNode name_node = annotation_name_node(prev);
+        if (!ts_node_is_null(name_node)) {
+            char *name = cbm_node_text(a, name_node, source);
+            if (annotation_is_class_route_prefix(name)) {
+                TSNode args = annotation_args_node(prev);
+                const char *path = NULL;
+                if (!ts_node_is_null(args)) {
+                    path = extract_route_path_from_args(a, args, source);
+                }
+                if (path) {
+                    return path;
+                }
             }
-            if (path && path[0] == '/') {
+        }
+        prev = ts_node_prev_sibling(prev);
+    }
+    TSNode modifiers = find_jvm_modifiers(class_node, spec->language);
+    if (!ts_node_is_null(modifiers)) {
+        uint32_t mc = ts_node_child_count(modifiers);
+        for (uint32_t mi = 0; mi < mc; mi++) {
+            TSNode mchild = ts_node_child(modifiers, mi);
+            if (!cbm_kind_in_set(mchild, spec->decorator_node_types)) {
+                continue;
+            }
+            TSNode name_node = annotation_name_node(mchild);
+            if (ts_node_is_null(name_node)) {
+                continue;
+            }
+            char *name = cbm_node_text(a, name_node, source);
+            if (!annotation_is_class_route_prefix(name)) {
+                continue;
+            }
+            TSNode args = annotation_args_node(mchild);
+            const char *path = NULL;
+            if (!ts_node_is_null(args)) {
+                path = extract_route_path_from_args(a, args, source);
+            }
+            if (path) {
                 return path;
             }
         }
     }
     return NULL;
+}
+
+/* Join Spring class prefix with method path (/api + /orders → /api/orders). */
+static const char *merge_route_prefix(CBMArena *a, const char *prefix, const char *method_path) {
+    if (!method_path || !method_path[0]) {
+        return prefix;
+    }
+    if (!prefix || !prefix[0]) {
+        return method_path;
+    }
+    size_t plen = strlen(prefix);
+    int need_slash = (prefix[plen - 1] != '/') && (method_path[0] != '/');
+    if (!need_slash && method_path[0] == '/' && prefix[plen - 1] == '/') {
+        return cbm_arena_sprintf(a, "%s%s", prefix, method_path + 1);
+    }
+    if (need_slash) {
+        return cbm_arena_sprintf(a, "%s/%s", prefix, method_path);
+    }
+    return cbm_arena_sprintf(a, "%s%s", prefix, method_path);
 }
 
 // Try to extract a route from a single decorator call node.
@@ -3539,7 +3658,8 @@ static TSNode resolve_method_name(TSNode child, CBMLanguage lang) {
 
 // Push a single method definition
 static void push_method_def(CBMExtractCtx *ctx, TSNode child, const char *class_qn,
-                            const CBMLangSpec *spec, TSNode name_node) {
+                            const CBMLangSpec *spec, TSNode name_node,
+                            const char *class_route_prefix) {
     CBMArena *a = ctx->arena;
 
     char *name = cbm_node_text(a, name_node, ctx->source);
@@ -3587,6 +3707,9 @@ static void push_method_def(CBMExtractCtx *ctx, TSNode child, const char *class_
 
     def.decorators = extract_decorators(a, child, ctx->source, ctx->language, spec);
     extract_route_from_decorators(a, child, ctx->source, spec, &def.route_path, &def.route_method);
+    if (class_route_prefix && def.route_path) {
+        def.route_path = merge_route_prefix(a, class_route_prefix, def.route_path);
+    }
     def.docstring = extract_docstring(a, child, ctx->source, ctx->language);
 
     if (spec->branching_node_types && spec->branching_node_types[0]) {
@@ -3601,7 +3724,7 @@ static void push_method_def(CBMExtractCtx *ctx, TSNode child, const char *class_
 
 // Extract methods from an ObjC implementation_definition node.
 static void extract_objc_impl_methods(CBMExtractCtx *ctx, TSNode impl_node, const char *class_qn,
-                                      const CBMLangSpec *spec) {
+                                      const CBMLangSpec *spec, const char *class_route_prefix) {
     uint32_t nc = ts_node_child_count(impl_node);
     for (uint32_t j = 0; j < nc; j++) {
         TSNode inner = ts_node_child(impl_node, j);
@@ -3611,7 +3734,7 @@ static void extract_objc_impl_methods(CBMExtractCtx *ctx, TSNode impl_node, cons
         if (cbm_kind_in_set(inner, spec->function_node_types)) {
             TSNode nm = resolve_method_name(inner, ctx->language);
             if (!ts_node_is_null(nm)) {
-                push_method_def(ctx, inner, class_qn, spec, nm);
+                push_method_def(ctx, inner, class_qn, spec, nm, class_route_prefix);
             }
         }
     }
@@ -3620,6 +3743,8 @@ static void extract_objc_impl_methods(CBMExtractCtx *ctx, TSNode impl_node, cons
 // Extract methods inside a class body
 static void extract_class_methods(CBMExtractCtx *ctx, TSNode class_node, const char *class_qn,
                                   const CBMLangSpec *spec) {
+    const char *class_route_prefix =
+        extract_class_route_prefix(ctx->arena, class_node, ctx->source, spec);
     TSNode body = find_class_body(class_node, ctx->language);
     if (ts_node_is_null(body)) {
         return;
@@ -3634,7 +3759,7 @@ static void extract_class_methods(CBMExtractCtx *ctx, TSNode class_node, const c
 
         if (ctx->language == CBM_LANG_OBJC &&
             strcmp(ts_node_type(child), "implementation_definition") == 0) {
-            extract_objc_impl_methods(ctx, child, class_qn, spec);
+            extract_objc_impl_methods(ctx, child, class_qn, spec, class_route_prefix);
             continue;
         }
 
@@ -3669,7 +3794,7 @@ static void extract_class_methods(CBMExtractCtx *ctx, TSNode class_node, const c
             continue;
         }
 
-        push_method_def(ctx, method_node, class_qn, spec, name_node);
+        push_method_def(ctx, method_node, class_qn, spec, name_node, class_route_prefix);
     }
 }
 

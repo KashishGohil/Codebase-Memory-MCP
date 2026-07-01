@@ -2645,6 +2645,60 @@ TEST(extract_java_method_annotations_issue382) {
     PASS();
 }
 
+/* Issue #734: class @RequestMapping prefix + method @GetMapping → merged route_path. */
+TEST(extract_spring_class_request_mapping_prefix_issue734) {
+    CBMFileResult *r =
+        extract("package com.example;\n\n"
+                "import org.springframework.web.bind.annotation.RestController;\n"
+                "import org.springframework.web.bind.annotation.RequestMapping;\n"
+                "import org.springframework.web.bind.annotation.GetMapping;\n\n"
+                "@RestController\n"
+                "@RequestMapping(\"/api/corporate/mcc\")\n"
+                "public class MccRequirementController {\n"
+                "    @GetMapping(\"/corporates/{corporateId}/requirements\")\n"
+                "    public String getCorporateRequirements() {\n"
+                "        return \"ok\";\n"
+                "    }\n"
+                "}\n",
+                CBM_LANG_JAVA, "t", "MccRequirementController.java");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    const CBMDefinition *m = find_def_by_name(r, "getCorporateRequirements");
+    ASSERT_NOT_NULL(m);
+    ASSERT_NOT_NULL(m->route_path);
+    ASSERT_STR_EQ(m->route_path,
+                  "/api/corporate/mcc/corporates/{corporateId}/requirements");
+    ASSERT_NOT_NULL(m->route_method);
+    ASSERT_STR_EQ(m->route_method, "GET");
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(extract_spring_request_mapping_value_named_arg) {
+    CBMFileResult *r =
+        extract("package com.example;\n\n"
+                "import org.springframework.web.bind.annotation.RequestMapping;\n"
+                "import org.springframework.web.bind.annotation.GetMapping;\n\n"
+                "@RequestMapping(value = \"/api\")\n"
+                "public class OrderController {\n"
+                "    @GetMapping(\"/orders\")\n"
+                "    public String listOrders() {\n"
+                "        return \"orders\";\n"
+                "    }\n"
+                "}\n",
+                CBM_LANG_JAVA, "t", "OrderController.java");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    const CBMDefinition *m = find_def_by_name(r, "listOrders");
+    ASSERT_NOT_NULL(m);
+    ASSERT_NOT_NULL(m->route_path);
+    ASSERT_STR_EQ(m->route_path, "/api/orders");
+    ASSERT_NOT_NULL(m->route_method);
+    ASSERT_STR_EQ(m->route_method, "GET");
+    cbm_free_result(r);
+    PASS();
+}
+
 /* Issue #213: large TS files were indexed as a File node with zero children. */
 TEST(extract_large_ts_has_functions_issue213) {
     enum { NFUNCS = 4000 };
@@ -3163,6 +3217,8 @@ SUITE(extraction) {
     RUN_TEST(js_index_module_qn_not_collide_with_folder);
     RUN_TEST(python_regular_module_qn_unchanged);
     RUN_TEST(extract_java_method_annotations_issue382);
+    RUN_TEST(extract_spring_class_request_mapping_prefix_issue734);
+    RUN_TEST(extract_spring_request_mapping_value_named_arg);
     RUN_TEST(extract_large_ts_has_functions_issue213);
 
     /* Per-function complexity metrics (Tier A) */

@@ -46,6 +46,7 @@
 #include <mcp/mcp.h>
 #include <store/store.h>
 #include <pipeline/pipeline.h>
+#include <pipeline/pipeline_internal.h>
 #include <foundation/log.h>
 
 #include <string.h>
@@ -140,6 +141,28 @@ static int et_edge_present(const EtFile *files, int nfiles, const char *edge, in
     }
     et_cleanup(&lp, store);
     return got >= floor;
+}
+
+/* Assert a Route node exists with canonical QN __route__METHOD__/path (issue #734). */
+static int et_route_qn_present(const EtFile *files, int nfiles, const char *http_method,
+                               const char *path) {
+    EtProj lp;
+    cbm_store_t *store = et_index_files(&lp, files, nfiles);
+    if (!store) {
+        return 0;
+    }
+    char cpath[512];
+    char route_qn[640];
+    const char *canon = cbm_route_canon_path(path, cpath, sizeof(cpath));
+    snprintf(route_qn, sizeof(route_qn), "__route__%s__%s",
+             http_method && http_method[0] ? http_method : "ANY", canon);
+    cbm_node_t found;
+    int ok = (cbm_store_find_node_by_qn(store, lp.project, route_qn, &found) == CBM_STORE_OK);
+    if (!ok) {
+        fprintf(stderr, "  [ET-ROUTE] FAIL qn=%s not in store\n", route_qn);
+    }
+    et_cleanup(&lp, store);
+    return ok;
 }
 
 /* Index meaningful[] plus PARALLEL_PAD_FILES trivial pad files to force the
@@ -280,6 +303,29 @@ TEST(handles_spring_java) {
          "    public String getOrder(int id) {\n"
          "        return \"order:\" + id;\n    }\n}\n"}};
     ASSERT_TRUE(et_edge_present(f, 1, "HANDLES", 1));
+    ASSERT_TRUE(et_route_qn_present(f, 1, "GET", "/api/orders"));
+    PASS();
+}
+
+/* Issue #734: class-level @RequestMapping + @GetMapping → merged Route QN in graph. */
+TEST(handles_spring_java_class_prefix_issue734) {
+    static const EtFile f[] = {
+        {"MccRequirementController.java",
+         "package com.example;\n\n"
+         "import org.springframework.web.bind.annotation.RestController;\n"
+         "import org.springframework.web.bind.annotation.RequestMapping;\n"
+         "import org.springframework.web.bind.annotation.GetMapping;\n\n"
+         "@RestController\n"
+         "@RequestMapping(\"/api/corporate/mcc\")\n"
+         "public class MccRequirementController {\n"
+         "    @GetMapping(\"/corporates/{corporateId}/requirements\")\n"
+         "    public String getCorporateRequirements() {\n"
+         "        return \"ok\";\n"
+         "    }\n"
+         "}\n"}};
+    ASSERT_TRUE(et_edge_present(f, 1, "HANDLES", 1));
+    ASSERT_TRUE(et_route_qn_present(
+        f, 1, "GET", "/api/corporate/mcc/corporates/{corporateId}/requirements"));
     PASS();
 }
 
@@ -304,6 +350,7 @@ TEST(handles_spring_kotlin) {
          "    fun getOrder(id: Int): String {\n"
          "        return \"order:\" + id\n    }\n}\n"}};
     ASSERT_TRUE(et_edge_present(f, 1, "HANDLES", 1));
+    ASSERT_TRUE(et_route_qn_present(f, 1, "GET", "/api/orders"));
     PASS();
 }
 
@@ -1375,6 +1422,7 @@ SUITE(edge_types_probe) {
     RUN_TEST(handles_fastify_js);
     RUN_TEST(handles_gin_go);
     RUN_TEST(handles_spring_java);
+    RUN_TEST(handles_spring_java_class_prefix_issue734);
     RUN_TEST(handles_spring_kotlin);
     RUN_TEST(handles_aspnet_csharp);
     RUN_TEST(handles_laravel_php);
