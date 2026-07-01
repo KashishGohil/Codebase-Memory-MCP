@@ -12,6 +12,7 @@ import { NodeDetailPanel } from "./NodeDetailPanel";
 import { ResizeHandle } from "./ResizeHandle";
 import { ErrorBoundary } from "./ErrorBoundary";
 import type { GraphNode, GraphData } from "../lib/types";
+import { colorForStatus } from "../lib/colors";
 
 /* Persist panel widths */
 function loadWidth(key: string, fallback: number): number {
@@ -49,6 +50,12 @@ export function GraphTab({ project }: GraphTabProps) {
   const [enabledLabels, setEnabledLabels] = useState<Set<string>>(new Set());
   const [enabledEdgeTypes, setEnabledEdgeTypes] = useState<Set<string>>(new Set());
 
+  /* Dead-code view: recolor by status + status-based filters */
+  const [deadCodeView, setDeadCodeView] = useState(false);
+  const [showOnlyDead, setShowOnlyDead] = useState(false);
+  const [hideEntryPoints, setHideEntryPoints] = useState(false);
+  const [hideTests, setHideTests] = useState(false);
+
   /* Initialize filters when data loads */
   useEffect(() => {
     if (!data) return;
@@ -67,7 +74,19 @@ export function GraphTab({ project }: GraphTabProps) {
   const filteredData: GraphData | null = useMemo(() => {
     if (!data) return null;
 
-    const nodes = data.nodes.filter((n) => enabledLabels.has(n.label));
+    /* Status-based filters (dead-code view) */
+    const statusOk = (n: GraphNode) => {
+      if (showOnlyDead && n.status !== "dead") return false;
+      if (hideEntryPoints && n.status === "entry") return false;
+      if (hideTests && n.status === "test") return false;
+      return true;
+    };
+    /* Recolor by status when the dead-code view is on */
+    const paint = (n: GraphNode): GraphNode =>
+      deadCodeView ? { ...n, color: colorForStatus(n.status) } : n;
+    const keep = (n: GraphNode) => enabledLabels.has(n.label) && statusOk(n);
+
+    const nodes = data.nodes.filter(keep).map(paint);
     const nodeIds = new Set(nodes.map((n) => n.id));
     const edges = data.edges.filter(
       (e) =>
@@ -77,7 +96,7 @@ export function GraphTab({ project }: GraphTabProps) {
     );
 
     const linked_projects = data.linked_projects?.map((lp) => {
-      const lpNodes = lp.nodes.filter((n) => enabledLabels.has(n.label));
+      const lpNodes = lp.nodes.filter(keep).map(paint);
       const lpIds = new Set(lpNodes.map((n) => n.id));
       const lpEdges = lp.edges.filter(
         (e) =>
@@ -91,7 +110,15 @@ export function GraphTab({ project }: GraphTabProps) {
     });
 
     return { nodes, edges, total_nodes: data.total_nodes, linked_projects };
-  }, [data, enabledLabels, enabledEdgeTypes]);
+  }, [
+    data,
+    enabledLabels,
+    enabledEdgeTypes,
+    deadCodeView,
+    showOnlyDead,
+    hideEntryPoints,
+    hideTests,
+  ]);
 
   useEffect(() => {
     if (project) {
@@ -247,6 +274,14 @@ export function GraphTab({ project }: GraphTabProps) {
           onToggleShowLabels={() => setShowLabels((v) => !v)}
           onEnableAll={enableAll}
           onDisableAll={disableAll}
+          deadCodeView={deadCodeView}
+          showOnlyDead={showOnlyDead}
+          hideEntryPoints={hideEntryPoints}
+          hideTests={hideTests}
+          onToggleDeadCodeView={() => setDeadCodeView((v) => !v)}
+          onToggleShowOnlyDead={() => setShowOnlyDead((v) => !v)}
+          onToggleHideEntryPoints={() => setHideEntryPoints((v) => !v)}
+          onToggleHideTests={() => setHideTests((v) => !v)}
         />
         <Sidebar
           nodes={filteredData.nodes}

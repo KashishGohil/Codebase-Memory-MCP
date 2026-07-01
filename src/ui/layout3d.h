@@ -24,6 +24,10 @@ typedef struct {
     const char *file_path; /* relative file path for tree reconstruction */
     float size;            /* visual size */
     uint32_t color;        /* 0xRRGGBB */
+    int in_calls;          /* incoming CALLS-family degree (full graph, not sampled) */
+    /* Dead-code classification (string literal, NOT freed):
+     * "dead"|"single"|"entry"|"test"|"exported"|"normal"|"structural". */
+    const char *status;
 } cbm_layout_node_t;
 
 /* ── Layout edge (output) ─────────────────────────────────────── */

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { colorForLabel } from "../lib/colors";
+import { colorForLabel, STATUS_LEGEND } from "../lib/colors";
 import type { GraphData } from "../lib/types";
 
 interface FilterPanelProps {
@@ -12,6 +12,49 @@ interface FilterPanelProps {
   onToggleShowLabels: () => void;
   onEnableAll: () => void;
   onDisableAll: () => void;
+  /* Dead-code view */
+  deadCodeView: boolean;
+  showOnlyDead: boolean;
+  hideEntryPoints: boolean;
+  hideTests: boolean;
+  onToggleDeadCodeView: () => void;
+  onToggleShowOnlyDead: () => void;
+  onToggleHideEntryPoints: () => void;
+  onToggleHideTests: () => void;
+}
+
+/* Checkbox row matching the existing "Show labels" toggle style */
+function CheckRow({
+  checked,
+  onToggle,
+  label,
+  count,
+}: {
+  checked: boolean;
+  onToggle: () => void;
+  label: string;
+  count?: number;
+}) {
+  return (
+    <button
+      onClick={onToggle}
+      className={`flex items-center gap-1.5 text-[11px] font-medium transition-all ${
+        checked ? "text-primary" : "text-foreground/40"
+      }`}
+    >
+      <span
+        className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-all ${
+          checked ? "border-primary bg-primary/20" : "border-foreground/15"
+        }`}
+      >
+        {checked && <span className="text-primary text-[9px]">✓</span>}
+      </span>
+      {label}
+      {count !== undefined && (
+        <span className="text-foreground/25 tabular-nums">{count.toLocaleString()}</span>
+      )}
+    </button>
+  );
 }
 
 export function FilterPanel({
@@ -24,17 +67,31 @@ export function FilterPanel({
   onToggleShowLabels,
   onEnableAll,
   onDisableAll,
+  deadCodeView,
+  showOnlyDead,
+  hideEntryPoints,
+  hideTests,
+  onToggleDeadCodeView,
+  onToggleShowOnlyDead,
+  onToggleHideEntryPoints,
+  onToggleHideTests,
 }: FilterPanelProps) {
-  const { labelCounts, edgeTypeCounts } = useMemo(() => {
+  const { labelCounts, edgeTypeCounts, statusCounts } = useMemo(() => {
     const lc = new Map<string, number>();
     for (const n of data.nodes) lc.set(n.label, (lc.get(n.label) ?? 0) + 1);
     const ec = new Map<string, number>();
     for (const e of data.edges) ec.set(e.type, (ec.get(e.type) ?? 0) + 1);
+    const sc = new Map<string, number>();
+    for (const n of data.nodes)
+      if (n.status) sc.set(n.status, (sc.get(n.status) ?? 0) + 1);
     return {
       labelCounts: [...lc.entries()].sort((a, b) => b[1] - a[1]),
       edgeTypeCounts: [...ec.entries()].sort((a, b) => b[1] - a[1]),
+      statusCounts: sc,
     };
   }, [data]);
+
+  const deadCount = statusCounts.get("dead") ?? 0;
 
   return (
     <div className="px-4 py-3 border-b border-border/40 space-y-3">
@@ -110,6 +167,47 @@ export function FilterPanel({
         </span>
         Show labels
       </button>
+
+      {/* Dead-code view */}
+      <div className="pt-2 border-t border-border/30 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] text-foreground/30 uppercase tracking-widest">
+            Dead code
+          </span>
+          <span className="text-[10px] text-red-400/80 tabular-nums">
+            {deadCount.toLocaleString()} dead
+          </span>
+        </div>
+
+        <CheckRow
+          checked={deadCodeView}
+          onToggle={onToggleDeadCodeView}
+          label="Color by status"
+        />
+        <CheckRow
+          checked={showOnlyDead}
+          onToggle={onToggleShowOnlyDead}
+          label="Show only dead code"
+        />
+        <CheckRow
+          checked={hideEntryPoints}
+          onToggle={onToggleHideEntryPoints}
+          label="Hide entry points"
+        />
+        <CheckRow checked={hideTests} onToggle={onToggleHideTests} label="Hide tests" />
+
+        {/* Legend (only meaningful while colored by status) */}
+        {deadCodeView && (
+          <div className="flex flex-wrap gap-x-2 gap-y-1 pt-1">
+            {STATUS_LEGEND.map((s) => (
+              <span key={s.status} className="inline-flex items-center gap-1 text-[9px] text-foreground/40">
+                <span className="w-[6px] h-[6px] rounded-full" style={{ backgroundColor: s.color }} />
+                {s.label}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

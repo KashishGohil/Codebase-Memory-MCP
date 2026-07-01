@@ -10,7 +10,19 @@ export interface GraphNode {
   file_path?: string;
   size: number;
   color: string;
+  /* Dead-code classification from the backend layout (layout3d.c). */
+  status?: NodeStatus;
+  in_calls?: number;
 }
+
+export type NodeStatus =
+  | "dead"
+  | "single"
+  | "entry"
+  | "test"
+  | "exported"
+  | "normal"
+  | "structural";
 
 export interface GraphEdge {
   source: number;
