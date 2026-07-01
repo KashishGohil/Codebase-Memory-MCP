@@ -1330,10 +1330,10 @@ static void py_type_cache_grow(PyLSPContext *ctx) {
     CBMPyTypeCacheEntry *old_entries = ctx->type_cache;
 
     int new_cap = old_cap ? old_cap * 2 : PY_TYPE_CACHE_INITIAL_CAP;
-    CBMPyTypeCacheEntry *new_entries =
-        (CBMPyTypeCacheEntry *)cbm_arena_alloc(ctx->arena, (size_t)new_cap * sizeof(CBMPyTypeCacheEntry));
+    CBMPyTypeCacheEntry *new_entries = (CBMPyTypeCacheEntry *)cbm_arena_alloc(
+        ctx->arena, (size_t)new_cap * sizeof(CBMPyTypeCacheEntry));
     if (!new_entries)
-        return; 
+        return;
     memset(new_entries, 0, (size_t)new_cap * sizeof(CBMPyTypeCacheEntry));
 
     ctx->type_cache = new_entries;
@@ -1396,8 +1396,6 @@ static const CBMType *py_eval_expr_type(PyLSPContext *ctx, TSNode node) {
     py_type_cache_insert(ctx, key, result);
     return result;
 }
-
-
 
 static void py_process_statement(PyLSPContext *ctx, TSNode node) {
     if (!ctx || ts_node_is_null(node))
@@ -1877,8 +1875,8 @@ static void py_emit_call_for(PyLSPContext *ctx, TSNode call_node) {
                     // Skip if mod is already rooted under the project to avoid
                     // "<root>.<root>.mod".
                     if (!(strncmp(mod, ctx->module_qn, root_len) == 0 && mod[root_len] == '.')) {
-                        char *qual_mod = (char *)cbm_arena_alloc(ctx->arena, root_len + 1 +
-                                                                                strlen(mod) + 1);
+                        char *qual_mod =
+                            (char *)cbm_arena_alloc(ctx->arena, root_len + 1 + strlen(mod) + 1);
                         if (qual_mod) {
                             memcpy(qual_mod, ctx->module_qn, root_len);
                             qual_mod[root_len] = '.';

@@ -43,7 +43,7 @@ typedef struct {
 
     // Memoization cache for py_eval_expr_type (issue #710: deeply chained
     // method calls caused exponential reevaluation of shared subchains without this, Open
-    // addressing, linear probe, grown geometrically 
+    // addressing, linear probe, grown geometrically
     CBMPyTypeCacheEntry *type_cache;
     int type_cache_count;
     int type_cache_cap;
