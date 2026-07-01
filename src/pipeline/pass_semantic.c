@@ -19,6 +19,7 @@
 #include "graph_buffer/graph_buffer.h"
 #include "foundation/log.h"
 #include "foundation/compat.h"
+#include "foundation/platform.h"
 #include "cbm.h"
 
 #include <stdio.h>
@@ -33,7 +34,7 @@ static char *read_file(const char *path, int *out_len) {
     (void)fseek(f, 0, SEEK_END);
     long size = ftell(f);
     (void)fseek(f, 0, SEEK_SET);
-    if (size <= 0 || size > (long)CBM_PERCENT * CBM_SZ_1K * CBM_SZ_1K) {
+    if (size <= 0 || size > cbm_max_file_bytes()) {
         (void)fclose(f);
         return NULL;
     }

@@ -304,3 +304,21 @@ int cbm_default_worker_count(bool initial) {
     int workers = info.perf_cores - SKIP_ONE;
     return workers > 0 ? workers : MIN_WORKERS;
 }
+
+long cbm_max_file_bytes(void) {
+    /* CBM_MAX_FILE_MB env override (clamped to [CBM_MIN_FILE_MB,
+     * CBM_MAX_FILE_MB_CAP]). Same precedence/clamp shape as
+     * cbm_default_worker_count()/CBM_WORKERS above: unset, blank, or
+     * non-numeric all parse to 0 via strtol, which falls below the floor
+     * and is rejected the same way an out-of-range value is — so blank
+     * never silently coerces to "cap every file at 0 bytes". */
+    char buf[CBM_SZ_32];
+    if (cbm_safe_getenv("CBM_MAX_FILE_MB", buf, sizeof(buf), NULL) != NULL) {
+        long n = strtol(buf, NULL, CBM_DECIMAL_BASE);
+        if (n >= CBM_MIN_FILE_MB && n <= CBM_MAX_FILE_MB_CAP) {
+            return n * (long)CBM_SZ_1K * (long)CBM_SZ_1K;
+        }
+        cbm_log_warn("max_file_mb.env.invalid", "value", buf, "fallback", "default");
+    }
+    return (long)CBM_DEFAULT_MAX_FILE_MB * (long)CBM_SZ_1K * (long)CBM_SZ_1K;
+}

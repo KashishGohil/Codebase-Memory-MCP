@@ -26,6 +26,7 @@
 #include "foundation/constants.h"
 #include "foundation/hash_table.h"
 #include "foundation/log.h"
+#include "foundation/platform.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,7 +35,6 @@
 /* ── Constants ─────────────────────────────────────────────────── */
 
 enum {
-    PXC_MAX_FILE_BYTES_FACTOR = 100, /* same cap pass_calls.c uses for source size */
     PXC_ITOA_BUF = 16,
 };
 
@@ -62,7 +62,7 @@ static char *pxc_read_file(const char *path, int *out_len) {
     (void)fseek(f, 0, SEEK_END);
     long size = ftell(f);
     (void)fseek(f, 0, SEEK_SET);
-    if (size <= 0 || size > (long)PXC_MAX_FILE_BYTES_FACTOR * (long)CBM_SZ_1K * (long)CBM_SZ_1K) {
+    if (size <= 0 || size > cbm_max_file_bytes()) {
         (void)fclose(f);
         return NULL;
     }

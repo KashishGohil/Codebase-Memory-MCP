@@ -17,6 +17,7 @@
 #include <mimalloc.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -37,6 +38,17 @@ static atomic_int g_initialized; /* init guard */
 static atomic_int g_was_over;    /* pressure hysteresis */
 
 #define MB_DIVISOR ((size_t)(CBM_SZ_1K * CBM_SZ_1K))
+
+/* ── Hard memory ceiling (enforcing — see mem.h) ─────────────────
+ *
+ * Fraction of cgroup-aware detected RAM (cbm_system_info().total_ram),
+ * always strictly above the advisory DEFAULT_RAM_FRACTION budget so a
+ * repo that trips backpressure but recovers never reaches the ceiling.
+ * Absolute floor protects a legit big repo on a small-RAM CI runner from
+ * spuriously aborting at a tiny fraction-derived value. */
+#define CBM_MEM_CEILING_FRACTION 0.85
+#define CBM_MEM_CEILING_FLOOR_MB ((size_t)2048) /* 2 GB floor */
+#define CBM_MEM_CEILING_CAP_MB ((size_t)1024 * 1024) /* 1 TB env-override ceiling */
 
 /* ── OS fallback for RSS (ASan builds where MI_OVERRIDE=0) ──── */
 
@@ -173,4 +185,55 @@ size_t cbm_mem_worker_budget(int num_workers) {
 
 void cbm_mem_collect(void) {
     mi_collect(true);
+}
+
+/* ── Hard memory ceiling (enforcing) ─────────────────────────────── */
+
+size_t cbm_mem_ceiling(void) {
+    /* CBM_MEM_CEILING_MB env override (clamped to [CBM_MEM_CEILING_FLOOR_MB,
+     * CBM_MEM_CEILING_CAP_MB]). Same precedence/clamp shape as
+     * CBM_WORKERS / CBM_MAX_FILE_MB: unset, blank, or non-numeric all parse
+     * to 0 via strtoull, which falls below the floor and is rejected the
+     * same way an out-of-range value is. */
+    char buf[CBM_SZ_32];
+    if (cbm_safe_getenv("CBM_MEM_CEILING_MB", buf, sizeof(buf), NULL) != NULL) {
+        char *end = NULL;
+        unsigned long long mb = strtoull(buf, &end, CBM_DECIMAL_BASE);
+        if (end != buf && mb >= CBM_MEM_CEILING_FLOOR_MB && mb <= CBM_MEM_CEILING_CAP_MB) {
+            return (size_t)mb * MB_DIVISOR;
+        }
+        cbm_log_warn("mem_ceiling.env.invalid", "value", buf, "fallback", "fraction");
+    }
+
+    cbm_system_info_t info = cbm_system_info();
+    size_t fraction_bytes = (size_t)((double)info.total_ram * CBM_MEM_CEILING_FRACTION);
+    size_t floor_bytes = CBM_MEM_CEILING_FLOOR_MB * MB_DIVISOR;
+    return fraction_bytes > floor_bytes ? fraction_bytes : floor_bytes;
+}
+
+bool cbm_mem_over_ceiling(void) {
+    return cbm_mem_rss() > cbm_mem_ceiling();
+}
+
+void cbm_mem_abort_if_over_ceiling(const char *file, const char *phase) {
+    size_t rss = cbm_mem_rss();
+    size_t ceiling = cbm_mem_ceiling();
+    if (rss <= ceiling) {
+        return;
+    }
+
+    char rss_mb[CBM_SZ_32];
+    char ceiling_mb[CBM_SZ_32];
+    snprintf(rss_mb, sizeof(rss_mb), "%zu", rss / MB_DIVISOR);
+    snprintf(ceiling_mb, sizeof(ceiling_mb), "%zu", ceiling / MB_DIVISOR);
+    cbm_log_error("mem.ceiling.abort", "file", file ? file : "unknown", "phase",
+                 phase ? phase : "n/a", "rss_mb", rss_mb, "ceiling_mb", ceiling_mb);
+    /* Hard abort: SIGABRT, default handler, non-zero exit. Intentionally not
+     * a graceful cancel — cbm_pipeline_cancel() already exists for that path
+     * and is advisory-cooperative (workers check an atomic and unwind); RSS
+     * already over the enforcing ceiling means further allocation to unwind
+     * cleanly (free lists, log buffers) is itself the risk being guarded
+     * against, so we terminate immediately instead. Must only be reached
+     * from the in-memory extract/resolve phases, before any SQLite dump. */
+    abort();
 }

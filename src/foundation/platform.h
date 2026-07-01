@@ -114,6 +114,17 @@ cbm_system_info_t cbm_system_info(void);
  * initial=false: max(1, perf_cores-1) (leave headroom for user apps) */
 int cbm_default_worker_count(bool initial);
 
+/* Per-file source-read cap in bytes, for the read_file() size guard used by
+ * every extraction pass (pass_calls.c, pass_definitions.c, pass_semantic.c,
+ * pass_usages.c, pass_k8s.c, pass_parallel.c, pass_lsp_cross.c). A file
+ * larger than this is SKIPPED (read_file returns NULL), never aborted —
+ * distinct from the process-wide RSS ceiling in mem.h, which aborts.
+ * CBM_MAX_FILE_MB env override (clamped to [CBM_MIN_FILE_MB,
+ * CBM_MAX_FILE_MB_CAP]); default CBM_DEFAULT_MAX_FILE_MB. Same
+ * precedence/clamp shape as cbm_default_worker_count()/CBM_WORKERS: blank,
+ * unset, or non-numeric falls back to the default (never coerces to 0). */
+long cbm_max_file_bytes(void);
+
 /* ── Environment variables ──────────────────────────────────────── */
 
 /* Thread-safe getenv: copies the value into a caller-provided buffer.

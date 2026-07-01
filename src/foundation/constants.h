@@ -48,6 +48,21 @@ enum {
     CBM_PERCENT = 100,
 };
 
+/* ── Per-file parse-size cap ──────────────────────────────────── */
+/* Default per-file source-read cap (MB), env-overridable via CBM_MAX_FILE_MB
+ * (see cbm_max_file_bytes() in system_info.c, same clamp shape as
+ * cbm_default_worker_count()/CBM_WORKERS). 10 MB clears a hand-authored
+ * amalgamation source like sqlite3.c (~8 MB) while still bounding a single
+ * worker's per-file parse working set. Previously expressed 7x as the
+ * misused CBM_PERCENT (100) * CBM_SZ_1K * CBM_SZ_1K "100 MB" literal —
+ * collapsed to this single named constant; CBM_PERCENT itself is untouched
+ * and remains the real percentage constant for mem.c/vmem.c/cypher.c. */
+enum {
+    CBM_DEFAULT_MAX_FILE_MB = 10,
+    CBM_MIN_FILE_MB = 1,        /* floor for CBM_MAX_FILE_MB env override */
+    CBM_MAX_FILE_MB_CAP = 1024, /* ceiling for CBM_MAX_FILE_MB env override (1 GB) */
+};
+
 /* ── Tree-sitter field name helper ───────────────────────────── */
 /* Usage: ts_node_child_by_field_name(node, TS_FIELD("callee"))
  * Expands to: ts_node_child_by_field_name(node, TS_FIELD("callee"))

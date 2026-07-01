@@ -93,7 +93,7 @@ static char *read_file(const char *path, int *out_len) {
     (void)fseek(f, 0, SEEK_END);
     long size = ftell(f);
     (void)fseek(f, 0, SEEK_SET);
-    if (size <= 0 || size > (long)CBM_PERCENT * CBM_SZ_1K * CBM_SZ_1K) {
+    if (size <= 0 || size > cbm_max_file_bytes()) {
         (void)fclose(f);
         return NULL;
     }
@@ -568,6 +568,15 @@ static void extract_worker(int worker_id, void *ctx_ptr) {
 
         int file_idx = ec->sorted[sort_pos].idx;
         const cbm_file_info_t *fi = &ec->files[file_idx];
+
+        /* Hard ceiling (enforcing, separate from the advisory backpressure
+         * above): if RSS is still over the ceiling after backpressure had
+         * its bounded spins to let peers return memory, the process is in
+         * runaway territory — abort now, in-memory, before any SQLite dump
+         * (see mem.h). The advisory budget/backpressure stays a lower,
+         * separate threshold so a normal large-but-fine repo that only
+         * soft-overshoots the budget never reaches this. */
+        cbm_mem_abort_if_over_ceiling(fi->rel_path, "extract");
 
         /* Read + extract */
         int source_len = 0;
