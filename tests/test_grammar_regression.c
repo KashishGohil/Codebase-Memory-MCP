@@ -242,6 +242,12 @@ const GrammarCase CBM_GRAMMAR_CASES[] = {
      {"Foo", NULL}},
     {"soql", CBM_LANG_SOQL, "a.soql", "SELECT Id FROM Account\n", 0, {NULL}},
     {"sosl", CBM_LANG_SOSL, "a.sosl", "FIND {test} IN ALL FIELDS\n", 0, {NULL}},
+    {"mojo",
+     CBM_LANG_MOJO,
+     "a.mojo",
+     "fn foo() -> None:\n    pass\n\nstruct Bar:\n    pass\n\ntrait Baz:\n    pass\n\n__extension List:\n    pass\n",
+     4,
+     {"foo", "Bar", "Baz", NULL}},
     {"dotenv", CBM_LANG_DOTENV, "a.env", "FOO=bar\nBAZ=qux\n", 0, {NULL}},
 
     /* ── data / config / markup / template languages (no-crash floor) ── */

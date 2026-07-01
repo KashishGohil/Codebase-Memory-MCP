@@ -163,6 +163,7 @@ extern const TSLanguage *tree_sitter_gomod(void);
 extern const TSLanguage *tree_sitter_apex(void);
 extern const TSLanguage *tree_sitter_soql(void);
 extern const TSLanguage *tree_sitter_sosl(void);
+extern const TSLanguage *tree_sitter_mojo(void);
 extern const TSLanguage *tree_sitter_pine(void);
 
 // -- Empty sentinel --
@@ -204,6 +205,10 @@ static const char *py_branch_types[] = {
 static const char *py_var_types[] = {"assignment", "augmented_assignment", NULL};
 static const char *py_throw_types[] = {"raise_statement", NULL};
 static const char *py_decorator_types[] = {"decorator", NULL};
+
+// ==================== MOJO ====================
+static const char *mojo_class_types[] = {"class_definition", "trait_definition", "extension_definition",
+                                         NULL};
 
 // ==================== JAVASCRIPT ====================
 static const char *js_func_types[] = {"function_declaration", "generator_function_declaration",
@@ -2519,6 +2524,12 @@ static const CBMLangSpec lang_specs[CBM_LANG_COUNT] = {
                        empty_types, sosl_import_types, empty_types, empty_types, empty_types,
                        empty_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_sosl,
                        NULL},
+
+    // CBM_LANG_MOJO — lsh/tree-sitter-mojo (Python-superset). Reuses py_* node types.
+    [CBM_LANG_MOJO] = {CBM_LANG_MOJO, py_func_types, mojo_class_types, empty_types, py_module_types,
+                       py_call_types, py_import_types, py_import_from_types, py_branch_types,
+                       py_var_types, py_var_types, py_throw_types, NULL, py_decorator_types, NULL,
+                       NULL, tree_sitter_mojo, NULL},
 
     // CBM_LANG_KUSTOMIZE — reuses YAML grammar; semantic extraction via cbm_extract_k8s()
     [CBM_LANG_KUSTOMIZE] = {CBM_LANG_KUSTOMIZE, yaml_var_types, empty_types, empty_types,

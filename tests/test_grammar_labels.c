@@ -172,6 +172,7 @@ static const LabelGolden LABEL_GOLDENS[] = {
     {"protobuf", "Class:1,Module:1"},
     {"soql", "Module:1"},
     {"sosl", "Module:1"},
+    {"mojo", "Class:1,Function:1,Interface:2,Module:1"},
     {"dotenv", "Module:1"},
     {"json", "Module:1,Variable:2"},
     {"json5", "Module:1"},

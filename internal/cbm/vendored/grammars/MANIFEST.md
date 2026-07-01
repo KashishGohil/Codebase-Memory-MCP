@@ -9,7 +9,7 @@ The grammars were originally vendored as bare `parser.c`+`scanner.c` with **no r
 
 ## Summary
 
-- Grammars: **158** — vendored-from-upstream: **141**, first-party/self-maintained: **12**, registry-disagreement: **5** (nim removed 2026-06-12; objectscript_udl + objectscript_routine added 2026-06-24 — see note below)
+- Grammars: **159** — vendored-from-upstream: **142**, first-party/self-maintained: **12**, registry-disagreement: **5** (nim removed 2026-06-12; objectscript_udl + objectscript_routine added 2026-06-24; mojo manual-vendor from lsh/tree-sitter-mojo @ `33193a99afe6`)
 - ABI distribution: **7×** ABI-13 **85×** ABI-14 **64×** ABI-15 (runtime ceiling is ABI 15; never vendor ABI 16 without a runtime upgrade)
 - Vendored copies missing LICENSE: **0** — all upstream LICENSE files restored 2026-06-11 (first-party grammars carry the project MIT license; `move` uses the Helix-listed upstream tzakian/tree-sitter-move MIT text, `zsh` uses georgeharker/tree-sitter-zsh MIT)
 - `verdict`: VERIFIED-BOTH = our source matches *both* registries; VERIFIED-NVIM/HELIX = matches one; registry-disagreement = registries name a different repo (listed separately); `vendor-maintained` = the language vendor's own grammar, not in nvim/Helix.
@@ -131,6 +131,7 @@ Guarded by the `contract_all_grammars_in_graph` graph-breadth test in
 | matlab | 15 | acristoffers/tree-sitter-matlab | `c2390a59016f` | VERIFIED-BOTH | ✅ |
 | mermaid | 14 | monaqa/tree-sitter-mermaid | `90ae195b3193` | VERIFIED-BOTH | ✅ |
 | meson | 15 | tree-sitter-grammars/tree-sitter-meson | `c84f3540624b` | VERIFIED-BOTH | ✅ |
+| mojo | 15 | lsh/tree-sitter-mojo | `33193a99afe6` | manual-vendor | ✅ |
 | nasm | 14 | naclsn/tree-sitter-nasm | `d1b3638d017f` | VERIFIED-BOTH | ✅ |
 | nickel | 15 | nickel-lang/tree-sitter-nickel | `b5b6cc3bc7b9` | VERIFIED-BOTH | ✅ |
 | nix | 13 | nix-community/tree-sitter-nix | `eabf96807ea4` | VERIFIED-BOTH | ✅ |
