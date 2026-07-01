@@ -29,10 +29,10 @@ enum {
     MCP_DEFAULT_LIMIT = 10,
     MCP_BFS_LIMIT = 100,
     MCP_N_DEFAULTS_2 = 2,
-    MCP_N_DEFAULTS_4 = 4,
     MCP_URI_PREFIX = 7,      /* strlen("file://") */
     MCP_CONTENT_PREFIX = 15, /* strlen("Content-Length:") */
     MCP_RETURN_2 = 2,
+    MCP_TOOLS_PAGE_SIZE = 8,
 };
 #define MCP_MS_TO_US 1000LL
 #define MCP_S_TO_US 1000000LL
@@ -44,6 +44,7 @@ enum {
 #include "cypher/cypher.h"
 #include "pipeline/pipeline.h"
 #include "pipeline/pass_cross_repo.h"
+#include "git/git_context.h"
 #include "cli/cli.h"
 #include "watcher/watcher.h"
 #include "foundation/mem.h"
@@ -54,6 +55,7 @@ enum {
 #include "foundation/compat_thread.h"
 #include "foundation/log.h"
 #include "foundation/str_util.h"
+#include "foundation/dump_verify.h"
 #include "foundation/compat_regex.h"
 #include "pipeline/artifact.h"
 
@@ -248,29 +250,66 @@ char *cbm_mcp_text_result(const char *text, bool is_error) {
     yyjson_mut_val *content = yyjson_mut_arr(doc);
     yyjson_mut_val *item = yyjson_mut_obj(doc);
     yyjson_mut_obj_add_str(doc, item, "type", "text");
-    yyjson_mut_obj_add_str(doc, item, "text", text);
+    yyjson_mut_obj_add_str(doc, item, "text", text ? text : "");
     yyjson_mut_arr_add_val(content, item);
     yyjson_mut_obj_add_val(doc, root, "content", content);
 
-    if (is_error) {
-        yyjson_mut_obj_add_bool(doc, root, "isError", true);
+    if (!is_error && text) {
+        yyjson_doc *structured_doc = yyjson_read(text, strlen(text), 0);
+        if (structured_doc) {
+            yyjson_val *structured_root = yyjson_doc_get_root(structured_doc);
+            if (yyjson_is_obj(structured_root)) {
+                yyjson_mut_val *structured = yyjson_val_mut_copy(doc, structured_root);
+                yyjson_mut_obj_add_val(doc, root, "structuredContent", structured);
+            }
+            yyjson_doc_free(structured_doc);
+        }
     }
+    yyjson_mut_obj_add_bool(doc, root, "isError", is_error);
 
     char *out = yy_doc_to_str(doc);
     yyjson_mut_doc_free(doc);
     return out;
 }
 
+bool cbm_mcp_cancel_request_matches(const char *params_json, int64_t active_id,
+                                    const char *active_id_str) {
+    if (!params_json) {
+        return false;
+    }
+
+    yyjson_doc *doc = yyjson_read(params_json, strlen(params_json), 0);
+    if (!doc) {
+        return false;
+    }
+
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *request_id = yyjson_obj_get(root, "requestId");
+    bool matches = false;
+    if (request_id) {
+        if (active_id_str) {
+            matches =
+                yyjson_is_str(request_id) && strcmp(yyjson_get_str(request_id), active_id_str) == 0;
+        } else {
+            matches = yyjson_is_int(request_id) && yyjson_get_int(request_id) == active_id;
+        }
+    }
+
+    yyjson_doc_free(doc);
+    return matches;
+}
+
 /* ── Tool definitions ─────────────────────────────────────────── */
 
 typedef struct {
     const char *name;
+    const char *title;
     const char *description;
     const char *input_schema; /* JSON string */
 } tool_def_t;
 
 static const tool_def_t TOOLS[] = {
-    {"index_repository",
+    {"index_repository", "Index repository",
      "Index a repository into the knowledge graph. "
      "Special mode 'cross-repo-intelligence': skip extraction, only match Routes/Channels "
      "across projects to create CROSS_HTTP_CALLS/CROSS_ASYNC_CALLS/CROSS_CHANNEL edges. "
@@ -286,12 +325,15 @@ static const tool_def_t TOOLS[] = {
      "\"target_projects\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},"
      "\"description\":\"Projects to search for cross-repo links (cross-repo-intelligence mode). "
      "Use [\\\"*\\\"] for all indexed projects. Run list_projects to see available projects.\"},"
+     "\"name\":{\"type\":\"string\",\"description\":"
+     "\"Override the derived project name. Non-ASCII bytes are encoded and unsafe path characters "
+     "are normalized.\"},"
      "\"persistence\":{\"type\":\"boolean\",\"default\":false,\"description\":"
      "\"Write compressed artifact to .codebase-memory/graph.db.zst for team sharing. "
      "Teammates can bootstrap from the artifact instead of full re-indexing.\"}"
      "},\"required\":[\"repo_path\"]}"},
 
-    {"search_graph",
+    {"search_graph", "Search graph",
      "Search the code knowledge graph for functions, classes, routes, and variables. Use INSTEAD "
      "OF grep/glob when finding code definitions, implementations, or relationships. Three search "
      "modes: (1) query='update settings' for BM25 ranked full-text search with camelCase "
@@ -328,7 +370,7 @@ static const tool_def_t TOOLS[] = {
      "increment offset by limit and re-call while has_more is true.\"}},"
      "\"required\":[\"project\"]}"},
 
-    {"query_graph",
+    {"query_graph", "Query graph",
      "Execute a Cypher query against the knowledge graph for complex multi-hop patterns, "
      "aggregations, and cross-service analysis. The response includes 'total' (returned "
      "row count). There is a hard 100k row ceiling — for broad queries add LIMIT in the "
@@ -351,7 +393,7 @@ static const tool_def_t TOOLS[] = {
      "ceiling. No offset support — use search_graph for paginated browsing.\"}},"
      "\"required\":[\"query\",\"project\"]}"},
 
-    {"trace_path",
+    {"trace_path", "Trace path",
      "Trace paths through the code graph. Modes: calls (callers/callees), data_flow (value "
      "propagation with args at each hop), cross_service (through HTTP/async Route nodes). "
      "Use INSTEAD OF grep for callers, dependencies, impact analysis, or data flow tracing.",
@@ -361,7 +403,9 @@ static const tool_def_t TOOLS[] = {
      "\"type\":\"string\",\"enum\":[\"calls\",\"data_flow\",\"cross_service\"],\"default\":"
      "\"calls\",\"description\":\"calls: follow CALLS edges. data_flow: follow CALLS+DATA_FLOWS "
      "with arg expressions. cross_service: follow HTTP_CALLS+ASYNC_CALLS+DATA_FLOWS through "
-     "Routes.\"},\"parameter_name\":{\"type\":\"string\",\"description\":\"For data_flow mode: "
+     "Routes, plus CROSS_* cross-repo edges (CROSS_HTTP_CALLS/ASYNC_CALLS/CHANNEL/GRPC_CALLS/"
+     "GRAPHQL_CALLS/TRPC_CALLS) to hop into other services.\"},\"parameter_name\":{\"type\":"
+     "\"string\",\"description\":\"For data_flow mode: "
      "scope trace to a specific parameter name\"},\"edge_types\":{\"type\":\"array\",\"items\":{"
      "\"type\":\"string\"}},\"risk_labels\":{\"type\":\"boolean\",\"default\":false,"
      "\"description\":\"Add risk classification (CRITICAL/HIGH/MEDIUM/LOW) based on hop distance"
@@ -370,7 +414,7 @@ static const tool_def_t TOOLS[] = {
      "filtered out. When true, test nodes are included with is_test=true marker."
      "\"}},\"required\":[\"function_name\",\"project\"]}"},
 
-    {"get_code_snippet",
+    {"get_code_snippet", "Get code snippet",
      "Read source code for a function/class/symbol. IMPORTANT: First call search_graph to find the "
      "exact qualified_name, then pass it here. This is a read tool, not a search tool. Accepts "
      "full qualified_name (exact match) or short function name (returns suggestions if ambiguous).",
@@ -379,20 +423,25 @@ static const tool_def_t TOOLS[] = {
      "\"type\":\"string\"},\"include_neighbors\":{"
      "\"type\":\"boolean\",\"default\":false}},\"required\":[\"qualified_name\",\"project\"]}"},
 
-    {"get_graph_schema", "Get the schema of the knowledge graph (node labels, edge types)",
+    {"get_graph_schema", "Get graph schema",
+     "Get the schema of the knowledge graph (node labels, edge types)",
      "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"}},\"required\":["
      "\"project\"]}"},
 
-    {"get_architecture",
+    {"get_architecture", "Get architecture",
      "Get high-level architecture overview — packages, services, dependencies, and project "
      "structure at a glance. Includes 'clusters': Leiden community detection over the call/import "
      "graph, surfacing the de-facto modules (each with a label, member count, cohesion score, "
      "representative top_nodes, and the packages/edge_types that bind it) — use these to grasp "
-     "the real architectural seams, which often cut across the folder layout.",
-     "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"},\"aspects\":{\"type\":"
-     "\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"project\"]}"},
+     "the real architectural seams, which often cut across the folder layout. Optional path scopes "
+     "analysis to nodes under that directory prefix (file_path).",
+     "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"},\"path\":{\"type\":"
+     "\"string\",\"description\":\"Optional directory prefix to scope architecture (e.g. "
+     "apps/hoa)\"},"
+     "\"aspects\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"project\"]"
+     "}"},
 
-    {"search_code",
+    {"search_code", "Search code",
      "Graph-augmented code search. Finds text patterns via grep, then enriches results with "
      "the knowledge graph: deduplicates matches into containing functions, ranks by structural "
      "importance (definitions first, popular functions next, tests last). "
@@ -416,30 +465,31 @@ static const tool_def_t TOOLS[] = {
      "offset parameter — raise limit or narrow with file_pattern / path_filter to see more."
      "\",\"default\":10}},\"required\":[\"pattern\",\"project\"]}"},
 
-    {"list_projects", "List all indexed projects", "{\"type\":\"object\",\"properties\":{}}"},
-
-    {"delete_project", "Delete a project from the index",
+    {"list_projects", "List projects", "List all indexed projects",
+     "{\"type\":\"object\",\"properties\":{}}"},
+    {"delete_project", "Delete project", "Delete a project from the index",
      "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"}},\"required\":["
      "\"project\"]}"},
 
-    {"index_status", "Get the indexing status of a project",
+    {"index_status", "Index status", "Get the indexing status of a project",
      "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"}},\"required\":["
      "\"project\"]}"},
 
-    {"detect_changes", "Detect code changes and their impact",
+    {"detect_changes", "Detect changes", "Detect code changes and their impact",
      "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"},\"scope\":{\"type\":"
      "\"string\"},\"depth\":{\"type\":\"integer\",\"default\":2},\"base_branch\":{\"type\":"
      "\"string\",\"default\":\"main\"},\"since\":{\"type\":\"string\",\"description\":"
-     "\"Git ref or date to compare from (e.g. HEAD~5, v0.5.0, 2026-01-01)\"}},\"required\":"
+     "\"Git ref or tag to compare from (e.g. HEAD~5, v0.5.0). Diffs <ref>...HEAD.\"}},"
+     "\"required\":"
      "[\"project\"]}"},
 
-    {"manage_adr", "Create or update Architecture Decision Records",
+    {"manage_adr", "Manage ADR", "Create or update Architecture Decision Records",
      "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"},\"mode\":{\"type\":"
      "\"string\",\"enum\":[\"get\",\"update\",\"sections\"]},\"content\":{\"type\":\"string\"},"
      "\"sections\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"project\"]"
      "}"},
 
-    {"ingest_traces", "Ingest runtime traces to enhance the knowledge graph",
+    {"ingest_traces", "Ingest traces", "Ingest runtime traces to enhance the knowledge graph",
      "{\"type\":\"object\",\"properties\":{\"traces\":{\"type\":\"array\",\"items\":{\"type\":"
      "\"object\"}},\"project\":{\"type\":"
      "\"string\"}},\"required\":[\"traces\",\"project\"]}"},
@@ -447,35 +497,124 @@ static const tool_def_t TOOLS[] = {
 
 static const int TOOL_COUNT = sizeof(TOOLS) / sizeof(TOOLS[0]);
 
-char *cbm_mcp_tools_list(void) {
+static const char MCP_TOOL_OUTPUT_SCHEMA[] = "{\"type\":\"object\",\"additionalProperties\":true}";
+
+static void mcp_add_json_schema(yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key,
+                                const char *schema_json) {
+    yyjson_doc *schema_doc = yyjson_read(schema_json, strlen(schema_json), 0);
+    if (schema_doc) {
+        yyjson_mut_val *schema = yyjson_val_mut_copy(doc, yyjson_doc_get_root(schema_doc));
+        if (schema) {
+            yyjson_mut_obj_add_val(doc, obj, key, schema);
+        }
+        yyjson_doc_free(schema_doc);
+    }
+}
+
+static void mcp_add_tool_def(yyjson_mut_doc *doc, yyjson_mut_val *tools, int i) {
+    yyjson_mut_val *tool = yyjson_mut_obj(doc);
+    yyjson_mut_obj_add_str(doc, tool, "name", TOOLS[i].name);
+    yyjson_mut_obj_add_str(doc, tool, "title", TOOLS[i].title);
+    yyjson_mut_obj_add_str(doc, tool, "description", TOOLS[i].description);
+
+    mcp_add_json_schema(doc, tool, "inputSchema", TOOLS[i].input_schema);
+    mcp_add_json_schema(doc, tool, "outputSchema", MCP_TOOL_OUTPUT_SCHEMA);
+
+    yyjson_mut_arr_add_val(tools, tool);
+}
+
+static char *cbm_mcp_tools_list_range(int offset, int limit, bool include_next_cursor) {
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
     yyjson_mut_val *root = yyjson_mut_obj(doc);
     yyjson_mut_doc_set_root(doc, root);
 
     yyjson_mut_val *tools = yyjson_mut_arr(doc);
 
-    for (int i = 0; i < TOOL_COUNT; i++) {
-        yyjson_mut_val *tool = yyjson_mut_obj(doc);
-        yyjson_mut_obj_add_str(doc, tool, "name", TOOLS[i].name);
-        yyjson_mut_obj_add_str(doc, tool, "description", TOOLS[i].description);
+    if (offset < 0) {
+        offset = 0;
+    }
+    if (offset > TOOL_COUNT) {
+        offset = TOOL_COUNT;
+    }
+    if (limit < 0 || limit > TOOL_COUNT) {
+        limit = TOOL_COUNT;
+    }
 
-        /* Parse input schema JSON and embed */
-        yyjson_doc *schema_doc =
-            yyjson_read(TOOLS[i].input_schema, strlen(TOOLS[i].input_schema), 0);
-        if (schema_doc) {
-            yyjson_mut_val *schema = yyjson_val_mut_copy(doc, yyjson_doc_get_root(schema_doc));
-            yyjson_mut_obj_add_val(doc, tool, "inputSchema", schema);
-            yyjson_doc_free(schema_doc);
-        }
+    int end = offset + limit;
+    if (end > TOOL_COUNT) {
+        end = TOOL_COUNT;
+    }
 
-        yyjson_mut_arr_add_val(tools, tool);
+    for (int i = offset; i < end; i++) {
+        mcp_add_tool_def(doc, tools, i);
     }
 
     yyjson_mut_obj_add_val(doc, root, "tools", tools);
+    if (include_next_cursor && end < TOOL_COUNT) {
+        char cursor[32];
+        snprintf(cursor, sizeof(cursor), "%d", end);
+        yyjson_mut_obj_add_strcpy(doc, root, "nextCursor", cursor);
+    }
 
     char *out = yy_doc_to_str(doc);
     yyjson_mut_doc_free(doc);
     return out;
+}
+
+char *cbm_mcp_tools_list(void) {
+    return cbm_mcp_tools_list_range(0, TOOL_COUNT, false);
+}
+
+/* Return the JSON input_schema string for a tool by name, or NULL if unknown.
+ * Used by the CLI to build --flag arguments and per-tool --help from the same
+ * source of truth the MCP tools/list advertises. Static lifetime; do not free. */
+const char *cbm_mcp_tool_input_schema(const char *tool_name) {
+    if (!tool_name) {
+        return NULL;
+    }
+    for (int i = 0; i < TOOL_COUNT; i++) {
+        if (strcmp(TOOLS[i].name, tool_name) == 0) {
+            return TOOLS[i].input_schema;
+        }
+    }
+    return NULL;
+}
+
+static int mcp_tools_cursor_offset(const char *params_json) {
+    if (!params_json) {
+        return 0;
+    }
+
+    yyjson_doc *doc = yyjson_read(params_json, strlen(params_json), 0);
+    if (!doc) {
+        return 0;
+    }
+
+    int offset = 0;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *cursor = root ? yyjson_obj_get(root, "cursor") : NULL;
+    if (cursor) {
+        offset = TOOL_COUNT;
+        if (yyjson_is_str(cursor)) {
+            const char *cursor_str = yyjson_get_str(cursor);
+            if (cursor_str && *cursor_str != '\0') {
+                char *endptr = NULL;
+                errno = 0;
+                long parsed = strtol(cursor_str, &endptr, 10);
+                if (endptr && *endptr == '\0' && errno == 0 && parsed >= 0) {
+                    offset = parsed > TOOL_COUNT ? TOOL_COUNT : (int)parsed;
+                }
+            }
+        }
+    }
+
+    yyjson_doc_free(doc);
+    return offset;
+}
+
+static char *cbm_mcp_tools_list_page(const char *params_json) {
+    return cbm_mcp_tools_list_range(mcp_tools_cursor_offset(params_json), MCP_TOOLS_PAGE_SIZE,
+                                    true);
 }
 
 /* Supported protocol versions, newest first. The server picks the newest
@@ -523,6 +662,7 @@ char *cbm_mcp_initialize_response(const char *params_json) {
 
     yyjson_mut_val *caps = yyjson_mut_obj(doc);
     yyjson_mut_val *tools_cap = yyjson_mut_obj(doc);
+    yyjson_mut_obj_add_bool(doc, tools_cap, "listChanged", false);
     yyjson_mut_obj_add_val(doc, caps, "tools", tools_cap);
     yyjson_mut_obj_add_val(doc, root, "capabilities", caps);
 
@@ -578,6 +718,26 @@ char *cbm_mcp_get_string_arg(const char *args_json, const char *key) {
     }
     yyjson_doc_free(doc);
     return result;
+}
+
+/* Resolve the project argument, accepting the canonical "project" key plus the
+ * aliases a caller naturally reaches for (#640): list_projects surfaces the
+ * field as "name" and the not-found hint says "pass the project name", so
+ * "project_name" is the usual guess; "project_id" / "projectName" are accepted
+ * too. NOT bare "name" — index_repository uses "name" for an explicit
+ * project-name override. Caller must free() the result. */
+static char *get_project_arg(const char *args_json) {
+    char *p = cbm_mcp_get_string_arg(args_json, "project");
+    if (!p) {
+        p = cbm_mcp_get_string_arg(args_json, "project_name");
+    }
+    if (!p) {
+        p = cbm_mcp_get_string_arg(args_json, "project_id");
+    }
+    if (!p) {
+        p = cbm_mcp_get_string_arg(args_json, "projectName");
+    }
+    return p;
 }
 
 int cbm_mcp_get_int_arg(const char *args_json, const char *key, int default_val) {
@@ -636,6 +796,7 @@ struct cbm_mcp_server {
     /* Active pipeline tracking for cancellation support */
     cbm_pipeline_t *active_pipeline; /* non-NULL while index_repository runs */
     int64_t active_request_id;       /* JSON-RPC id of the in-progress tool call */
+    char *active_request_id_str;     /* string JSON-RPC id of the in-progress tool call */
 };
 
 cbm_mcp_server_t *cbm_mcp_server_new(const char *store_path) {
@@ -695,6 +856,7 @@ void cbm_mcp_server_free(cbm_mcp_server_t *srv) {
         cbm_store_close(srv->store);
     }
     free(srv->current_project);
+    free(srv->active_request_id_str);
     free(srv);
 }
 
@@ -758,6 +920,22 @@ static const char *project_db_path(const char *project, char *buf, size_t bufsz)
 
 /* ── Store resolution ──────────────────────────────────────────── */
 
+/* Read the sole INTERNAL project name from a .db file at full_path.
+ * Opens the file query-mode (no create) and succeeds ONLY when the db holds
+ * exactly one project row with a non-empty name — this filters ghost/empty
+ * /corrupt dbs (0-byte file, missing `projects` table, or >1 row). On success
+ * the internal name is copied into name_out; if out_store is non-NULL the open
+ * handle is transferred to the caller (who must cbm_store_close it). On failure
+ * the store is always closed. Defined after is_project_db_file below. */
+static bool db_internal_project_name(const char *full_path, char *name_out, size_t name_sz,
+                                     cbm_store_t **out_store);
+
+/* #704 fallback: scan the cache dir for the db whose sole internal project name
+ * equals `project`, returning an open store handle (caller owns it) or NULL.
+ * Used only when <project>.db is absent or its internal name differs from the
+ * passed name (drifted filename). Defined after is_project_db_file below. */
+static cbm_store_t *resolve_store_fallback_scan(const char *project);
+
 /* Open the right project's .db file for query tools.
  * Caches the connection — reopens only when project changes.
  * Tracks last-access time so the event loop can evict idle stores. */
@@ -785,14 +963,21 @@ static cbm_store_t *resolve_store(cbm_mcp_server_t *srv, const char *project) {
     project_db_path(project, path, sizeof(path));
     srv->store = cbm_store_open_path_query(path);
     if (srv->store) {
-        /* Check DB integrity — auto-clean corrupt databases */
+        /* Check DB integrity — back up (never silently delete) a corrupt DB */
         if (!cbm_store_check_integrity(srv->store)) {
             cbm_log_error("store.auto_clean", "project", project, "path", path, "action",
-                          "deleting corrupt db — re-index required");
+                          "backing up corrupt db to .corrupt — re-index required");
             cbm_store_close(srv->store);
             srv->store = NULL;
-            /* Delete the corrupt DB + WAL/SHM files */
-            cbm_unlink(path);
+            /* #557 (data loss): rename the corrupt DB to a .corrupt backup instead
+             * of unlinking it, so the user's graph is recoverable / reportable.
+             * Re-index rebuilds a fresh DB at `path`. WAL/SHM are transient. */
+            char bak_path[MCP_FIELD_SIZE];
+            snprintf(bak_path, sizeof(bak_path), "%s.corrupt", path);
+            cbm_unlink(bak_path); /* clear any prior backup so rename succeeds on Windows */
+            if (rename(path, bak_path) != 0) {
+                cbm_unlink(path); /* rename failed (e.g. cross-device) — fall back to delete */
+            }
             char wal_path[MCP_FIELD_SIZE];
             char shm_path[MCP_FIELD_SIZE];
             snprintf(wal_path, sizeof(wal_path), "%s-wal", path);
@@ -807,12 +992,29 @@ static cbm_store_t *resolve_store(cbm_mcp_server_t *srv, const char *project) {
          * Linux where unlink defers actual removal). Opening an empty/deleted
          * store without closing it leaks the SQLite connection. */
         cbm_project_t proj_verify = {0};
-        if (cbm_store_get_project(srv->store, project, &proj_verify) != CBM_STORE_OK) {
-            cbm_store_close(srv->store);
-            srv->store = NULL;
-            return NULL;
+        if (cbm_store_get_project(srv->store, project, &proj_verify) == CBM_STORE_OK) {
+            cbm_project_free_fields(&proj_verify);
+            srv->owns_store = true;
+            free(srv->current_project);
+            srv->current_project = heap_strdup(project);
+            return srv->store; /* fast path: filename == internal name */
         }
-        cbm_project_free_fields(&proj_verify);
+        /* #704: <project>.db exists but its INTERNAL project name differs from
+         * the passed name (a copied/renamed db, or a legacy '.'-vs-'-' username
+         * twin). Close it and fall through to the cache-dir scan below. */
+        cbm_store_close(srv->store);
+        srv->store = NULL;
+    }
+
+    /* #704 fallback: either <project>.db is absent or its internal name drifted
+     * from its filename. Node rows are keyed on the INTERNAL name (== the passed
+     * name, since list_projects now advertises internal names), so scan the
+     * cache dir for the db whose sole internal project name equals `project` and
+     * adopt it. Runs ONLY on the fallback — the common fast path is unchanged.
+     * No match → NULL (a genuine typo stays not-found). */
+    cbm_store_t *scanned = resolve_store_fallback_scan(project);
+    if (scanned) {
+        srv->store = scanned;
         srv->owns_store = true;
         free(srv->current_project);
         srv->current_project = heap_strdup(project);
@@ -843,12 +1045,21 @@ static int collect_db_project_names(const char *dir_path, char *out, size_t out_
         if (!is_project_db_file(n, len)) {
             continue;
         }
+        /* #704: advertise the db's INTERNAL project name, not its filename, and
+         * skip ghost/empty/corrupt dbs — so the hint lists names the user can
+         * actually pass to resolve a store. */
+        char full_path[CBM_SZ_2K];
+        snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, n);
+        char iname[CBM_SZ_1K];
+        if (!db_internal_project_name(full_path, iname, sizeof(iname), NULL)) {
+            continue;
+        }
         if ((size_t)offset >= out_sz)
             break; /* bounds check before write */
         if (count > 0 && offset < (int)out_sz - MCP_SEPARATOR) {
             out[offset++] = ',';
         }
-        int wrote = snprintf(out + offset, out_sz - (size_t)offset, "\"%.*s\"", (int)(len - 3), n);
+        int wrote = snprintf(out + offset, out_sz - (size_t)offset, "\"%s\"", iname);
         if (wrote > 0) {
             offset += wrote;
             if ((size_t)offset >= out_sz) {
@@ -859,6 +1070,37 @@ static int collect_db_project_names(const char *dir_path, char *out, size_t out_
     }
     cbm_closedir(d);
     return count;
+}
+
+static void add_git_context_string(yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key,
+                                   const char *value) {
+    if (value) {
+        yyjson_mut_obj_add_strcpy(doc, obj, key, value);
+    } else {
+        yyjson_mut_obj_add_null(doc, obj, key);
+    }
+}
+
+static void add_git_context_json(yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *root_path) {
+    cbm_git_context_t ctx = {0};
+    (void)cbm_git_context_resolve(root_path, &ctx);
+
+    yyjson_mut_val *git = yyjson_mut_obj(doc);
+    yyjson_mut_obj_add_bool(doc, git, "is_git", ctx.is_git);
+    yyjson_mut_obj_add_bool(doc, git, "is_worktree", ctx.is_worktree);
+    yyjson_mut_obj_add_bool(doc, git, "is_detached", ctx.is_detached);
+    yyjson_mut_obj_add_bool(doc, git, "root_exists", ctx.root_exists);
+    add_git_context_string(doc, git, "worktree_root", ctx.worktree_root);
+    add_git_context_string(doc, git, "git_dir", ctx.git_dir);
+    add_git_context_string(doc, git, "git_common_dir", ctx.git_common_dir);
+    add_git_context_string(doc, git, "canonical_root", ctx.canonical_root);
+    add_git_context_string(doc, git, "branch", ctx.branch);
+    add_git_context_string(doc, git, "branch_slug", ctx.branch_slug);
+    add_git_context_string(doc, git, "head_sha", ctx.head_sha);
+    add_git_context_string(doc, git, "base_sha", ctx.base_sha);
+    yyjson_mut_obj_add_val(doc, obj, "git", git);
+
+    cbm_git_context_free(&ctx);
 }
 
 /* Build a helpful error listing available projects. Caller must free() result. */
@@ -874,7 +1116,8 @@ static char *build_project_list_error(const char *reason) {
     if (count > 0) {
         snprintf(buf, sizeof(buf),
                  "{\"error\":\"%s\",\"hint\":\"Use list_projects to see all indexed projects, "
-                 "then pass the project name.\",\"available_projects\":[%s],\"count\":%d}",
+                 "then pass it as the \\\"project\\\" "
+                 "argument.\",\"available_projects\":[%s],\"count\":%d}",
                  reason, projects, count);
     } else {
         snprintf(buf, sizeof(buf),
@@ -885,16 +1128,34 @@ static char *build_project_list_error(const char *reason) {
     return heap_strdup(buf);
 }
 
-/* Bail with project list when no store is available. */
-#define REQUIRE_STORE(store, project)                                                  \
-    do {                                                                               \
-        if (!(store)) {                                                                \
-            char *_err = build_project_list_error("project not found or not indexed"); \
-            char *_res = cbm_mcp_text_result(_err, true);                              \
-            free(_err);                                                                \
-            free(project);                                                             \
-            return _res;                                                               \
-        }                                                                              \
+/* Distinct from "unknown project": the caller omitted the project argument
+ * entirely (no recognized key). Name the literal "project" key so the fix is
+ * obvious (#640). Caller must free() result. */
+static char *build_missing_project_error(void) {
+    return heap_strdup("{\"error\":\"missing required argument: project\",\"hint\":\"Pass "
+                       "the project as the \\\"project\\\" argument, e.g. "
+                       "{\\\"project\\\":\\\"<name from list_projects>\\\"}. Run "
+                       "list_projects to see indexed projects.\"}");
+}
+
+/* Pick the right no-store error: a NULL project means the argument was missing
+ * (clearer message); a non-NULL project that didn't resolve means it's
+ * unknown/unindexed (list the available ones). */
+static char *build_no_store_error(const char *project) {
+    return project ? build_project_list_error("project not found or not indexed")
+                   : build_missing_project_error();
+}
+
+/* Bail with the right error when no store is available. */
+#define REQUIRE_STORE(store, project)                     \
+    do {                                                  \
+        if (!(store)) {                                   \
+            char *_err = build_no_store_error(project);   \
+            char *_res = cbm_mcp_text_result(_err, true); \
+            free(_err);                                   \
+            free(project);                                \
+            return _res;                                  \
+        }                                                 \
     } while (0)
 
 /* ── Tool handler implementations ─────────────────────────────── */
@@ -916,41 +1177,104 @@ static bool is_project_db_file(const char *name, size_t len) {
     return true;
 }
 
+/* db_internal_project_name — see forward declaration above resolve_store. */
+static bool db_internal_project_name(const char *full_path, char *name_out, size_t name_sz,
+                                     cbm_store_t **out_store) {
+    if (out_store) {
+        *out_store = NULL;
+    }
+    cbm_store_t *st = cbm_store_open_path_query(full_path);
+    if (!st) {
+        return false; /* nonexistent / unreadable */
+    }
+    cbm_project_t *projs = NULL;
+    int n = 0;
+    bool ok = false;
+    if (cbm_store_list_projects(st, &projs, &n) == CBM_STORE_OK && n == 1 && projs[0].name &&
+        projs[0].name[0]) {
+        snprintf(name_out, name_sz, "%s", projs[0].name);
+        ok = true;
+    }
+    cbm_store_free_projects(projs, n);
+    if (ok && out_store) {
+        *out_store = st; /* transfer ownership to caller */
+    } else {
+        cbm_store_close(st);
+    }
+    return ok;
+}
+
+/* resolve_store_fallback_scan — see forward declaration above resolve_store. */
+static cbm_store_t *resolve_store_fallback_scan(const char *project) {
+    char dir_path[CBM_SZ_1K];
+    cache_dir(dir_path, sizeof(dir_path));
+    cbm_dir_t *d = cbm_opendir(dir_path);
+    if (!d) {
+        return NULL;
+    }
+    cbm_store_t *found = NULL;
+    cbm_dirent_t *entry;
+    while ((entry = cbm_readdir(d)) != NULL) {
+        const char *n = entry->name;
+        size_t len = strlen(n);
+        if (!is_project_db_file(n, len)) {
+            continue;
+        }
+        char full_path[CBM_SZ_2K];
+        snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, n);
+        char iname[CBM_SZ_1K];
+        cbm_store_t *st = NULL;
+        if (db_internal_project_name(full_path, iname, sizeof(iname), &st)) {
+            if (strcmp(iname, project) == 0) {
+                found = st; /* adopt — caller takes ownership */
+                break;
+            }
+            cbm_store_close(st);
+        }
+    }
+    cbm_closedir(d);
+    return found;
+}
+
 /* Open a .db file briefly, collect node/edge counts and root_path,
  * then append a JSON entry to arr. */
 static void build_project_json_entry(yyjson_mut_doc *doc, yyjson_mut_val *arr, const char *dir_path,
-                                     const char *name, size_t name_len, const struct stat *st) {
-    char project_name[CBM_SZ_1K];
-    snprintf(project_name, sizeof(project_name), "%.*s", (int)(name_len - 3), name);
+                                     const char *name, size_t name_len, int64_t size_bytes) {
+    (void)name_len;
 
     char full_path[CBM_SZ_2K];
     snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, name);
 
-    cbm_store_t *pstore = cbm_store_open_path(full_path);
-    int nodes = 0;
-    int edges = 0;
-    char root_path_buf[CBM_SZ_1K] = "";
-    if (pstore) {
-        nodes = cbm_store_count_nodes(pstore, project_name);
-        edges = cbm_store_count_edges(pstore, project_name);
-        cbm_project_t proj = {0};
-        if (cbm_store_get_project(pstore, project_name, &proj) == CBM_STORE_OK) {
-            if (proj.root_path) {
-                snprintf(root_path_buf, sizeof(root_path_buf), "%s", proj.root_path);
-            }
-            safe_str_free(&proj.name);
-            safe_str_free(&proj.indexed_at);
-            safe_str_free(&proj.root_path);
-        }
-        cbm_store_close(pstore);
+    /* #704: key on the db's INTERNAL project name, not its filename. Node/edge
+     * rows are tagged with the internal name, so a drifted filename (copied or
+     * renamed db, legacy '.'-vs-'-' username twin) would otherwise report 0
+     * nodes/edges and be unresolvable. Skip ghost/empty/corrupt dbs entirely so
+     * they don't appear as resolvable projects. */
+    char project_name[CBM_SZ_1K];
+    cbm_store_t *pstore = NULL;
+    if (!db_internal_project_name(full_path, project_name, sizeof(project_name), &pstore)) {
+        return; /* ghost / unreadable — not a resolvable project */
     }
+
+    int nodes = cbm_store_count_nodes(pstore, project_name);
+    int edges = cbm_store_count_edges(pstore, project_name);
+    char root_path_buf[CBM_SZ_1K] = "";
+    cbm_project_t proj = {0};
+    if (cbm_store_get_project(pstore, project_name, &proj) == CBM_STORE_OK) {
+        if (proj.root_path) {
+            snprintf(root_path_buf, sizeof(root_path_buf), "%s", proj.root_path);
+        }
+        cbm_project_free_fields(&proj);
+    }
+    cbm_store_close(pstore);
 
     yyjson_mut_val *p = yyjson_mut_obj(doc);
     yyjson_mut_obj_add_strcpy(doc, p, "name", project_name);
     yyjson_mut_obj_add_strcpy(doc, p, "root_path", root_path_buf);
+    add_git_context_json(doc, p, root_path_buf[0] ? root_path_buf : NULL);
     yyjson_mut_obj_add_int(doc, p, "nodes", nodes);
     yyjson_mut_obj_add_int(doc, p, "edges", edges);
-    yyjson_mut_obj_add_int(doc, p, "size_bytes", (int64_t)st->st_size);
+    yyjson_mut_obj_add_int(doc, p, "size_bytes", size_bytes);
     yyjson_mut_arr_add_val(arr, p);
 }
 
@@ -989,11 +1313,11 @@ static char *handle_list_projects(cbm_mcp_server_t *srv, const char *args) {
         }
         char full_path[CBM_SZ_2K];
         snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, name);
-        struct stat st;
-        if (stat(full_path, &st) != 0) {
+        int64_t size_bytes = cbm_file_size(full_path);
+        if (size_bytes < 0) {
             continue;
         }
-        build_project_json_entry(doc, arr, dir_path, name, len, &st);
+        build_project_json_entry(doc, arr, dir_path, name, len, size_bytes);
     }
     cbm_closedir(d);
 
@@ -1034,7 +1358,7 @@ static char *verify_project_indexed(cbm_store_t *store, const char *project) {
 }
 
 static char *handle_get_graph_schema(cbm_mcp_server_t *srv, const char *args) {
-    char *project = cbm_mcp_get_string_arg(args, "project");
+    char *project = get_project_arg(args);
     cbm_store_t *store = resolve_store(srv, project);
     REQUIRE_STORE(store, project);
 
@@ -1174,6 +1498,7 @@ enum {
     BM25_BIND_LIMIT = 3,
     BM25_BIND_OFFSET = 4,
     BM25_BIND_INNER = 5,
+    BM25_BIND_FILE = 6,
     BM25_SQL_AUTO_LEN = -1,
     /* Inner FTS5 candidate cap.  SQLite can early-terminate a plain FTS5 query
      * (no JOIN/WHERE on outer table) of the form:
@@ -1233,11 +1558,31 @@ static int bm25_build_match(const char *query, char *out, size_t out_size) {
     return tokens;
 }
 
+static char *bm25_file_pattern_like(const char *file_pattern) {
+    if (!file_pattern) {
+        return NULL;
+    }
+    char *like = cbm_glob_to_like(file_pattern);
+    if (like && !strchr(file_pattern, '*') && !strchr(file_pattern, '?')) {
+        size_t len = strlen(like);
+        char *contains = malloc(len + MCP_SEPARATOR + SKIP_ONE);
+        if (contains) {
+            contains[0] = '%';
+            memcpy(contains + SKIP_ONE, like, len);
+            contains[len + SKIP_ONE] = '%';
+            contains[len + MCP_SEPARATOR] = '\0';
+            free(like);
+            like = contains;
+        }
+    }
+    return like;
+}
+
 /* Run the BM25 full-text search path and return the JSON result string.
  * Returns NULL if FTS5 is unavailable or the query produced no usable tokens,
  * in which case the caller falls back to the regex-based search path. */
-static char *bm25_search(cbm_store_t *store, const char *project, const char *query, int limit,
-                         int offset) {
+static char *bm25_search(cbm_store_t *store, const char *project, const char *query,
+                         const char *file_pattern, int limit, int offset) {
     sqlite3 *db = cbm_store_get_db(store);
     if (!db) {
         return NULL;
@@ -1247,6 +1592,7 @@ static char *bm25_search(cbm_store_t *store, const char *project, const char *qu
     if (tok_count == 0) {
         return NULL;
     }
+    char *file_like = bm25_file_pattern_like(file_pattern);
 
     /* BM25 ranked query using a two-step approach to enable FTS5 early termination.
      *
@@ -1277,11 +1623,13 @@ static char *bm25_search(cbm_store_t *store, const char *project, const char *qu
         "JOIN nodes n ON n.id = fts.rowid "
         "WHERE n.project = ?2 "
         "  AND n.label NOT IN ('File','Folder','Module','Section','Variable','Project') "
+        "  AND (?6 IS NULL OR n.file_path LIKE ?6) "
         "ORDER BY rank "
         "LIMIT ?3 OFFSET ?4";
 
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(db, sql, BM25_SQL_AUTO_LEN, &stmt, NULL) != SQLITE_OK) {
+        free(file_like);
         return NULL;
     }
     sqlite3_bind_text(stmt, BM25_BIND_QUERY, fts_query, BM25_SQL_AUTO_LEN, MCP_SQLITE_TRANSIENT);
@@ -1289,6 +1637,11 @@ static char *bm25_search(cbm_store_t *store, const char *project, const char *qu
     sqlite3_bind_int(stmt, BM25_BIND_LIMIT, limit > 0 ? limit : BM25_DEFAULT_LIMIT);
     sqlite3_bind_int(stmt, BM25_BIND_OFFSET, offset > 0 ? offset : 0);
     sqlite3_bind_int(stmt, BM25_BIND_INNER, BM25_INNER_LIMIT);
+    if (file_like) {
+        sqlite3_bind_text(stmt, BM25_BIND_FILE, file_like, BM25_SQL_AUTO_LEN, MCP_SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(stmt, BM25_BIND_FILE);
+    }
 
     /* Count hits within the same inner-limit window — capped at BM25_INNER_LIMIT.
      * Uses the identical subquery structure so the FTS5 early-exit applies here too. */
@@ -1303,6 +1656,7 @@ static char *bm25_search(cbm_store_t *store, const char *project, const char *qu
             "    JOIN nodes n ON n.id = fts.rowid "
             "    WHERE n.project = ?2 "
             "      AND n.label NOT IN ('File','Folder','Module','Section','Variable','Project')"
+            "      AND (?6 IS NULL OR n.file_path LIKE ?6)"
             ")";
         sqlite3_stmt *cs = NULL;
         if (sqlite3_prepare_v2(db, count_sql, BM25_SQL_AUTO_LEN, &cs, NULL) == SQLITE_OK) {
@@ -1311,6 +1665,12 @@ static char *bm25_search(cbm_store_t *store, const char *project, const char *qu
             sqlite3_bind_text(cs, BM25_BIND_PROJECT, project, BM25_SQL_AUTO_LEN,
                               MCP_SQLITE_TRANSIENT);
             sqlite3_bind_int(cs, BM25_BIND_LIMIT, BM25_INNER_LIMIT);
+            if (file_like) {
+                sqlite3_bind_text(cs, BM25_BIND_FILE, file_like, BM25_SQL_AUTO_LEN,
+                                  MCP_SQLITE_TRANSIENT);
+            } else {
+                sqlite3_bind_null(cs, BM25_BIND_FILE);
+            }
             if (sqlite3_step(cs) == SQLITE_ROW) {
                 total = sqlite3_column_int(cs, 0);
             }
@@ -1343,6 +1703,7 @@ static char *bm25_search(cbm_store_t *store, const char *project, const char *qu
         emitted++;
     }
     sqlite3_finalize(stmt);
+    free(file_like);
 
     yyjson_mut_obj_add_val(doc, root, "results", results);
     yyjson_mut_obj_add_bool(doc, root, "has_more", total > offset + emitted);
@@ -1465,7 +1826,7 @@ static bool run_semantic_query(yyjson_mut_doc *doc, yyjson_mut_val *root, const 
 }
 
 static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
-    char *project = cbm_mcp_get_string_arg(args, "project");
+    char *project = get_project_arg(args);
     cbm_store_t *store = resolve_store(srv, project);
     REQUIRE_STORE(store, project);
 
@@ -1483,7 +1844,9 @@ static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
     if (query && query[0]) {
         int q_limit = cbm_mcp_get_int_arg(args, "limit", BM25_DEFAULT_LIMIT);
         int q_offset = cbm_mcp_get_int_arg(args, "offset", 0);
-        char *bm25_json = bm25_search(store, project, query, q_limit, q_offset);
+        char *q_file_pattern = cbm_mcp_get_string_arg(args, "file_pattern");
+        char *bm25_json = bm25_search(store, project, query, q_file_pattern, q_limit, q_offset);
+        free(q_file_pattern);
         if (bm25_json) {
             free(query);
             free(project);
@@ -1608,7 +1971,7 @@ static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
 
 static char *handle_query_graph(cbm_mcp_server_t *srv, const char *args) {
     char *query = cbm_mcp_get_string_arg(args, "query");
-    char *project = cbm_mcp_get_string_arg(args, "project");
+    char *project = get_project_arg(args);
     cbm_store_t *store = resolve_store(srv, project);
     int max_rows = cbm_mcp_get_int_arg(args, "max_rows", 0);
 
@@ -1686,7 +2049,7 @@ static char *handle_query_graph(cbm_mcp_server_t *srv, const char *args) {
 }
 
 static char *handle_index_status(cbm_mcp_server_t *srv, const char *args) {
-    char *project = cbm_mcp_get_string_arg(args, "project");
+    char *project = get_project_arg(args);
     cbm_store_t *store = resolve_store(srv, project);
     REQUIRE_STORE(store, project);
 
@@ -1701,6 +2064,15 @@ static char *handle_index_status(cbm_mcp_server_t *srv, const char *args) {
         yyjson_mut_obj_add_int(doc, root, "nodes", nodes);
         yyjson_mut_obj_add_int(doc, root, "edges", edges);
         yyjson_mut_obj_add_str(doc, root, "status", nodes > 0 ? "ready" : "empty");
+        cbm_project_t proj_info = {0};
+        if (cbm_store_get_project(store, project, &proj_info) == CBM_STORE_OK) {
+            yyjson_mut_obj_add_strcpy(doc, root, "root_path",
+                                      proj_info.root_path ? proj_info.root_path : "");
+            add_git_context_json(doc, root, proj_info.root_path);
+            safe_str_free(&proj_info.name);
+            safe_str_free(&proj_info.indexed_at);
+            safe_str_free(&proj_info.root_path);
+        }
         if (nodes == 0) {
             yyjson_mut_obj_add_str(
                 doc, root, "hint",
@@ -1721,7 +2093,7 @@ static char *handle_index_status(cbm_mcp_server_t *srv, const char *args) {
 
 /* delete_project: just erase the .db file (and WAL/SHM). */
 static char *handle_delete_project(cbm_mcp_server_t *srv, const char *args) {
-    char *name = cbm_mcp_get_string_arg(args, "project");
+    char *name = get_project_arg(args);
     if (!name) {
         return cbm_mcp_text_result("project is required", true);
     }
@@ -1832,13 +2204,15 @@ static void append_cross_repo_summary(yyjson_mut_doc *doc, yyjson_mut_val *root,
 }
 
 static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
-    char *project = cbm_mcp_get_string_arg(args, "project");
+    char *project = get_project_arg(args);
+    char *scope_path = cbm_mcp_get_string_arg(args, "path");
     cbm_store_t *store = resolve_store(srv, project);
     REQUIRE_STORE(store, project);
 
     char *not_indexed = verify_project_indexed(store, project);
     if (not_indexed) {
         free(project);
+        free(scope_path);
         return not_indexed;
     }
 
@@ -1878,14 +2252,17 @@ static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
     /* Counts-only: this handler renders label/type counts but never property
      * keys, and full key discovery json_each-scans every row (seconds-to-
      * minutes on multi-million-node graphs). */
-    cbm_store_get_schema_counts(store, project, &schema);
+    cbm_store_get_schema_counts_scoped(store, project, scope_path, &schema);
 
     cbm_architecture_info_t arch = {0};
-    cbm_store_get_architecture(store, project, aspects_strs_count > 0 ? aspects_strs : NULL,
-                               aspects_strs_count, &arch);
+    cbm_store_get_architecture(store, project, scope_path,
+                               aspects_strs_count > 0 ? aspects_strs : NULL, aspects_strs_count,
+                               &arch);
 
-    int node_count = cbm_store_count_nodes(store, project);
-    int edge_count = cbm_store_count_edges(store, project);
+    int node_count = cbm_store_count_nodes_scoped(store, project, scope_path);
+    int edge_count = cbm_store_count_edges_scoped(store, project, scope_path);
+    char norm_path[CBM_SZ_512];
+    bool path_scoped = cbm_store_normalize_arch_path(scope_path, norm_path, sizeof(norm_path));
 
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
     yyjson_mut_val *root = yyjson_mut_obj(doc);
@@ -1893,6 +2270,15 @@ static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
 
     if (project) {
         yyjson_mut_obj_add_str(doc, root, "project", project);
+    }
+    if (path_scoped) {
+        yyjson_mut_obj_add_str(doc, root, "path", norm_path);
+        int root_nodes = cbm_store_count_nodes(store, project);
+        int root_edges = cbm_store_count_edges(store, project);
+        yyjson_mut_obj_add_int(doc, root, "root_total_nodes", root_nodes);
+        yyjson_mut_obj_add_int(doc, root, "root_total_edges", root_edges);
+        yyjson_mut_obj_add_int(doc, root, "scoped_total_nodes", node_count);
+        yyjson_mut_obj_add_int(doc, root, "scoped_total_edges", edge_count);
     }
     yyjson_mut_obj_add_int(doc, root, "total_nodes", node_count);
     yyjson_mut_obj_add_int(doc, root, "total_edges", edge_count);
@@ -2109,6 +2495,7 @@ static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
         yyjson_doc_free(aspects_doc);
     }
     free(project);
+    free(scope_path);
 
     char *result = cbm_mcp_text_result(json, false);
     free(json);
@@ -2122,7 +2509,10 @@ static yyjson_doc *resolve_trace_edge_types(const char *args, const char *mode,
                                             const char **out_types, int *out_count) {
     static const char *mode_calls[] = {"CALLS"};
     static const char *mode_data_flow[] = {"CALLS", "DATA_FLOWS"};
-    static const char *mode_cross_svc[] = {"HTTP_CALLS", "ASYNC_CALLS", "DATA_FLOWS", "CALLS"};
+    static const char *mode_cross_svc[] = {
+        "HTTP_CALLS",          "ASYNC_CALLS",       "DATA_FLOWS",    "CALLS",
+        "CROSS_HTTP_CALLS",    "CROSS_ASYNC_CALLS", "CROSS_CHANNEL", "CROSS_GRPC_CALLS",
+        "CROSS_GRAPHQL_CALLS", "CROSS_TRPC_CALLS"};
 
     *out_count = 0;
 
@@ -2154,7 +2544,7 @@ static yyjson_doc *resolve_trace_edge_types(const char *args, const char *mode,
         n_defaults = MCP_N_DEFAULTS_2;
     } else if (mode && strcmp(mode, "cross_service") == 0) {
         defaults = mode_cross_svc;
-        n_defaults = MCP_N_DEFAULTS_4;
+        n_defaults = (int)(sizeof(mode_cross_svc) / sizeof(mode_cross_svc[0]));
     }
     for (int i = 0; i < n_defaults; i++) {
         out_types[i] = defaults[i];
@@ -2174,8 +2564,52 @@ static bool is_test_file(const char *path) {
 }
 
 /* Convert BFS traversal results into a yyjson_mut array. */
+/* Find the CALLS-edge "args" JSON (the serialized arg expressions) on the edge
+ * that leads to the given hop node, so data_flow mode can surface argument
+ * expressions (#514). Returns the borrowed substring "[...]" inside the edge's
+ * properties_json, with its length, or NULL when no args are recorded. */
+static const char *bfs_edge_args_for_hop(cbm_traverse_result_t *tr, int64_t hop_node_id,
+                                         size_t *out_len) {
+    for (int e = 0; e < tr->edge_count; e++) {
+        /* The hop node is the edge endpoint reached from the root side: for an
+         * outbound trace it is the target, for inbound it is the source. Match
+         * on either so both directions surface their args. */
+        if (tr->edges[e].target_id != hop_node_id && tr->edges[e].source_id != hop_node_id) {
+            continue;
+        }
+        const char *pj = tr->edges[e].properties_json;
+        if (!pj) {
+            continue;
+        }
+        const char *args = strstr(pj, "\"args\"");
+        if (!args) {
+            continue;
+        }
+        const char *open = strchr(args, '[');
+        if (!open) {
+            continue;
+        }
+        int depth = 0;
+        const char *p = open;
+        for (; *p; p++) {
+            if (*p == '[') {
+                depth++;
+            } else if (*p == ']') {
+                depth--;
+                if (depth == 0) {
+                    p++;
+                    break;
+                }
+            }
+        }
+        *out_len = (size_t)(p - open);
+        return open;
+    }
+    return NULL;
+}
+
 static yyjson_mut_val *bfs_to_json_array(yyjson_mut_doc *doc, cbm_traverse_result_t *tr,
-                                         bool risk_labels, bool include_tests) {
+                                         bool risk_labels, bool include_tests, bool data_flow) {
     yyjson_mut_val *arr = yyjson_mut_arr(doc);
     for (int i = 0; i < tr->visited_count; i++) {
         const char *fp = tr->visited[i].node.file_path;
@@ -2197,14 +2631,132 @@ static yyjson_mut_val *bfs_to_json_array(yyjson_mut_doc *doc, cbm_traverse_resul
         if (test) {
             yyjson_mut_obj_add_bool(doc, item, "is_test", true);
         }
+        /* data_flow mode promises argument expressions at each call site; surface
+         * the CALLS edge's serialized args array as a raw JSON value (#514). */
+        if (data_flow) {
+            size_t alen = 0;
+            const char *args = bfs_edge_args_for_hop(tr, tr->visited[i].node.id, &alen);
+            if (args && alen > 0) {
+                yyjson_mut_val *av = yyjson_mut_rawn(doc, args, alen);
+                if (av) {
+                    yyjson_mut_obj_add_val(doc, item, "args", av);
+                }
+            }
+        }
         yyjson_mut_arr_add_val(arr, item);
     }
     return arr;
 }
 
+static char *snippet_suggestions(const char *input, cbm_node_t *nodes, int count);
+
+/* Rank a candidate for name resolution. The label tier (callable > class-like >
+ * module/file) is the primary key; WITHIN a tier the larger definition by line
+ * span wins. In practice the .c-over-.h and C-main-over-shell-main preferences
+ * come primarily from span (the real definition has the larger body), since the
+ * competing matches usually share a tier — no file extension is hardcoded.
+ * Consequence: two same-tier candidates with equal span tie and are reported
+ * ambiguous (see pick_resolved_node) rather than guessed. */
+enum {
+    RES_RANK_CALLABLE = 2,     /* Function / Method */
+    RES_RANK_OTHER = 1,        /* Class / Struct / etc. */
+    RES_RANK_MODULE = 0,       /* Module / File */
+    RES_LABEL_WEIGHT = 1000000 /* label tier dominates span */
+};
+static long node_resolution_score(const cbm_node_t *n) {
+    long label_rank = RES_RANK_MODULE;
+    if (n->label) {
+        if (strcmp(n->label, "Function") == 0 || strcmp(n->label, "Method") == 0) {
+            label_rank = RES_RANK_CALLABLE;
+        } else if (strcmp(n->label, "Module") != 0 && strcmp(n->label, "File") != 0) {
+            label_rank = RES_RANK_OTHER;
+        }
+    }
+    long span = (long)n->end_line - (long)n->start_line;
+    if (span < 0) {
+        span = 0;
+    }
+    return label_rank * (long)RES_LABEL_WEIGHT + span;
+}
+
+/* Pick the best-resolving node among name matches. Sets *ambiguous when the top
+ * score is shared by more than one candidate (a genuine tie the caller must
+ * disambiguate) so resolution never silently traces the wrong same-named node. */
+static int pick_resolved_node(const cbm_node_t *nodes, int count, bool *ambiguous) {
+    *ambiguous = false;
+    if (count <= 1) {
+        return 0;
+    }
+    int best = 0;
+    long best_score = node_resolution_score(&nodes[0]);
+    for (int i = 1; i < count; i++) {
+        long s = node_resolution_score(&nodes[i]);
+        if (s > best_score) {
+            best_score = s;
+            best = i;
+        }
+    }
+    int top_count = 0;
+    for (int i = 0; i < count; i++) {
+        if (node_resolution_score(&nodes[i]) == best_score) {
+            top_count++;
+        }
+    }
+    if (top_count > 1) {
+        *ambiguous = true;
+    }
+    return best;
+}
+
+/* BFS from EVERY node sharing the resolved name and merge the results, so the
+ * caller/callee set is complete even when one logical symbol is represented by
+ * more than one graph node — e.g. a real .ts implementation plus an ambient
+ * .d.ts stub, whose inbound CALLS edges are otherwise split across the two
+ * nodes and silently truncated by tracing only one (#546). visited hops are
+ * deduped by node id; edges are concatenated. Ownership of all heap fields
+ * transfers into *out, freed by cbm_store_traverse_free. */
+static void bfs_union_same_name(cbm_store_t *store, const cbm_node_t *nodes, int node_count,
+                                const char *direction, const char **edge_types, int edge_type_count,
+                                int depth, cbm_traverse_result_t *out) {
+    memset(out, 0, sizeof(*out));
+    int vcap = 0, ecap = 0;
+    for (int k = 0; k < node_count; k++) {
+        cbm_traverse_result_t tr = {0};
+        cbm_store_bfs(store, nodes[k].id, direction, edge_types, edge_type_count, depth,
+                      MCP_BFS_LIMIT, &tr);
+        for (int i = 0; i < tr.visited_count; i++) {
+            bool dup = false;
+            for (int j = 0; j < out->visited_count; j++) {
+                if (out->visited[j].node.id == tr.visited[i].node.id) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) {
+                continue;
+            }
+            if (out->visited_count >= vcap) {
+                vcap = vcap ? vcap * 2 : 8;
+                out->visited = safe_realloc(out->visited, vcap * sizeof(cbm_node_hop_t));
+            }
+            out->visited[out->visited_count++] = tr.visited[i];
+            memset(&tr.visited[i], 0, sizeof(tr.visited[i])); /* ownership moved */
+        }
+        for (int i = 0; i < tr.edge_count; i++) {
+            if (out->edge_count >= ecap) {
+                ecap = ecap ? ecap * 2 : 8;
+                out->edges = safe_realloc(out->edges, ecap * sizeof(cbm_edge_info_t));
+            }
+            out->edges[out->edge_count++] = tr.edges[i];
+            memset(&tr.edges[i], 0, sizeof(tr.edges[i])); /* ownership moved */
+        }
+        cbm_store_traverse_free(&tr); /* frees only the un-moved (root + dup) fields */
+    }
+}
+
 static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
     char *func_name = cbm_mcp_get_string_arg(args, "function_name");
-    char *project = cbm_mcp_get_string_arg(args, "project");
+    char *project = get_project_arg(args);
     cbm_store_t *store = resolve_store(srv, project);
     char *direction = cbm_mcp_get_string_arg(args, "direction");
     char *mode = cbm_mcp_get_string_arg(args, "mode");
@@ -2286,6 +2838,22 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
         return cbm_mcp_text_result(hint, true);
     }
 
+    /* Disambiguate same-named matches: prefer the real definition, and report
+     * ambiguity (rather than silently tracing nodes[0]) on a genuine tie — e.g.
+     * a C main() vs a same-named shell-script main(). */
+    bool trace_ambiguous = false;
+    int sel = pick_resolved_node(nodes, node_count, &trace_ambiguous);
+    if (trace_ambiguous) {
+        char *result = snippet_suggestions(func_name, nodes, node_count);
+        free(func_name);
+        free(project);
+        free(direction);
+        free(mode);
+        free(param_name);
+        cbm_store_free_nodes(nodes, node_count);
+        return result;
+    }
+
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
     yyjson_mut_val *root = yyjson_mut_obj(doc);
     yyjson_mut_doc_set_root(doc, root);
@@ -2310,18 +2878,24 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
     cbm_traverse_result_t tr_out = {0};
     cbm_traverse_result_t tr_in = {0};
 
+    bool data_flow = mode && strcmp(mode, "data_flow") == 0;
+
+    (void)sel; /* union across all same-name nodes — see bfs_union_same_name (#546) */
+
     if (do_outbound) {
-        cbm_store_bfs(store, nodes[0].id, "outbound", edge_types, edge_type_count, depth,
-                      MCP_BFS_LIMIT, &tr_out);
-        yyjson_mut_obj_add_val(doc, root, "callees",
-                               bfs_to_json_array(doc, &tr_out, risk_labels, include_tests));
+        bfs_union_same_name(store, nodes, node_count, "outbound", edge_types, edge_type_count,
+                            depth, &tr_out);
+        yyjson_mut_obj_add_val(
+            doc, root, "callees",
+            bfs_to_json_array(doc, &tr_out, risk_labels, include_tests, data_flow));
     }
 
     if (do_inbound) {
-        cbm_store_bfs(store, nodes[0].id, "inbound", edge_types, edge_type_count, depth,
-                      MCP_BFS_LIMIT, &tr_in);
-        yyjson_mut_obj_add_val(doc, root, "callers",
-                               bfs_to_json_array(doc, &tr_in, risk_labels, include_tests));
+        bfs_union_same_name(store, nodes, node_count, "inbound", edge_types, edge_type_count, depth,
+                            &tr_in);
+        yyjson_mut_obj_add_val(
+            doc, root, "callers",
+            bfs_to_json_array(doc, &tr_in, risk_labels, include_tests, data_flow));
     }
 
     /* Serialize BEFORE freeing traversal results (yyjson borrows strings) */
@@ -2491,8 +3065,7 @@ static char *handle_cross_repo_mode(const char *repo_path, const char *args) {
 static void try_artifact_bootstrap(const char *project_name, const char *repo_path) {
     char db_buf[CBM_SZ_1K];
     project_db_path(project_name, db_buf, sizeof(db_buf));
-    struct stat db_st;
-    if (stat(db_buf, &db_st) != 0 && cbm_artifact_exists(repo_path)) {
+    if (cbm_file_size(db_buf) < 0 && cbm_artifact_exists(repo_path)) {
         cbm_log_info("index.artifact_bootstrap", "project", project_name);
         cbm_artifact_import(repo_path, db_buf);
     }
@@ -2525,28 +3098,82 @@ static void add_excluded_summary(yyjson_mut_doc *doc, yyjson_mut_val *root, char
     yyjson_mut_obj_add_val(doc, root, "excluded", excluded);
 }
 
-/* Build the success portion of the index_repository response. */
-static void build_index_success_response(cbm_mcp_server_t *srv, yyjson_mut_doc *doc,
+/* Build the success portion of the index_repository response.
+ * Returns true when status should be "degraded" (#334 plausibility gate). */
+static bool build_index_success_response(cbm_mcp_server_t *srv, yyjson_mut_doc *doc,
                                          yyjson_mut_val *root, const char *project_name,
-                                         const char *repo_path, bool persistence,
+                                         const char *repo_path, bool persistence, cbm_pipeline_t *p,
                                          char **excluded_dirs, int excluded_count) {
     add_excluded_summary(doc, root, excluded_dirs, excluded_count);
 
+    int exp_nodes = -1;
+    int exp_edges = -1;
+    cbm_pipeline_get_committed_counts(p, &exp_nodes, &exp_edges);
+
+    const double ratio = cbm_dump_verify_min_ratio();
+    const int min_floor = CBM_DUMP_VERIFY_MIN_FLOOR;
+
     cbm_store_t *store = resolve_store(srv, project_name);
+    int nodes = 0;
+    int edges = 0;
+    bool degraded = false;
+
     if (!store) {
-        return;
+        degraded = true;
+    } else {
+        nodes = cbm_store_count_nodes(store, project_name);
+        edges = cbm_store_count_edges(store, project_name);
+        if (nodes < 0) {
+            degraded = true;
+            nodes = 0;
+            edges = edges >= 0 ? edges : 0;
+        } else if (cbm_dump_verify_is_degraded(exp_nodes, nodes, ratio, min_floor)) {
+            (void)cbm_store_checkpoint(store);
+            int nodes2 = cbm_store_count_nodes(store, project_name);
+            int edges2 = cbm_store_count_edges(store, project_name);
+            if (nodes2 >= 0) {
+                nodes = nodes2;
+            }
+            if (edges2 >= 0) {
+                edges = edges2;
+            }
+            degraded = cbm_dump_verify_is_degraded(exp_nodes, nodes, ratio, min_floor);
+        }
     }
-    int nodes = cbm_store_count_nodes(store, project_name);
-    int edges = cbm_store_count_edges(store, project_name);
+
     yyjson_mut_obj_add_int(doc, root, "nodes", nodes);
     yyjson_mut_obj_add_int(doc, root, "edges", edges);
+    if (exp_nodes >= 0) {
+        yyjson_mut_obj_add_int(doc, root, "expected_nodes", exp_nodes);
+        yyjson_mut_obj_add_int(doc, root, "expected_edges", exp_edges);
+    }
+
+    if (degraded) {
+        if (!store) {
+            yyjson_mut_obj_add_str(doc, root, "hint",
+                                   "Index database failed integrity check and was removed. "
+                                   "Re-run index_repository(repo_path=...) to rebuild.");
+            cbm_log_warn("dump.verify", "reason", "store_missing", "expected_nodes",
+                         exp_nodes >= 0 ? "set" : "unknown");
+        } else {
+            char exp_buf[MCP_FIELD_SIZE];
+            char got_buf[MCP_FIELD_SIZE];
+            snprintf(exp_buf, sizeof(exp_buf), "%d", exp_nodes);
+            snprintf(got_buf, sizeof(got_buf), "%d", nodes);
+            yyjson_mut_obj_add_str(
+                doc, root, "hint",
+                "Persisted far fewer nodes than indexed — likely durability loss from a "
+                "hard-killed sibling process. Re-run index_repository(repo_path=...) to rebuild.");
+            cbm_log_warn("dump.verify", "expected_nodes", exp_buf, "persisted_nodes", got_buf);
+        }
+    }
 
     char adr_path[CBM_SZ_4K];
     snprintf(adr_path, sizeof(adr_path), "%s/.codebase-memory/adr.md", repo_path);
     struct stat adr_st;
     bool adr_exists = (stat(adr_path, &adr_st) == 0);
     yyjson_mut_obj_add_bool(doc, root, "adr_present", adr_exists);
-    if (!adr_exists) {
+    if (!adr_exists && !degraded) {
         yyjson_mut_obj_add_str(
             doc, root, "adr_hint",
             "Project indexed. Consider creating an Architecture Decision Record: "
@@ -2561,20 +3188,25 @@ static void build_index_success_response(cbm_mcp_server_t *srv, yyjson_mut_doc *
                                "Persistent artifact written to .codebase-memory/graph.db.zst. "
                                "Commit this file to share the index with teammates.");
     }
+
+    return degraded;
 }
 
 static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
     char *repo_path = cbm_mcp_get_string_arg(args, "repo_path");
     char *mode_str = cbm_mcp_get_string_arg(args, "mode");
+    char *name_override = cbm_mcp_get_string_arg(args, "name");
     cbm_normalize_path_sep(repo_path);
 
     if (!repo_path) {
         free(mode_str);
+        free(name_override);
         return cbm_mcp_text_result("repo_path is required", true);
     }
 
     if (mode_str && strcmp(mode_str, "cross-repo-intelligence") == 0) {
         free(mode_str);
+        free(name_override);
         char *result = handle_cross_repo_mode(repo_path, args);
         free(repo_path);
         return result;
@@ -2592,9 +3224,17 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
 
     cbm_pipeline_t *p = cbm_pipeline_new(repo_path, NULL, mode);
     if (!p) {
+        free(name_override);
         free(repo_path);
         return cbm_mcp_text_result("failed to create pipeline", true);
     }
+    if (name_override && name_override[0] && !cbm_pipeline_set_project_name(p, name_override)) {
+        cbm_pipeline_free(p);
+        free(name_override);
+        free(repo_path);
+        return cbm_mcp_text_result("invalid project name", true);
+    }
+    free(name_override);
     cbm_pipeline_set_persistence(p, persistence);
 
     char *project_name = heap_strdup(cbm_pipeline_project_name(p));
@@ -2641,17 +3281,16 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
     yyjson_mut_doc_set_root(doc, root);
 
     yyjson_mut_obj_add_str(doc, root, "project", project_name);
-    yyjson_mut_obj_add_str(doc, root, "status", rc == 0 ? "indexed" : "error");
 
-    if (rc != 0) {
+    if (rc == 0) {
+        bool degraded = build_index_success_response(srv, doc, root, project_name, repo_path,
+                                                     persistence, p, excluded_dirs, excluded_count);
+        yyjson_mut_obj_add_str(doc, root, "status", degraded ? "degraded" : "indexed");
+    } else {
+        yyjson_mut_obj_add_str(doc, root, "status", "error");
         yyjson_mut_obj_add_str(doc, root, "hint",
                                "Pipeline failed. Check repo_path exists and contains source files. "
                                "Try mode='fast' for a quicker diagnostic run.");
-    }
-
-    if (rc == 0) {
-        build_index_success_response(srv, doc, root, project_name, repo_path, persistence,
-                                     excluded_dirs, excluded_count);
     }
 
     char *json = yy_doc_to_str(doc);
@@ -2791,6 +3430,75 @@ static char *resolve_snippet_source(const char *root_path, const char *file_path
     return NULL;
 }
 
+static bool utf8_is_cont(unsigned char c) {
+    return (c & 0xC0) == 0x80;
+}
+
+static char *sanitize_utf8_lossy(const char *s) {
+    enum {
+        UTF8_REPLACEMENT_LEN = 3,
+        UTF8_THREE_BYTE_LEN = 3,
+        UTF8_FOUR_BYTE_LEN = 4,
+        UTF8_FOURTH_BYTE = 3,
+    };
+    if (!s) {
+        return NULL;
+    }
+    size_t len = strlen(s);
+    if (len > (((size_t)-1) - SKIP_ONE) / UTF8_REPLACEMENT_LEN) {
+        return NULL;
+    }
+    char *out = malloc(len * UTF8_REPLACEMENT_LEN + SKIP_ONE);
+    if (!out) {
+        return NULL;
+    }
+
+    const unsigned char *p = (const unsigned char *)s;
+    const unsigned char *end = p + len;
+    unsigned char *dst = (unsigned char *)out;
+    while (p < end) {
+        unsigned char c = *p;
+        size_t n = 0;
+        if (c < 0x80) {
+            n = 1;
+        } else if (c >= 0xC2 && c <= 0xDF && p + 1 < end && utf8_is_cont(p[1])) {
+            n = 2;
+        } else if (c == 0xE0 && p + 2 < end && p[1] >= 0xA0 && p[1] <= 0xBF && utf8_is_cont(p[2])) {
+            n = UTF8_THREE_BYTE_LEN;
+        } else if (c >= 0xE1 && c <= 0xEC && p + 2 < end && utf8_is_cont(p[1]) &&
+                   utf8_is_cont(p[2])) {
+            n = UTF8_THREE_BYTE_LEN;
+        } else if (c == 0xED && p + 2 < end && p[1] >= 0x80 && p[1] <= 0x9F && utf8_is_cont(p[2])) {
+            n = UTF8_THREE_BYTE_LEN;
+        } else if (c >= 0xEE && c <= 0xEF && p + 2 < end && utf8_is_cont(p[1]) &&
+                   utf8_is_cont(p[2])) {
+            n = UTF8_THREE_BYTE_LEN;
+        } else if (c == 0xF0 && p + UTF8_FOURTH_BYTE < end && p[1] >= 0x90 && p[1] <= 0xBF &&
+                   utf8_is_cont(p[2]) && utf8_is_cont(p[UTF8_FOURTH_BYTE])) {
+            n = UTF8_FOUR_BYTE_LEN;
+        } else if (c >= 0xF1 && c <= 0xF3 && p + UTF8_FOURTH_BYTE < end && utf8_is_cont(p[1]) &&
+                   utf8_is_cont(p[2]) && utf8_is_cont(p[UTF8_FOURTH_BYTE])) {
+            n = UTF8_FOUR_BYTE_LEN;
+        } else if (c == 0xF4 && p + UTF8_FOURTH_BYTE < end && p[1] >= 0x80 && p[1] <= 0x8F &&
+                   utf8_is_cont(p[2]) && utf8_is_cont(p[UTF8_FOURTH_BYTE])) {
+            n = UTF8_FOUR_BYTE_LEN;
+        }
+
+        if (n > 0) {
+            memcpy(dst, p, n);
+            dst += n;
+            p += n;
+        } else {
+            *dst++ = 0xEF;
+            *dst++ = 0xBF;
+            *dst++ = 0xBD;
+            p++;
+        }
+    }
+    *dst = '\0';
+    return out;
+}
+
 /* Build an enriched snippet response for a resolved node. */
 /* Add a string array to a JSON object (no-op if count == 0). */
 static void add_string_array(yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key,
@@ -2835,7 +3543,13 @@ static char *build_snippet_response(cbm_mcp_server_t *srv, cbm_node_t *node,
     yyjson_mut_obj_add_int(doc, root_obj, "end_line", end);
 
     if (source) {
-        yyjson_mut_obj_add_str(doc, root_obj, "source", source);
+        char *safe_source = sanitize_utf8_lossy(source);
+        if (safe_source) {
+            yyjson_mut_obj_add_strcpy(doc, root_obj, "source", safe_source);
+            free(safe_source);
+        } else {
+            yyjson_mut_obj_add_str(doc, root_obj, "source", "(source not available)");
+        }
     } else {
         yyjson_mut_obj_add_str(doc, root_obj, "source", "(source not available)");
     }
@@ -2904,7 +3618,7 @@ static char *build_snippet_response(cbm_mcp_server_t *srv, cbm_node_t *node,
 
 static char *handle_get_code_snippet(cbm_mcp_server_t *srv, const char *args) {
     char *qn = cbm_mcp_get_string_arg(args, "qualified_name");
-    char *project = cbm_mcp_get_string_arg(args, "project");
+    char *project = get_project_arg(args);
     bool include_neighbors = cbm_mcp_get_bool_arg(args, "include_neighbors");
 
     if (!qn) {
@@ -2960,6 +3674,21 @@ static char *handle_get_code_snippet(cbm_mcp_server_t *srv, const char *args) {
     }
 
     if (suffix_count > SKIP_ONE) {
+        /* Prefer the real definition (a .c body over a .h declaration, a Function
+         * over a Module) so an unambiguous-by-preference match resolves directly
+         * instead of forcing a disambiguation round trip; only a genuine tie still
+         * returns suggestions. */
+        bool snip_ambiguous = false;
+        int ssel = pick_resolved_node(suffix_nodes, suffix_count, &snip_ambiguous);
+        if (!snip_ambiguous) {
+            copy_node(&suffix_nodes[ssel], &node);
+            cbm_store_free_nodes(suffix_nodes, suffix_count);
+            char *result = build_snippet_response(srv, &node, "suffix", include_neighbors, NULL, 0);
+            free_node_contents(&node);
+            free(qn);
+            free(project);
+            return result;
+        }
         char *result = snippet_suggestions(qn, suffix_nodes, suffix_count);
         cbm_store_free_nodes(suffix_nodes, suffix_count);
         free(qn);
@@ -3605,7 +4334,7 @@ static bool compile_path_filter(const char *filter, cbm_regex_t *re) {
 
 static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
     char *pattern = cbm_mcp_get_string_arg(args, "pattern");
-    char *project = cbm_mcp_get_string_arg(args, "project");
+    char *project = get_project_arg(args);
     char *file_pattern = cbm_mcp_get_string_arg(args, "file_pattern");
     char *path_filter = cbm_mcp_get_string_arg(args, "path_filter");
     char *mode_str = cbm_mcp_get_string_arg(args, "mode");
@@ -3863,13 +4592,26 @@ static void detect_add_impacted_symbols(cbm_store_t *store, const char *project,
 }
 
 static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
-    char *project = cbm_mcp_get_string_arg(args, "project");
+    char *project = get_project_arg(args);
     char *base_branch = cbm_mcp_get_string_arg(args, "base_branch");
+    char *since = cbm_mcp_get_string_arg(args, "since");
     char *scope = cbm_mcp_get_string_arg(args, "scope");
     int depth = cbm_mcp_get_int_arg(args, "depth", MCP_DEFAULT_BFS_DEPTH);
 
     /* scope: "files" = just changed files, "symbols" = files + symbols (default) */
     bool want_symbols = !scope || strcmp(scope, "symbols") == 0 || strcmp(scope, "impact") == 0;
+
+    /* `since` (e.g. "HEAD~10", "v0.5.0") is the documented diff base but was
+     * previously parsed and never used: it takes precedence over base_branch.
+     * Route it through base_branch so the shared shell-arg validation and the
+     * existing `<base>...HEAD` (three-dot) diff apply unchanged — `since` thus
+     * adopts the same merge-base semantics base_branch already uses. */
+    if (since && since[0]) {
+        free(base_branch);
+        base_branch = since; /* transfer ownership */
+        since = NULL;
+    }
+    free(since); /* no-op after the swap (since is NULL); frees it otherwise */
 
     if (!base_branch) {
         base_branch = heap_strdup("main");
@@ -3899,18 +4641,30 @@ static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
         return cbm_mcp_text_result("project path contains invalid characters", true);
     }
 
-    /* Get changed files via git (-C avoids cd + quoting issues on Windows) */
+    /* Get changed files via git (-C avoids cd + quoting issues on Windows).
+     * Three sources are merged:
+     *   1. committed changes vs base   (diff <base>...HEAD)
+     *   2. unstaged tracked changes    (diff)
+     *   3. untracked + staged-new files (status --porcelain) — these are
+     *      invisible to `git diff` and were silently missed before, so a
+     *      brand-new file never appeared until a manual re-index (#520).
+     * status --porcelain prefixes each path with a 2-char code + space
+     * ("?? path", "A  path"); the prefix is stripped when parsing below. */
     char cmd[CBM_SZ_2K];
 #ifdef _WIN32
     snprintf(cmd, sizeof(cmd),
              "git -C \"%s\" diff --name-only \"%s\"...HEAD 2>NUL & "
-             "git -C \"%s\" diff --name-only 2>NUL",
-             root_path, base_branch, root_path);
+             "git -C \"%s\" diff --name-only 2>NUL & "
+             "git --no-optional-locks -C \"%s\" status --porcelain "
+             "--untracked-files=normal 2>NUL",
+             root_path, base_branch, root_path, root_path);
 #else
     snprintf(cmd, sizeof(cmd),
              "{ git -C '%s' diff --name-only '%s'...HEAD 2>/dev/null; "
-             "git -C '%s' diff --name-only 2>/dev/null; } | sort -u",
-             root_path, base_branch, root_path);
+             "git -C '%s' diff --name-only 2>/dev/null; "
+             "git --no-optional-locks -C '%s' status --porcelain "
+             "--untracked-files=normal 2>/dev/null; } | sort -u",
+             root_path, base_branch, root_path, root_path);
 #endif
 
     FILE *fp = cbm_popen(cmd, "r");
@@ -3948,11 +4702,30 @@ static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
             continue;
         }
 
-        yyjson_mut_arr_add_strcpy(doc, changed, line);
+        /* `git status --porcelain` prefixes each path with a two-character
+         * status code and a space ("?? path", "A  path", " M path"). The two
+         * `git diff --name-only` sources emit bare paths. Strip the porcelain
+         * prefix when present so all three sources yield clean paths; for a
+         * rename ("R  old -> new") keep the post-arrow destination path. */
+        char *path_line = line;
+        if (len > PAIR_LEN && line[PAIR_LEN] == ' ' && strchr(" MADRCU?!", line[0]) &&
+            strchr(" MADRCU?!", line[1])) {
+            path_line = line + PAIR_LEN + SKIP_ONE;
+            char *arrow = strstr(path_line, " -> ");
+            if (arrow) {
+                enum { ARROW_LEN = 4 }; /* length of " -> " */
+                path_line = arrow + ARROW_LEN;
+            }
+        }
+        if (path_line[0] == '\0') {
+            continue;
+        }
+
+        yyjson_mut_arr_add_strcpy(doc, changed, path_line);
         file_count++;
 
         if (want_symbols) {
-            detect_add_impacted_symbols(store, project, line, doc, impacted);
+            detect_add_impacted_symbols(store, project, path_line, doc, impacted);
         }
     }
     int git_status = cbm_pclose(fp);
@@ -4059,7 +4832,7 @@ static char *adr_read_legacy_file(const char *root_path) {
     "PATTERNS, TRADEOFFS, PHILOSOPHY."
 
 static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
-    char *project = cbm_mcp_get_string_arg(args, "project");
+    char *project = get_project_arg(args);
     char *mode_str = cbm_mcp_get_string_arg(args, "mode");
     char *content = cbm_mcp_get_string_arg(args, "content");
 
@@ -4070,12 +4843,33 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
     /* ADRs are stored in the SQLite store (project_summaries), the SAME
      * backend the UI /api/adr endpoints use — so writes via the MCP tool and
      * the UI are visible to each other (#256). */
-    cbm_store_t *store = resolve_store(srv, project);
-    if (!store) {
+    cbm_store_t *resolved = resolve_store(srv, project);
+    if (!resolved) {
         free(project);
         free(mode_str);
         free(content);
         return cbm_mcp_text_result("project not found", true);
+    }
+
+    /* resolve_store opens file-backed projects READ-ONLY (query stores must
+     * not mutate the DB). manage_adr is the only resolve_store caller that
+     * WRITES, so it needs a writable handle. For a file-backed project open a
+     * dedicated read-write handle to the same DB file (the project is verified
+     * to exist via resolve_store, so cbm_store_open_path won't create a ghost
+     * DB). For an in-memory / embedded store (db_path == NULL) the resolved
+     * store is already writable — use it directly. */
+    cbm_store_t *store = resolved;
+    cbm_store_t *owned_rw = NULL;
+    const char *resolved_db_path = cbm_store_db_path(resolved);
+    if (resolved_db_path) {
+        owned_rw = cbm_store_open_path(resolved_db_path);
+        if (!owned_rw) {
+            free(project);
+            free(mode_str);
+            free(content);
+            return cbm_mcp_text_result("project not found", true);
+        }
+        store = owned_rw;
     }
 
     /* One-time migration: older versions wrote ADRs to a file at
@@ -4124,6 +4918,9 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
     yyjson_mut_doc_free(doc);
     if (have_adr) {
         cbm_store_adr_free(&adr);
+    }
+    if (owned_rw) {
+        cbm_store_close(owned_rw);
     }
     free(project);
     free(mode_str);
@@ -4300,8 +5097,7 @@ static void maybe_auto_index(cbm_mcp_server_t *srv) {
         char db_check[CBM_SZ_1K];
         snprintf(db_check, sizeof(db_check), "%s/%s.db", cbm_resolve_cache_dir(),
                  srv->session_project);
-        struct stat st;
-        if (stat(db_check, &st) == 0) {
+        if (cbm_file_size(db_check) >= 0) {
             /* Already indexed → register watcher for change detection */
             cbm_log_info("autoindex.skip", "reason", "already_indexed", "project",
                          srv->session_project);
@@ -4478,18 +5274,21 @@ char *cbm_mcp_server_handle(cbm_mcp_server_t *srv, const char *line) {
     /* Notifications (no id) → handle cancellation, then no response */
     if (!req.has_id) {
         if (req.method && strcmp(req.method, "notifications/cancelled") == 0) {
-            /* MCP cancellation: cancel the active pipeline if request ID matches */
-            if (srv->active_pipeline) {
+            if (srv->active_pipeline &&
+                cbm_mcp_cancel_request_matches(req.params_raw, srv->active_request_id,
+                                               srv->active_request_id_str)) {
                 cbm_pipeline_cancel(srv->active_pipeline);
-                cbm_log_info("mcp.cancelled", "request_id_active",
-                             srv->active_request_id > 0 ? "yes" : "none");
+                cbm_log_info("mcp.cancelled", "match", "true");
             }
         }
         cbm_jsonrpc_request_free(&req);
         return NULL;
     }
 
+    struct timespec req_t0;
+    cbm_clock_gettime(CLOCK_MONOTONIC, &req_t0);
     char *result_json = NULL;
+    bool request_logged = false;
 
     if (strcmp(req.method, "initialize") == 0) {
         result_json = cbm_mcp_initialize_response(req.params_raw);
@@ -4499,21 +5298,31 @@ char *cbm_mcp_server_handle(cbm_mcp_server_t *srv, const char *line) {
     } else if (strcmp(req.method, "ping") == 0) {
         result_json = heap_strdup("{}");
     } else if (strcmp(req.method, "tools/list") == 0) {
-        result_json = cbm_mcp_tools_list();
+        result_json = cbm_mcp_tools_list_page(req.params_raw);
     } else if (strcmp(req.method, "tools/call") == 0) {
         char *tool_name = req.params_raw ? cbm_mcp_get_tool_name(req.params_raw) : NULL;
         char *tool_args =
             req.params_raw ? cbm_mcp_get_arguments(req.params_raw) : heap_strdup("{}");
+        srv->active_request_id = req.id;
+        free(srv->active_request_id_str);
+        srv->active_request_id_str = req.id_str ? heap_strdup(req.id_str) : NULL;
 
         struct timespec t0;
         cbm_clock_gettime(CLOCK_MONOTONIC, &t0);
         result_json = cbm_mcp_handle_tool(srv, tool_name, tool_args);
+        srv->active_request_id = CBM_NOT_FOUND;
+        free(srv->active_request_id_str);
+        srv->active_request_id_str = NULL;
         struct timespec t1;
         cbm_clock_gettime(CLOCK_MONOTONIC, &t1);
         long long dur_us = ((long long)(t1.tv_sec - t0.tv_sec) * MCP_S_TO_US) +
                            ((long long)(t1.tv_nsec - t0.tv_nsec) / MCP_MS_TO_US);
         bool is_err = (result_json != NULL) && (strstr(result_json, "\"isError\":true") != NULL);
         cbm_diag_record_query(dur_us, is_err);
+        long long request_dur_us = ((long long)(t1.tv_sec - req_t0.tv_sec) * MCP_S_TO_US) +
+                                   ((long long)(t1.tv_nsec - req_t0.tv_nsec) / MCP_MS_TO_US);
+        cbm_log_mcp_request(req.method, tool_name, is_err, request_dur_us);
+        request_logged = true;
 
         result_json = inject_update_notice(srv, result_json);
         free(tool_name);
@@ -4529,8 +5338,21 @@ char *cbm_mcp_server_handle(cbm_mcp_server_t *srv, const char *line) {
             .error_json = err_obj,
         };
         char *err = cbm_jsonrpc_format_response(&err_resp);
+        struct timespec t1;
+        cbm_clock_gettime(CLOCK_MONOTONIC, &t1);
+        long long dur_us = ((long long)(t1.tv_sec - req_t0.tv_sec) * MCP_S_TO_US) +
+                           ((long long)(t1.tv_nsec - req_t0.tv_nsec) / MCP_MS_TO_US);
+        cbm_log_mcp_request(req.method, NULL, true, dur_us);
         cbm_jsonrpc_request_free(&req);
         return err;
+    }
+
+    if (!request_logged) {
+        struct timespec t1;
+        cbm_clock_gettime(CLOCK_MONOTONIC, &t1);
+        long long dur_us = ((long long)(t1.tv_sec - req_t0.tv_sec) * MCP_S_TO_US) +
+                           ((long long)(t1.tv_nsec - req_t0.tv_nsec) / MCP_MS_TO_US);
+        cbm_log_mcp_request(req.method, NULL, false, dur_us);
     }
 
     cbm_jsonrpc_response_t resp = {

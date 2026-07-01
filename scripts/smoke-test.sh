@@ -980,9 +980,14 @@ fi
 echo "OK 8v: VS Code MCP"
 
 # 8w: OpenClaw MCP
-CMD=$(json_get "$FAKE_HOME/.openclaw/openclaw.json" "d['mcpServers']['codebase-memory-mcp']['command']")
+CMD=$(json_get "$FAKE_HOME/.openclaw/openclaw.json" "d['mcp']['servers']['codebase-memory-mcp']['command']")
 if ! path_match "$CMD" "$SELF_PATH"; then
   echo "FAIL 8w: OpenClaw command='$CMD'"
+  exit 1
+fi
+ENABLED=$(json_get "$FAKE_HOME/.openclaw/openclaw.json" "d['mcp']['servers']['codebase-memory-mcp'].get('enabled')")
+if [ "$ENABLED" != "True" ]; then
+  echo "FAIL 8w: OpenClaw enabled='$ENABLED'"
   exit 1
 fi
 echo "OK 8w: OpenClaw MCP"
@@ -1091,7 +1096,7 @@ fi
 if cat "$FAKE_HOME/.openclaw/openclaw.json" 2>/dev/null | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
-sys.exit(1 if 'codebase-memory-mcp' in d.get('mcpServers', {}) else 0)
+sys.exit(1 if 'codebase-memory-mcp' in d.get('mcp', {}).get('servers', {}) else 0)
 " 2>/dev/null; then
   echo "OK 9k: OpenClaw MCP removed"
 else
@@ -1199,23 +1204,44 @@ if [ "$(uname -s)" = "Darwin" ]; then
     exit 1
   fi
 
-  codesign --remove-signature "$SECURITY_BIN" 2>/dev/null || true
-
   # Detect binary architecture (not shell arch — Rosetta reports x86_64 for arm64 binaries)
   BIN_ARCH=$(file "$SECURITY_BIN" | grep -o 'arm64\|x86_64' | head -1)
 
   if [ "$BIN_ARCH" = "arm64" ]; then
-    # arm64: unsigned must SIGKILL (exit 137 = 128+9)
-    UNSIGNED_EXIT=0
-    "$SECURITY_BIN" --version > /dev/null 2>&1 || UNSIGNED_EXIT=$?
-    if [ "$UNSIGNED_EXIT" -eq 137 ] || [ "$UNSIGNED_EXIT" -eq 9 ]; then
-      echo "OK 10c: unsigned arm64 binary killed (exit $UNSIGNED_EXIT)"
-    else
-      echo "FAIL 10c: unsigned arm64 exit=$UNSIGNED_EXIT (expected 137)"
+    # arm64 integrity check: tampering the signed code must be DETECTED by the code signature.
+    # The original check (run a tampered/unsigned binary and expect SIGKILL 137) is NOT deterministic
+    # on current macOS for an ad-hoc-signed CLI binary, which is why this test went flaky then red.
+    # Observed on CI:
+    #   - `codesign --remove-signature` then run -> macOS 11+ ad-hoc re-signs on exec and RUNS (exit 0)
+    #   - garbling only the signature blob then run -> same, re-signed/ignored (exit 0)
+    #   - tampering the code then run -> with no CS_KILL/hardened-runtime flag the kernel does NOT
+    #     kill the page; it executes the garbage and crashes with SIGILL (exit 132), not 137
+    # (runs 28350650225 / 28354735368 / 28360363173 / 28365724001). The deterministic, meaningful
+    # invariant is that `codesign --verify` REJECTS a tampered binary -- the CodeDirectory page hashes
+    # no longer match the modified code -- while the untampered binary verifies cleanly (10a above).
+    # This is a pure userspace hash check (no tampered code is ever executed). Done on a SEPARATE copy
+    # so the original $SECURITY_BIN stays intact for the 10e re-sign test.
+    # Refs: github.com/garrytan/gstack#997, github.com/nodejs/node#40827.
+    TAMPER_BIN="${SECURITY_BIN}.tampered"
+    cp "$SECURITY_BIN" "$TAMPER_BIN"
+    # Tamper signed code: zero the entry-point instructions (LC_MAIN entryoff = start of __text) plus
+    # a span of early __text, leaving the Mach-O header + load commands + signature blob intact so the
+    # file still parses and still carries its now-stale signature for --verify to reject.
+    ENTRY_OFF=$(otool -l "$SECURITY_BIN" 2>/dev/null | awk '/LC_MAIN/{f=1} f&&/entryoff/{print $2; exit}')
+    ENTRY_OFF=${ENTRY_OFF:-2184}
+    dd if=/dev/zero of="$TAMPER_BIN" bs=1 seek="$ENTRY_OFF" count=4096 conv=notrunc 2>/dev/null
+    dd if=/dev/zero of="$TAMPER_BIN" bs=4096 seek=4 count=512 conv=notrunc 2>/dev/null
+    if codesign --verify "$TAMPER_BIN" 2>/dev/null; then
+      echo "FAIL 10c: codesign --verify ACCEPTED a tampered arm64 binary (integrity check broken)"
+      rm -f "$TAMPER_BIN"
       exit 1
+    else
+      echo "OK 10c: codesign --verify rejected tampered arm64 binary"
     fi
+    rm -f "$TAMPER_BIN"
   else
-    # x86_64: unsigned should still run
+    # x86_64: signing is not enforced; an unsigned binary should still run
+    codesign --remove-signature "$SECURITY_BIN" 2>/dev/null || true
     if "$SECURITY_BIN" --version > /dev/null 2>&1; then
       echo "OK 10c: unsigned x86_64 binary runs (no signing required)"
     else
