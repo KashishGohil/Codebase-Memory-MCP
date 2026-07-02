@@ -684,7 +684,14 @@ static void extract_worker(int worker_id, void *ctx_ptr) {
         cbm_mem_collect();
     }
 
-    /* Final cleanup (parser already destroyed in loop, just slab state) */
+    /* Final cleanup. A worker that processed zero files (work-stealing) or
+     * that carries a leftover cached tl_parser from an earlier on-thread
+     * cbm_extract_file never ran the per-file destroy above, so tl_parser
+     * can still be live here. Destroying it unconditionally (idempotent —
+     * cbm_destroy_thread_parser() no-ops when tl_parser is NULL) guarantees
+     * no live parser references a page cbm_slab_destroy_thread() is about
+     * to free; see the same contract documented at line ~2313. */
+    cbm_destroy_thread_parser();
     cbm_slab_destroy_thread();
     cbm_kind_in_set_free_cache(); /* free this worker thread's node-type bitset cache */
 }

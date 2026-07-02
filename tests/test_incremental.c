@@ -754,6 +754,22 @@ TEST(incr_batch_add_delete) {
  *  PHASE 6: Recovery + accuracy
  * ══════════════════════════════════════════════════════════════════ */
 
+/* Computes the |before/after| percent diff for the DB-recovery check.
+ * Returns true and sets *out_diff_pct when nodes_before > 0; returns false
+ * (no division performed) when nodes_before <= 0, so the caller can FAIL
+ * with a clear message instead of dividing by zero (a starved/0-node
+ * baseline is a setup failure, not something to silently divide through).
+ * Pulled out to a standalone helper so the zero-baseline guard is pinned by
+ * a deterministic, network-free unit test (below) independent of the
+ * network-dependent fastapi-clone fixture this suite otherwise requires. */
+static bool compute_recovery_diff_pct(int nodes_before, int nodes_after, int *out_diff_pct) {
+    if (nodes_before <= 0) {
+        return false;
+    }
+    *out_diff_pct = abs(nodes_after - nodes_before) * 100 / nodes_before;
+    return true;
+}
+
 TEST(incr_db_deleted_recovery) {
     int nodes_before = get_node_count();
 
@@ -768,10 +784,32 @@ TEST(incr_db_deleted_recovery) {
 
     /* Full reindex must produce similar count */
     int nodes_after = get_node_count();
-    int diff_pct = abs(nodes_after - nodes_before) * 100 / nodes_before;
+    int diff_pct = 0;
+    if (!compute_recovery_diff_pct(nodes_before, nodes_after, &diff_pct)) {
+        FAIL("nodes_before == 0: baseline index produced no nodes, cannot compute recovery diff_pct");
+    }
     ASSERT_LT(diff_pct, 5);
 
     printf("    [perf] db recovery (full reindex): %.0fms, peak=%zuMB\n", ms, peak_mb);
+
+    PASS();
+}
+
+/* Deterministic, network-free guard pin for the nodes_before==0 / negative
+ * path: asserts the helper never performs the division (would SIGFPE) and
+ * signals failure via its return value instead. Registered outside the
+ * network-dependent fastapi fixture so it always runs (offline included). */
+TEST(incr_recovery_diff_pct_guards_zero_baseline) {
+    int diff_pct = 999;
+    ASSERT_FALSE(compute_recovery_diff_pct(0, 42, &diff_pct));
+    ASSERT_EQ(diff_pct, 999); /* untouched -- confirms no divide happened */
+
+    diff_pct = 999;
+    ASSERT_FALSE(compute_recovery_diff_pct(-3, 42, &diff_pct));
+    ASSERT_EQ(diff_pct, 999);
+
+    ASSERT_TRUE(compute_recovery_diff_pct(100, 105, &diff_pct));
+    ASSERT_EQ(diff_pct, 5);
 
     PASS();
 }
@@ -2819,6 +2857,10 @@ TEST(tool_delete_and_verify) {
  * ══════════════════════════════════════════════════════════════════ */
 
 SUITE(incremental) {
+    /* Deterministic, network-free: must run even when the fastapi-clone
+     * fixture setup below fails/is skipped offline. */
+    RUN_TEST(incr_recovery_diff_pct_guards_zero_baseline);
+
     if (incremental_setup() != 0) {
         printf("  SETUP FAILED — skipping incremental tests (network?)\n");
         return;

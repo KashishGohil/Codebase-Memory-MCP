@@ -3697,6 +3697,9 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
     path_filter = NULL;
 
     if (!pattern) {
+        if (has_path_filter) {
+            cbm_regfree(&path_regex);
+        }
         free(project);
         free(file_pattern);
         return cbm_mcp_text_result("pattern is required", true);
@@ -3707,6 +3710,9 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
      * value" are different failures and must not share the available_projects
      * shape (pai/codebase-memory-search). */
     if (!project) {
+        if (has_path_filter) {
+            cbm_regfree(&path_regex);
+        }
         free(pattern);
         free(file_pattern);
         return cbm_mcp_text_result("project is required", true);
@@ -3714,6 +3720,9 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
 
     char *root_path = get_project_root(srv, project);
     if (!root_path) {
+        if (has_path_filter) {
+            cbm_regfree(&path_regex);
+        }
         free(pattern);
         free(project);
         free(file_pattern);

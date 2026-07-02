@@ -19,6 +19,27 @@
 #include <unistd.h>
 #endif
 
+/* Guards an assertion that runs while HOME is temporarily pointed at a
+ * scratch dir (see the setenv(HOME, td) / restore bracket in the config_*
+ * tests below). A plain ASSERT* here would `return 1` on failure and skip
+ * the paired restore, leaving HOME stuck on the scratch dir for every
+ * later suite in this process and leaking the strdup'd old_home. Restores
+ * HOME and frees old_home before returning, mirroring the paired restore
+ * block on the success path. */
+#define ASSERT_HOME(cond, old_home_var)                                                        \
+    do {                                                                                       \
+        if (!(cond)) {                                                                         \
+            printf("  %sFAIL%s %s:%d: ASSERT(%s)\n", tf_red(), tf_reset(), __FILE__, __LINE__, \
+                   #cond);                                                                     \
+            if (old_home_var) {                                                                \
+                cbm_setenv("HOME", (old_home_var), 1);                                         \
+                free(old_home_var);                                                            \
+                (old_home_var) = NULL;                                                         \
+            }                                                                                  \
+            return 1;                                                                          \
+        }                                                                                      \
+    } while (0)
+
 /* ── Config tests ─────────────────────────────────────────────── */
 
 TEST(config_load_defaults) {
@@ -38,8 +59,8 @@ TEST(config_load_defaults) {
 
     cbm_ui_config_load(&cfg);
 
-    ASSERT_FALSE(cfg.ui_enabled);
-    ASSERT_EQ(cfg.ui_port, 9749);
+    ASSERT_HOME(!cfg.ui_enabled, old_home);
+    ASSERT_HOME(cfg.ui_port == 9749, old_home);
 
     /* Restore HOME */
     if (old_home) {
@@ -67,8 +88,8 @@ TEST(config_save_and_reload) {
     cbm_ui_config_t loaded;
     cbm_ui_config_load(&loaded);
 
-    ASSERT_TRUE(loaded.ui_enabled);
-    ASSERT_EQ(loaded.ui_port, 8080);
+    ASSERT_HOME(loaded.ui_enabled, old_home);
+    ASSERT_HOME(loaded.ui_port == 8080, old_home);
 
     if (old_home) {
         cbm_setenv("HOME", old_home, 1);
@@ -98,7 +119,7 @@ TEST(config_overwrite) {
     /* Reload should show false */
     cbm_ui_config_t loaded;
     cbm_ui_config_load(&loaded);
-    ASSERT_FALSE(loaded.ui_enabled);
+    ASSERT_HOME(!loaded.ui_enabled, old_home);
 
     if (old_home) {
         cbm_setenv("HOME", old_home, 1);
@@ -127,15 +148,15 @@ TEST(config_corrupt_file) {
     cbm_mkdir_p(dir, 0755);
 
     FILE *f = fopen(path, "w");
-    ASSERT_NOT_NULL(f);
+    ASSERT_HOME(f != NULL, old_home);
     fprintf(f, "this is not json!!!");
     fclose(f);
 
     /* Should load defaults, not crash */
     cbm_ui_config_t cfg;
     cbm_ui_config_load(&cfg);
-    ASSERT_FALSE(cfg.ui_enabled);
-    ASSERT_EQ(cfg.ui_port, 9749);
+    ASSERT_HOME(!cfg.ui_enabled, old_home);
+    ASSERT_HOME(cfg.ui_port == 9749, old_home);
 
     if (old_home) {
         cbm_setenv("HOME", old_home, 1);
@@ -163,14 +184,14 @@ TEST(config_missing_fields) {
     cbm_mkdir_p(dir, 0755);
 
     FILE *f = fopen(path, "w");
-    ASSERT_NOT_NULL(f);
+    ASSERT_HOME(f != NULL, old_home);
     fprintf(f, "{\"ui_port\": 5555}");
     fclose(f);
 
     cbm_ui_config_t cfg;
     cbm_ui_config_load(&cfg);
-    ASSERT_FALSE(cfg.ui_enabled); /* defaults for missing field */
-    ASSERT_EQ(cfg.ui_port, 5555); /* present field loaded */
+    ASSERT_HOME(!cfg.ui_enabled, old_home); /* defaults for missing field */
+    ASSERT_HOME(cfg.ui_port == 5555, old_home); /* present field loaded */
 
     if (old_home) {
         cbm_setenv("HOME", old_home, 1);

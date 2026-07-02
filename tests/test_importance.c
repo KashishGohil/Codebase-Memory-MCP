@@ -496,6 +496,7 @@ TEST(importance_round_trip_persist) {
     ASSERT_NOT_NULL(out.properties_json);
     ASSERT_TRUE(strstr(out.properties_json, "\"importance\":") != NULL);
     ASSERT_FLOAT_EQ(extract_importance(out.properties_json), 3.14, 1e-6);
+    cbm_node_free_fields(&out);
     cbm_store_close(s2);
 
     th_rmtree(tmpdir);
@@ -536,6 +537,7 @@ TEST(importance_migration_null_until_reindex) {
     ASSERT_EQ(cbm_store_find_node_by_qn(s2, "proj", "proj.legacy_fn", &out1), CBM_STORE_OK);
     ASSERT_NOT_NULL(out1.properties_json);
     ASSERT_TRUE(strstr(out1.properties_json, "\"importance\":") == NULL);
+    cbm_node_free_fields(&out1);
 
     /* Re-index: rewrite the row with the score present (upsert by same QN). */
     cbm_node_t reindexed = {.project = "proj",
@@ -554,6 +556,7 @@ TEST(importance_migration_null_until_reindex) {
     ASSERT_EQ(cbm_store_find_node_by_qn(s3, "proj", "proj.legacy_fn", &out2), CBM_STORE_OK);
     ASSERT_TRUE(strstr(out2.properties_json, "\"importance\":") != NULL);
     ASSERT_FLOAT_EQ(extract_importance(out2.properties_json), 5.0, 1e-6);
+    cbm_node_free_fields(&out2);
     cbm_store_close(s3);
 
     th_rmtree(tmpdir);
