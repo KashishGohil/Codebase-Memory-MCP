@@ -1056,7 +1056,8 @@ int cbm_gbuf_delete_edges_by_type(cbm_gbuf_t *gb, const char *type) {
         cbm_gbuf_edge_t *e = gb->edges.items[i];
         if (strcmp(e->type, type) == 0) {
             char key[EDGE_KEY_BUF];
-            make_edge_key(key, sizeof(key), e->source_id, e->target_id, e->type, e->properties_json);
+            make_edge_key(key, sizeof(key), e->source_id, e->target_id, e->type,
+                          e->properties_json);
             const char *ekey = cbm_ht_get_key(gb->edge_by_key, key);
             cbm_ht_delete(gb->edge_by_key, key);
             free((void *)ekey);
