@@ -2486,6 +2486,49 @@ static char *rm_json_str(const char *json, const char *key) {
     return result;
 }
 
+/* Read a string-array field out of a repo_map response's inner JSON text.
+ * Fills out[] (caller-allocated, cap entries max) with strdup'd strings and
+ * returns the element count actually parsed. -1 if the key is absent or not
+ * an array (distinguishes "omitted" from "present but empty" — callers that
+ * only care about presence/shape use rm_json_arr_present_and_empty below). */
+static int rm_json_str_arr(const char *json, const char *key, char **out, int cap) {
+    if (!json) {
+        return -1;
+    }
+    yyjson_doc *doc = yyjson_read(json, strlen(json), 0);
+    if (!doc) {
+        return -1;
+    }
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *val = root ? yyjson_obj_get(root, key) : NULL;
+    if (!val || !yyjson_is_arr(val)) {
+        yyjson_doc_free(doc);
+        return -1;
+    }
+    int n = 0;
+    size_t idx;
+    size_t max;
+    yyjson_val *elem;
+    yyjson_arr_foreach(val, idx, max, elem) {
+        if (n < cap && yyjson_is_str(elem)) {
+            out[n++] = strdup(yyjson_get_str(elem));
+        }
+    }
+    yyjson_doc_free(doc);
+    return n;
+}
+
+/* True iff `key` is entirely absent from the response's inner JSON text —
+ * the pinned "omit" shape for seeds_unresolved when nothing is unresolved. */
+static bool rm_json_key_absent(const char *json, const char *key) {
+    if (!json) {
+        return true;
+    }
+    char needle[128];
+    snprintf(needle, sizeof(needle), "\"%s\"", key);
+    return strstr(json, needle) == NULL;
+}
+
 /* ── Row 1: registration + dispatch ──────────────────────────────── */
 
 TEST(repo_map_registered_in_tools_list) {
@@ -2730,6 +2773,8 @@ TEST(repo_map_seed_resolves_multiple_nodes) {
                              "\"token_budget\":100000}");
     ASSERT_NOT_NULL(text);
     ASSERT_NOT_NULL(strstr(text, "\"seed_anchors_resolved\":1"));
+    /* AC2/row-2: all-resolved -> seeds_unresolved omitted (pinned shape). */
+    ASSERT_TRUE(rm_json_key_absent(text, "seeds_unresolved"));
     const char *dupb_pos = strstr(text, "DupB() error");
     const char *dupc_pos = strstr(text, "DupC() error");
     const char *hi_pos = strstr(text, "Hi() error");
@@ -2861,6 +2906,47 @@ TEST(repo_map_no_seed_and_empty_seed_and_all_unresolvable_yield_identical_global
     ASSERT_NOT_NULL(strstr(empty_arr, "\"mode\":\"global\""));
     ASSERT_NOT_NULL(strstr(all_unresolvable, "\"mode\":\"global\""));
 
+    /* Row 3: zero seeds requested (no key / empty array) -> seeds_unresolved
+     * omitted, same pinned shape as the all-resolved case (nothing to
+     * report as unresolved). */
+    ASSERT_TRUE(rm_json_key_absent(no_seed, "seeds_unresolved"));
+    ASSERT_TRUE(rm_json_key_absent(empty_arr, "seeds_unresolved"));
+
+    /* Row 4a: single unresolvable name -> seeds_unresolved lists it. */
+    char *unresolved_single[4];
+    int unresolved_single_n =
+        rm_json_str_arr(all_unresolvable, "seeds_unresolved", unresolved_single, 4);
+    ASSERT_EQ(1, unresolved_single_n);
+    ASSERT_STR_EQ("nonexistent_xyz", unresolved_single[0]);
+    free(unresolved_single[0]);
+
+    /* Row 4b: 2+ distinct unresolvable names -> all listed, resolved:0,
+     * mode stays "global" (nothing resolved). */
+    char *two_unresolvable =
+        rm_call(srv, "{\"project\":\"rm-empty-seed\",\"seed_anchors\":[\"nonexistent_xyz\","
+                     "\"also_missing_abc\"],\"token_budget\":100000}");
+    ASSERT_NOT_NULL(two_unresolvable);
+    ASSERT_NOT_NULL(strstr(two_unresolvable, "\"seed_anchors_resolved\":0"));
+    ASSERT_NOT_NULL(strstr(two_unresolvable, "\"mode\":\"global\""));
+    char *unresolved_two[4];
+    int unresolved_two_n =
+        rm_json_str_arr(two_unresolvable, "seeds_unresolved", unresolved_two, 4);
+    ASSERT_EQ(2, unresolved_two_n);
+    bool saw_first = false;
+    bool saw_second = false;
+    for (int i = 0; i < unresolved_two_n; i++) {
+        if (strcmp(unresolved_two[i], "nonexistent_xyz") == 0) {
+            saw_first = true;
+        }
+        if (strcmp(unresolved_two[i], "also_missing_abc") == 0) {
+            saw_second = true;
+        }
+        free(unresolved_two[i]);
+    }
+    ASSERT_TRUE(saw_first);
+    ASSERT_TRUE(saw_second);
+    free(two_unresolvable);
+
     free(no_seed_map);
     free(empty_map);
     free(unresolvable_map);
@@ -2883,6 +2969,42 @@ TEST(repo_map_mixed_resolvable_and_unresolvable_seeds_uses_seeded_mode) {
     ASSERT_NOT_NULL(strstr(text, "\"mode\":\"seeded\""));
     ASSERT_NOT_NULL(strstr(text, "\"seed_anchors_requested\":2"));
     ASSERT_NOT_NULL(strstr(text, "\"seed_anchors_resolved\":1"));
+    /* Row 1: seeds_unresolved lists exactly the anchor names that failed to
+     * resolve — parsed as a real array (length + element equality), not a
+     * substring probe, so ordering/extra-entries bugs would be caught. */
+    char *unresolved[4];
+    int unresolved_n = rm_json_str_arr(text, "seeds_unresolved", unresolved, 4);
+    ASSERT_EQ(1, unresolved_n);
+    ASSERT_STR_EQ("nonexistent_xyz", unresolved[0]);
+    free(unresolved[0]);
+    free(text);
+    cbm_mcp_server_free(srv);
+    PASS();
+}
+
+/* ── Row 5: duplicate unresolvable anchor names don't corrupt the array ── */
+
+TEST(repo_map_duplicate_unresolvable_seed_names_no_crash) {
+    cbm_mcp_server_t *srv = rm_setup_server("rm-dup-unresolved");
+    cbm_store_t *st = cbm_mcp_server_store(srv);
+    rm_add_simple_fixture(st, "rm-dup-unresolved");
+
+    char *text =
+        rm_call(srv, "{\"project\":\"rm-dup-unresolved\",\"seed_anchors\":[\"ghost_a\","
+                     "\"ghost_a\"],\"token_budget\":100000}");
+    ASSERT_NOT_NULL(text);
+    ASSERT_NOT_NULL(strstr(text, "\"seed_anchors_requested\":2"));
+    ASSERT_NOT_NULL(strstr(text, "\"seed_anchors_resolved\":0"));
+    /* Pinned observed behaviour: the implementation does not dedupe —
+     * each unresolved anchor is recorded as encountered, so a duplicate
+     * request name appears twice. */
+    char *unresolved[4];
+    int unresolved_n = rm_json_str_arr(text, "seeds_unresolved", unresolved, 4);
+    ASSERT_EQ(2, unresolved_n);
+    ASSERT_STR_EQ("ghost_a", unresolved[0]);
+    ASSERT_STR_EQ("ghost_a", unresolved[1]);
+    free(unresolved[0]);
+    free(unresolved[1]);
     free(text);
     cbm_mcp_server_free(srv);
     PASS();
@@ -2986,6 +3108,9 @@ TEST(repo_map_malformed_seed_anchors_string_coerced) {
     char *inner = extract_text_content(raw);
     ASSERT_NOT_NULL(inner);
     ASSERT_NOT_NULL(strstr(inner, "\"mode\":\"seeded\""));
+    /* Row 6: coerced single anchor "A" fully resolves -> seeds_unresolved
+     * omitted (well-shaped, not just non-crashing). */
+    ASSERT_TRUE(rm_json_key_absent(inner, "seeds_unresolved"));
     free(inner);
     free(raw);
     cbm_mcp_server_free(srv);
@@ -3005,6 +3130,9 @@ TEST(repo_map_malformed_seed_anchors_non_string_elements_skipped) {
     ASSERT_NOT_NULL(inner);
     ASSERT_NOT_NULL(strstr(inner, "\"mode\":\"seeded\""));
     ASSERT_NOT_NULL(strstr(inner, "\"seed_anchors_resolved\":1"));
+    /* Row 6: the only string element ("A") resolves; the skipped non-string
+     * elements never became anchors, so seeds_unresolved is omitted. */
+    ASSERT_TRUE(rm_json_key_absent(inner, "seeds_unresolved"));
     free(inner);
     free(raw);
     cbm_mcp_server_free(srv);
@@ -3182,6 +3310,99 @@ TEST(repo_map_repeated_calls_stable_no_leak_surface) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+ *  index_status — indexed_at observability (pai/codebase-memory-
+ *  repomap-observability). Row 8-10 of the test plan: the success path
+ *  (ready + empty project) previously had zero coverage; only the
+ *  missing-project error path (tool_index_status_no_project, above) was
+ *  tested.
+ * ══════════════════════════════════════════════════════════════════ */
+
+/* ISO-8601 "YYYY-MM-DDTHH:MM:SSZ" shape check — matches iso_now() in
+ * store.c (~line 203-209), 20 bytes exactly. Hand-rolled digit/char-position
+ * check rather than a regex dependency. */
+static bool is_iso8601_utc(const char *s) {
+    if (!s || strlen(s) != 20) {
+        return false;
+    }
+    static const char pattern[] = "dddd-dd-ddTdd:dd:ddZ"; /* 20 chars + NUL */
+    for (int i = 0; i < 20; i++) {
+        char want = pattern[i];
+        char got = s[i];
+        if (want == 'd') {
+            if (got < '0' || got > '9') {
+                return false;
+            }
+        } else if (got != want) {
+            return false;
+        }
+    }
+    return true;
+}
+
+TEST(tool_index_status_ready_project_includes_indexed_at) {
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    cbm_store_t *st = cbm_mcp_server_store(srv);
+    const char *project = "idx-status-ready";
+    cbm_mcp_server_set_project(srv, project);
+    cbm_store_upsert_project(st, project, "/tmp/idx-status-ready-test");
+
+    cbm_node_t n = {0};
+    n.project = project;
+    n.label = "Function";
+    n.name = "Foo";
+    n.qualified_name = "q.Foo";
+    n.file_path = "pkg/foo.go";
+    n.start_line = 1;
+    n.end_line = 2;
+    n.properties_json = "{}";
+    cbm_store_upsert_node(st, &n);
+
+    char *raw = cbm_mcp_handle_tool(srv, "index_status", "{\"project\":\"idx-status-ready\"}");
+    ASSERT_NOT_NULL(raw);
+    ASSERT_NULL(strstr(raw, "\"isError\":true"));
+    char *inner = extract_text_content(raw);
+    ASSERT_NOT_NULL(inner);
+    ASSERT_NOT_NULL(strstr(inner, "\"status\":\"ready\""));
+    /* Existing fields unchanged (row 13 characterization). */
+    ASSERT_NOT_NULL(strstr(inner, "\"nodes\":1"));
+
+    char *indexed_at = rm_json_str(inner, "indexed_at");
+    ASSERT_NOT_NULL(indexed_at);
+    ASSERT_TRUE(is_iso8601_utc(indexed_at));
+    free(indexed_at);
+    free(inner);
+    free(raw);
+    cbm_mcp_server_free(srv);
+    PASS();
+}
+
+TEST(tool_index_status_empty_project_includes_indexed_at) {
+    /* Project row registered (cbm_store_upsert_project) but zero nodes —
+     * "empty" status distinct from "unknown project" (row 11). */
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    cbm_store_t *st = cbm_mcp_server_store(srv);
+    const char *project = "idx-status-empty";
+    cbm_mcp_server_set_project(srv, project);
+    cbm_store_upsert_project(st, project, "/tmp/idx-status-empty-test");
+
+    char *raw = cbm_mcp_handle_tool(srv, "index_status", "{\"project\":\"idx-status-empty\"}");
+    ASSERT_NOT_NULL(raw);
+    ASSERT_NULL(strstr(raw, "\"isError\":true"));
+    char *inner = extract_text_content(raw);
+    ASSERT_NOT_NULL(inner);
+    ASSERT_NOT_NULL(strstr(inner, "\"status\":\"empty\""));
+
+    char *indexed_at = rm_json_str(inner, "indexed_at");
+    ASSERT_NOT_NULL(indexed_at);
+    ASSERT_TRUE(is_iso8601_utc(indexed_at));
+    free(indexed_at);
+    free(inner);
+    free(raw);
+    cbm_mcp_server_free(srv);
+    PASS();
+}
+
+/* ══════════════════════════════════════════════════════════════════
  *  SUITE
  * ══════════════════════════════════════════════════════════════════ */
 
@@ -3255,6 +3476,8 @@ SUITE(mcp) {
     RUN_TEST(tool_search_graph_includes_node_properties);
     RUN_TEST(tool_query_graph_basic);
     RUN_TEST(tool_index_status_no_project);
+    RUN_TEST(tool_index_status_ready_project_includes_indexed_at);
+    RUN_TEST(tool_index_status_empty_project_includes_indexed_at);
 
     /* Tool handlers with validation */
     RUN_TEST(tool_trace_call_path_not_found);
@@ -3353,6 +3576,7 @@ SUITE(mcp) {
     RUN_TEST(repo_map_module_usage_neighbor_expands_to_its_file_symbols);
     RUN_TEST(repo_map_no_seed_and_empty_seed_and_all_unresolvable_yield_identical_global_map);
     RUN_TEST(repo_map_mixed_resolvable_and_unresolvable_seeds_uses_seeded_mode);
+    RUN_TEST(repo_map_duplicate_unresolvable_seed_names_no_crash);
     RUN_TEST(repo_map_unscored_project_returns_explicit_gate_error);
     RUN_TEST(repo_map_partial_score_population_is_not_gated);
     RUN_TEST(repo_map_missing_project_is_error_no_crash);
