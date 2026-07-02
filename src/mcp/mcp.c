@@ -3806,6 +3806,9 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
         char errmsg[CBM_SZ_256];
         snprintf(errmsg, sizeof(errmsg), "search failed: cannot create temp file (%s)",
                  strerror(errno));
+        if (has_path_filter) {
+            cbm_regfree(&path_regex);
+        }
         free(root_path);
         free(pattern);
         free(project);
@@ -3837,6 +3840,9 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
         cbm_unlink(tmpfile);
         if (scoped) {
             cbm_unlink(filelist);
+        }
+        if (has_path_filter) {
+            cbm_regfree(&path_regex);
         }
         free(root_path);
         free(pattern);
