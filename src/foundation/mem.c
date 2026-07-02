@@ -146,13 +146,41 @@ void cbm_mem_init(double ram_fraction) {
 }
 
 size_t cbm_mem_rss(void) {
+#if defined(__linux__) && !defined(_WIN32)
+    /* Linux: mimalloc's _mi_prim_process_info() (vendored/mimalloc/src/
+     * prim/unix/prim.c) never sets pinfo->current_rss on Linux — only
+     * peak_rss (via getrusage's ru_maxrss, a high-water mark). current_rss
+     * silently falls back to mimalloc's OWN committed-page counter
+     * (mi_process_info()'s pinfo.current_commit default), which this
+     * project deliberately tunes low via mi_option_arena_eager_commit=0 +
+     * mi_option_purge_decommits=1 + mi_option_purge_delay=0 (cbm_mem_init,
+     * above) to reduce upfront memory. Combined, "current_rss" on Linux
+     * can read near-zero (observed: 4MB) while true RSS is multiple GB —
+     * a small-but-NONZERO value that defeated the `current_rss > 0`
+     * ASan-only fallback guard below, silently blinding both this
+     * function's callers (cbm_mem_over_budget backpressure AND the
+     * enforcing ceiling in this same file) to real memory pressure during
+     * concurrent large-file parsing — the exact mechanism the 2026-07-01
+     * incident diagnosed. os_rss() (/proc/self/statm) is unaffected by
+     * mimalloc's internal accounting and is authoritative OS-reported RSS
+     * on every Linux build regardless of allocator tuning, so it is the
+     * PRIMARY source here, not a last-resort fallback. Verified via a
+     * calibrated 40x8MB synthetic large-file index on IO: mi_process_info
+     * current_rss=4MB, actual RSS (ps/proc)=~2.2GB, os_rss()=~2.2GB. */
+    size_t rss = os_rss();
+    if (rss > 0) {
+        return rss;
+    }
+    /* Extremely unlikely (/proc unavailable) — fall through to mimalloc. */
+#endif
     size_t current_rss = 0;
     size_t peak_rss = 0;
     mi_process_info(NULL, NULL, NULL, &current_rss, &peak_rss, NULL, NULL, NULL);
     if (current_rss > 0) {
         return current_rss;
     }
-    /* Fallback for ASan builds (MI_OVERRIDE=0) */
+    /* Fallback for ASan builds (MI_OVERRIDE=0) and any other platform
+     * where mimalloc's current_rss is unavailable/zero. */
     return os_rss();
 }
 
