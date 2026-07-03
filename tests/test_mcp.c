@@ -11,6 +11,7 @@
 #include "test_helpers.h"
 #include <cli/cli.h>
 #include <mcp/index_supervisor.h> /* spawn-count hook — #845 in-process guard */
+#include <git/git_context.h>
 #include <mcp/mcp.h>
 #include <pipeline/pipeline.h>
 #include <store/store.h>
@@ -866,6 +867,46 @@ TEST(tool_index_status_includes_git_metadata) {
     cbm_mcp_server_free(srv);
     cleanup_snippet_dir(tmp);
     PASS();
+}
+
+TEST(tool_index_status_evidence_repo_path_with_quote_rejected) {
+    bool dirty = true;
+    ASSERT_NEQ(cbm_git_tracked_dirty("/tmp/cbm_mcp_git_quote\"_invalid", &dirty), 0);
+    ASSERT_FALSE(dirty);
+
+#ifdef _WIN32
+    PASS();
+#else
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "/tmp/cbm_mcp_git_quote\"_XXXXXX");
+    ASSERT_NOT_NULL(cbm_mkdtemp(tmp));
+
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    ASSERT_NOT_NULL(srv);
+    cbm_store_t *st = cbm_mcp_server_store(srv);
+    ASSERT_NOT_NULL(st);
+    cbm_mcp_server_set_project(srv, "git-quote-path");
+    ASSERT_EQ(cbm_store_upsert_project(st, "git-quote-path", tmp), CBM_STORE_OK);
+
+    char *resp = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":173,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"index_status\","
+             "\"arguments\":{\"project\":\"git-quote-path\"}}}");
+    ASSERT_NOT_NULL(resp);
+    char *inner = extract_text_content(resp);
+    ASSERT_NOT_NULL(inner);
+    ASSERT_NOT_NULL(strstr(inner, "\"root_exists\":true"));
+    ASSERT_NOT_NULL(strstr(inner, "\"is_git\":false"));
+    ASSERT_NOT_NULL(strstr(inner, "\"repository_state\":\"not_git\""));
+    ASSERT_NOT_NULL(strstr(inner, "\"freshness\":\"unknown\""));
+    ASSERT_NOT_NULL(strstr(inner, "\"snapshot_matches_working_tree\":null"));
+
+    free(inner);
+    free(resp);
+    cbm_mcp_server_free(srv);
+    rmdir(tmp);
+    PASS();
+#endif
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -4761,6 +4802,7 @@ SUITE(mcp) {
     RUN_TEST(tool_query_graph_basic);
     RUN_TEST(tool_index_status_no_project);
     RUN_TEST(tool_index_status_includes_git_metadata);
+    RUN_TEST(tool_index_status_evidence_repo_path_with_quote_rejected);
 
     /* Tool handlers with validation */
     RUN_TEST(tool_trace_call_path_not_found);
