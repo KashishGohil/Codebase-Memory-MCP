@@ -575,6 +575,26 @@ TEST(slab_reclaim_with_foreign_live_chunk_is_safe) {
     PASS();
 }
 
+TEST(slab_destroy_with_foreign_live_chunk_is_safe) {
+    cbm_slab_install();
+
+    void *p = cbm_slab_test_malloc(32);
+    ASSERT_NOT_NULL(p);
+    memset(p, 0x3C, 32);
+
+    atomic_int go;
+    atomic_init(&go, 0);
+    slab_cross_thread_free_ctx_t ctx = {.ptr = p, .go = &go};
+    cbm_thread_t t;
+    ASSERT_EQ(cbm_thread_create(&t, 0, slab_cross_thread_free_worker, &ctx), 0);
+
+    cbm_slab_destroy_thread();
+    atomic_store_explicit(&go, 1, memory_order_release);
+    ASSERT_EQ(cbm_thread_join(&t), 0);
+
+    PASS();
+}
+
 /* ── Parallel extraction integration test ──────────────────── */
 
 static char g_mem_tmpdir[256];
@@ -721,6 +741,7 @@ SUITE(mem) {
     RUN_TEST(slab_mixed_alloc_free_stress);
     RUN_TEST(slab_cross_thread_free_is_safe);
     RUN_TEST(slab_reclaim_with_foreign_live_chunk_is_safe);
+    RUN_TEST(slab_destroy_with_foreign_live_chunk_is_safe);
     /* Integration */
     RUN_TEST(parallel_extract_with_slab);
 }
