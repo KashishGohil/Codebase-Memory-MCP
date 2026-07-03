@@ -1602,22 +1602,20 @@ static const char *pine_assign_types[] = {"reassignment_statement", NULL};
 // Grammar: tree-sitter-arkts (https://github.com/aspect-ux/tree-sitter-arkts)
 // Reuses TS/JS node types where applicable, adds ArkTS-specific UI nodes.
 static const char *arkts_func_types[] = {"function_declaration",
-                                         "generator_function_declaration",
                                          "function_expression",
                                          "arrow_function",
-                                         "method_definition",
                                          "method_declaration",
                                          "constructor_declaration",
                                          "build_method",
+                                         "decorated_function_declaration",
+                                         "ui_builder_arrow_function",
                                          NULL};
 static const char *arkts_class_types[] = {"class_declaration",
-                                          "class",
-                                          "abstract_class_declaration",
                                           "enum_declaration",
                                           "interface_declaration",
-                                          "type_alias_declaration",
-                                          "internal_module",
+                                          "type_declaration",
                                           "component_declaration",
+                                          "decorated_export_declaration",
                                           NULL};
 static const char *arkts_field_types[] = {"property_declaration", "public_field_definition", NULL};
 static const char *arkts_module_types[] = {"source_file", NULL};
