@@ -238,6 +238,100 @@ static cbm_store_t *cp_index_files(CP_Proj *lp, const CP_File *files, int nfiles
     return cp_open_indexed(lp);
 }
 
+static void cp_cleanup(CP_Proj *lp, cbm_store_t *store);
+
+TEST(cp_index_repository_relative_path_is_canonicalized) {
+    CP_Proj lp;
+    memset(&lp, 0, sizeof(lp));
+    snprintf(lp.tmpdir, sizeof(lp.tmpdir), "/tmp/cbm_cp_rel_XXXXXX");
+    if (!cbm_mkdtemp(lp.tmpdir)) {
+        FAIL("cbm_mkdtemp failed");
+    }
+    cp_to_fwd_slashes(lp.tmpdir);
+
+    char src_path[700];
+    snprintf(src_path, sizeof(src_path), "%s/README.md", lp.tmpdir);
+    FILE *f = fopen(src_path, "wb");
+    if (!f) {
+        th_rmtree(lp.tmpdir);
+        FAIL("failed to create fixture file");
+    }
+    fputs("# relative repo\n", f);
+    fclose(f);
+
+    char cwd[512];
+    if (!getcwd(cwd, sizeof(cwd))) {
+        th_rmtree(lp.tmpdir);
+        FAIL("getcwd failed");
+    }
+
+    if (chdir(lp.tmpdir) != 0) {
+        th_rmtree(lp.tmpdir);
+        FAIL("chdir failed");
+    }
+
+    lp.project = cbm_project_name_from_path(lp.tmpdir);
+    if (!lp.project) {
+        (void)chdir(cwd);
+        th_rmtree(lp.tmpdir);
+        FAIL("project name resolution failed");
+    }
+
+    const char *home = getenv("HOME");
+    if (!home) home = "/tmp";
+    char cache_dir[512];
+    snprintf(cache_dir, sizeof(cache_dir), "%s/.cache/codebase-memory-mcp", home);
+    cbm_mkdir(cache_dir);
+    snprintf(lp.dbpath, sizeof(lp.dbpath), "%s/%s.db", cache_dir, lp.project);
+    unlink(lp.dbpath);
+
+    lp.srv = cbm_mcp_server_new(NULL);
+    if (!lp.srv) {
+        (void)chdir(cwd);
+        th_rmtree(lp.tmpdir);
+        FAIL("cbm_mcp_server_new failed");
+    }
+
+    char *resp = cbm_mcp_handle_tool(lp.srv, "index_repository", "{\"repo_path\":\".\"}");
+    if (!resp) {
+        (void)chdir(cwd);
+        cp_cleanup(&lp, NULL);
+        FAIL("index_repository returned NULL");
+    }
+    if (!strstr(resp, "\"status\":\"indexed\"")) {
+        free(resp);
+        (void)chdir(cwd);
+        cp_cleanup(&lp, NULL);
+        FAIL("index_repository did not report indexed");
+    }
+    free(resp);
+
+    struct stat st;
+    if (stat(lp.dbpath, &st) != 0) {
+        (void)chdir(cwd);
+        cp_cleanup(&lp, NULL);
+        FAIL("expected indexed database to remain on disk");
+    }
+
+    cbm_store_t *store = cbm_store_open_path_query(lp.dbpath);
+    if (!store) {
+        (void)chdir(cwd);
+        cp_cleanup(&lp, NULL);
+        FAIL("expected store to reopen after relative-path indexing");
+    }
+    if (!cbm_store_check_integrity(store)) {
+        cbm_store_close(store);
+        (void)chdir(cwd);
+        cp_cleanup(&lp, NULL);
+        FAIL("relative-path indexing left corrupt store metadata");
+    }
+    cbm_store_close(store);
+
+    (void)chdir(cwd);
+    cp_cleanup(&lp, NULL);
+    PASS();
+}
+
 static void cp_cleanup(CP_Proj *lp, cbm_store_t *store) {
     if (store) cbm_store_close(store);
     if (lp->srv) { cbm_mcp_server_free(lp->srv); lp->srv = NULL; }
@@ -1502,6 +1596,9 @@ SUITE(convergence_probe) {
     RUN_TEST(cp_configures_csharp_getenv);
     /* A5 Rust std::env::var    — EXPECTED UNCERTAIN/RED */
     RUN_TEST(cp_configures_rust_env_var);
+
+    /* A6 Relative repo_path "."  — EXPECTED GREEN after canonicalization */
+    RUN_TEST(cp_index_repository_relative_path_is_canonicalized);
 
     /* ── AREA B: READS/WRITES (4 cases) ─────────────── */
     /* B1 Python global         — EXPECTED UNCERTAIN */

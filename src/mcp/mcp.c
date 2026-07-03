@@ -2605,6 +2605,34 @@ static void build_index_success_response(cbm_mcp_server_t *srv, yyjson_mut_doc *
     }
 }
 
+/* Resolve repo_path to an absolute path when the platform can do so.
+ * index_repository uses this before project naming / store validation so
+ * relative inputs like "." cannot poison the project root metadata. */
+static char *resolve_repo_path_arg(const char *repo_path) {
+    if (!repo_path || !repo_path[0]) {
+        return NULL;
+    }
+
+    char resolved[CBM_SZ_4K];
+#ifdef _WIN32
+    if (_fullpath(resolved, repo_path, sizeof(resolved))) {
+        cbm_normalize_path_sep(resolved);
+        return strdup(resolved);
+    }
+#else
+    if (realpath(repo_path, resolved)) {
+        cbm_normalize_path_sep(resolved);
+        return strdup(resolved);
+    }
+#endif
+
+    char *copy = strdup(repo_path);
+    if (copy) {
+        cbm_normalize_path_sep(copy);
+    }
+    return copy;
+}
+
 static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
     char *repo_path = cbm_mcp_get_string_arg(args, "repo_path");
     char *mode_str = cbm_mcp_get_string_arg(args, "mode");
@@ -2613,6 +2641,12 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
     if (!repo_path) {
         free(mode_str);
         return cbm_mcp_text_result("repo_path is required", true);
+    }
+
+    char *resolved_repo_path = resolve_repo_path_arg(repo_path);
+    if (resolved_repo_path) {
+        free(repo_path);
+        repo_path = resolved_repo_path;
     }
 
     if (mode_str && strcmp(mode_str, "cross-repo-intelligence") == 0) {
