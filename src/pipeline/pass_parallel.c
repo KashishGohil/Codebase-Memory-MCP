@@ -2469,6 +2469,8 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
                                   memory_order_relaxed);
     }
 
+    cbm_destroy_thread_parser();
+    cbm_slab_destroy_thread();
     cbm_service_pattern_cache_end();
 }
 
