@@ -2566,7 +2566,7 @@ unsigned char *cbm_extract_binary_from_zip(const unsigned char *data, int data_l
                        (data[pos + ZIP_OFF_EXTRALEN + CLI_SKIP_ONE] << BYTE_SHIFT));
 
         int header_end = pos + ZIP_HDR_SZ + name_len + extra_len;
-        if (header_end + (int)comp_size > data_len) {
+        if (header_end > data_len || comp_size > (uint32_t)(data_len - header_end)) {
             break;
         }
 
