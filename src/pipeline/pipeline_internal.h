@@ -16,6 +16,7 @@
 #include "cbm.h"
 #include "lsp/go_lsp.h" /* CBMLSPDef for cbm_parallel_resolve cross-LSP inputs */
 #include <stdatomic.h>
+#include <string.h>
 
 /* ── Shared pipeline constants ─────────────────────────────────── */
 
@@ -32,6 +33,19 @@
  * canonicalize to "/u/{}"). The result never exceeds the input length, so
  * out_sz >= strlen(in) + 1 always suffices. Returns out. */
 const char *cbm_route_canon_path(const char *in, char *out, size_t out_sz);
+
+/* True when a graph node is a structural directory container (Folder/Project)
+ * rather than a code node. In a directory-based-module language (Java/Go, see
+ * cbm_lang_module_is_dir) a file's module QN equals its directory QN, so an
+ * enclosing-scope lookup for a CLASS-LEVEL usage/call (enclosing_func_qn ==
+ * module_qn) resolves to the ONE Folder/Project node shared by every file in
+ * that package. Sourcing an edge there conflates all same-package files into a
+ * single source node with an arbitrary file_path (#787). Source-node finders
+ * must treat such a hit as a miss and fall back to the per-file File node. */
+static inline bool cbm_pipeline_node_is_dir_container(const cbm_gbuf_node_t *node) {
+    return node && node->label &&
+           (strcmp(node->label, "Folder") == 0 || strcmp(node->label, "Project") == 0);
+}
 
 /* Time unit conversions */
 #define CBM_NS_PER_SEC 1000000000LL
