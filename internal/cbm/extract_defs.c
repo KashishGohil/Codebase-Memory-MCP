@@ -696,9 +696,8 @@ TSNode cbm_resolve_func_name(TSNode node, CBMLanguage lang) {
         /* ArkTS: function_declaration / decorated_function_declaration
          * have no `name` field; the function name is a plain `identifier` child.
          * build_method has no name at all — synthesize one from the keyword. */
-        if (lang == CBM_LANG_ARKTS &&
-            (strcmp(kind, "function_declaration") == 0 ||
-             strcmp(kind, "decorated_function_declaration") == 0)) {
+        if (lang == CBM_LANG_ARKTS && (strcmp(kind, "function_declaration") == 0 ||
+                                       strcmp(kind, "decorated_function_declaration") == 0)) {
             TSNode id = cbm_find_child_by_kind(node, "identifier");
             if (!ts_node_is_null(id)) {
                 return id;
@@ -4036,8 +4035,7 @@ static TSNode resolve_method_name(TSNode child, CBMLanguage lang) {
     // field; the method name is a plain `identifier` child. For build_method,
     // the name is always "build" (synthesized by the caller).
     if (lang == CBM_LANG_ARKTS &&
-        (strcmp(ck, "method_declaration") == 0 ||
-         strcmp(ck, "function_declaration") == 0 ||
+        (strcmp(ck, "method_declaration") == 0 || strcmp(ck, "function_declaration") == 0 ||
          strcmp(ck, "decorated_function_declaration") == 0)) {
         TSNode id = cbm_find_child_by_kind(child, "identifier");
         if (!ts_node_is_null(id)) {

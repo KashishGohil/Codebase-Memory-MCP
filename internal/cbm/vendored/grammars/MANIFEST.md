@@ -9,12 +9,13 @@ The grammars were originally vendored as bare `parser.c`+`scanner.c` with **no r
 
 ## Summary
 
-- Grammars: **159** — vendored-from-upstream: **142**, first-party/self-maintained: **12**, registry-disagreement: **5** (nim removed 2026-06-12; objectscript_udl + objectscript_routine added 2026-06-24; mojo added 2026-07-01 — see notes below)
+- Grammars: **160** — vendored-from-upstream: **143**, first-party/self-maintained: **12**, registry-disagreement: **5** (nim removed 2026-06-12; objectscript_udl + objectscript_routine added 2026-06-24; mojo added 2026-07-01; arkts added 2026-07-03 — see notes below)
 - ABI distribution: **7×** ABI-13 **85×** ABI-14 **64×** ABI-15 (runtime ceiling is ABI 15; never vendor ABI 16 without a runtime upgrade)
 - Vendored copies missing LICENSE: **0** — all upstream LICENSE files restored 2026-06-11 (first-party grammars carry the project MIT license; `move` uses the Helix-listed upstream tzakian/tree-sitter-move MIT text, `zsh` uses georgeharker/tree-sitter-zsh MIT)
 - `verdict`: VERIFIED-BOTH = our source matches *both* registries; VERIFIED-NVIM/HELIX = matches one; registry-disagreement = registries name a different repo (listed separately); `vendor-maintained` = the language vendor's own grammar, not in nvim/Helix.
 - **objectscript_udl / objectscript_routine** (added 2026-06-24): vendored from [intersystems/tree-sitter-objectscript](https://github.com/intersystems/tree-sitter-objectscript) @ `a7ffcdf` — MIT, the InterSystems-official grammars (a niche vendor language, hence `vendor-maintained`, not in nvim-treesitter/Helix). **Re-vendor note:** each `scanner.c`'s upstream `#include "../../common/scanner.h"` is repointed to a per-directory `objectscript_common.h` (a verbatim copy of upstream `common/scanner.h`), because this repo's shared `vendored/common/scanner.h` belongs to the cfml/fsharp grammars and differs. The generated `parser.c`/`scanner.c` are otherwise byte-for-byte upstream — on re-vendor, re-apply only that single include rename.
 - **mojo** (added 2026-07-01): vendored from [lsh/tree-sitter-mojo](https://github.com/lsh/tree-sitter-mojo) @ `33193a99afe6` — MIT, ABI 15. Helix tracks `lsh/tree-sitter-mojo` as its Mojo grammar source, but the Helix-pinned commit (`3d7c53b8038f`) no longer resolves in the upstream repository after a force-push, so this vendor uses current upstream `main` rather than the stale registry SHA. Security review covered only the vendored C surface (`parser.c`, `scanner.c`, `tree_sitter/*.h`) plus upstream license/provenance metadata; no package manager hooks, workflow files, prompt/agent instruction files, or generated lockfiles were vendored.
+- **arkts** (added 2026-07-03): vendored from [Million-mo/tree-sitter-arkts](https://github.com/Million-mo/tree-sitter-arkts) @ `2fd0ad75e2d8` — MIT (c) 2024 aspect-ux, ABI 15. Community grammar for HarmonyOS ArkTS (`.ets` files), not tracked by nvim-treesitter or Helix. The grammar lacks `field('name', ...)` mappings on declaration nodes, so definition extraction uses `cbm_find_child_by_kind` fallbacks and `build_method` name synthesis (see Custom extraction handling table).
 
 > ⚠️ **Pinned commit = the revision nvim-treesitter/Helix vendor** (battle-tested, canonical source), not bleeding-edge HEAD. When re-vendoring, update the pinned commit here.
 
@@ -35,6 +36,7 @@ Guarded by the `contract_all_grammars_in_graph` graph-breadth test in
 | grammar | custom handling |
 |---|---|
 | ada      | `resolve_func_name`: `subprogram_body`/`subprogram_declaration` → `procedure_specification`/`function_specification` child's `name` field |
+| arkts    | `resolve_func_name`: `function_declaration`/`decorated_function_declaration`/`method_declaration` → `identifier` child (no `name` field in grammar); `build_method` → synthesize `"build"` name; `extract_class_def`/`compute_class_qn`: `identifier` child fallback; `component_body` added to class body traversal; `Component` label for `component_declaration`/`decorated_export_declaration` |
 | cairo    | `resolve_func_name`: `function_definition`/`function_signature` → `identifier` child |
 | clojure  | `extract_lisp_def`: `(defn …)` / `(def …)` head-symbol forms in `list_lit` |
 | d        | `resolve_func_name`: `function_declaration` → `identifier` child |
@@ -70,6 +72,7 @@ Re-vendoring from upstream must re-apply these.
 | ada | 14 | briot/tree-sitter-ada | `6b58259a08b1` | VERIFIED-BOTH | ✅ |
 | agda | 14 | tree-sitter/tree-sitter-agda | `e8d47a6987ef` | VERIFIED-BOTH | ✅ |
 | apex | 14 | aheber/tree-sitter-sfapex | `3597575a4297` | VERIFIED-NVIM | ✅ |
+| arkts | 15 | Million-mo/tree-sitter-arkts | `2fd0ad75e2d8` | COMMUNITY | ✅ |
 | astro | 14 | virchau13/tree-sitter-astro | `213f6e6973d9` | VERIFIED-BOTH | ✅ |
 | awk | 14 | Beaglefoot/tree-sitter-awk | `34bbdc7cce8e` | VERIFIED-BOTH | ✅ |
 | bash | 15 | tree-sitter/tree-sitter-bash | `a06c2e4415e9` | VERIFIED-BOTH | ✅ |

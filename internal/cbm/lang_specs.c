@@ -1621,24 +1621,16 @@ static const char *arkts_field_types[] = {"property_declaration", "public_field_
 static const char *arkts_module_types[] = {"source_file", NULL};
 static const char *arkts_call_types[] = {"call_expression", "new_expression", NULL};
 static const char *arkts_import_types[] = {"import_declaration", "import", NULL};
-static const char *arkts_branch_types[] = {"if_statement",
-                                           "for_statement",
-                                           "for_in_statement",
-                                           "while_statement",
-                                           "do_statement",
-                                           "switch_statement",
-                                           "switch_case",
-                                           "switch_default",
-                                           "try_statement",
-                                           "catch_clause",
-                                           "for_each_statement",
-                                           "lazy_for_each_statement",
-                                           "ui_if_statement",
-                                           NULL};
+static const char *arkts_branch_types[] = {"if_statement",       "for_statement",
+                                           "for_in_statement",   "while_statement",
+                                           "do_statement",       "switch_statement",
+                                           "switch_case",        "switch_default",
+                                           "try_statement",      "catch_clause",
+                                           "for_each_statement", "lazy_for_each_statement",
+                                           "ui_if_statement",    NULL};
 static const char *arkts_var_types[] = {"lexical_declaration", "variable_declaration", NULL};
 static const char *arkts_assign_types[] = {"assignment_expression",
-                                           "augmented_assignment_expression",
-                                           NULL};
+                                           "augmented_assignment_expression", NULL};
 static const char *arkts_throw_types[] = {"throw_statement", NULL};
 static const char *arkts_decorator_types[] = {"decorator", NULL};
 
@@ -2620,9 +2612,10 @@ static const CBMLangSpec lang_specs[CBM_LANG_COUNT] = {
     // CBM_LANG_ARKTS — ArkTS (HarmonyOS/OpenHarmony declarative UI language).
     // TypeScript superset with UI extensions. Uses tree-sitter-arkts grammar.
     [CBM_LANG_ARKTS] = {CBM_LANG_ARKTS, arkts_func_types, arkts_class_types, arkts_field_types,
-                        arkts_module_types, arkts_call_types, arkts_import_types, arkts_import_types,
-                        arkts_branch_types, arkts_var_types, arkts_assign_types, arkts_throw_types,
-                        NULL, arkts_decorator_types, NULL, NULL, tree_sitter_arkts, NULL},
+                        arkts_module_types, arkts_call_types, arkts_import_types,
+                        arkts_import_types, arkts_branch_types, arkts_var_types, arkts_assign_types,
+                        arkts_throw_types, NULL, arkts_decorator_types, NULL, NULL,
+                        tree_sitter_arkts, NULL},
 
 };
 
