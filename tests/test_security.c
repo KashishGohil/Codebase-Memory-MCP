@@ -452,6 +452,20 @@ TEST(cmdline_null_argv_returns_null) {
     PASS();
 }
 
+TEST(cmdline_utf8_arg_is_widened_not_latin1) {
+    /* A non-ASCII argument (e.g. a destination under a non-ASCII
+     * %USERPROFILE%) must be decoded as UTF-8, not byte-widened as
+     * Latin-1. Here "caf\xc3\xa9 dir" is UTF-8 for "café dir": the two
+     * bytes C3 A9 must collapse to the single wide code point U+00E9,
+     * not survive as U+00C3 U+00A9. The embedded space also forces
+     * quoting, so this pins both quoting and correct widening at once. */
+    const char *argv[] = {"cd", "caf\xc3\xa9 dir", NULL};
+    const wchar_t expected[] = {L'c', L'd', L' ',  L'"', L'c', L'a',  L'f',
+                                0x00E9, L' ', L'd', L'i', L'r', L'"', L'\0'};
+    ASSERT_CMDLINE(argv, expected);
+    PASS();
+}
+
 #undef ASSERT_CMDLINE
 
 /* ──────────────────────────────────────────────────────────────────
@@ -543,6 +557,7 @@ SUITE(security) {
     RUN_TEST(cmdline_embedded_quote_is_escaped);
     RUN_TEST(cmdline_trailing_backslashes_doubled_before_close_quote);
     RUN_TEST(cmdline_null_argv_returns_null);
+    RUN_TEST(cmdline_utf8_arg_is_widened_not_latin1);
     /* Live CreateProcessW spawn path */
     RUN_TEST(exec_no_shell_win_exit_zero);
     RUN_TEST(exec_no_shell_win_captures_exit_code);
