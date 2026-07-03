@@ -5,10 +5,12 @@
  * poll_once behavior.
  */
 #include "../src/foundation/compat.h"
+#include "../src/foundation/platform.h"
 #include "test_framework.h"
 #include "test_helpers.h"
 #include <watcher/watcher.h>
 #include <store/store.h>
+#include <errno.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -187,6 +189,213 @@ TEST(watcher_poll_nonexistent_path) {
 
     cbm_watcher_free(w);
     cbm_store_close(store);
+    PASS();
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ *  STALE-ROOT PRUNING (#286)
+ * ══════════════════════════════════════════════════════════════════ */
+
+/* Shared fixture for the stale-root pruning tests: a temp project root, a
+ * temp CBM_CACHE_DIR seeded with db/-wal/-shm files for "stale-project",
+ * and saved copies of the env vars the tests override. */
+typedef struct {
+    char rootdir[256];
+    char cachedir[256];
+    char db_path[512];
+    char wal_path[512];
+    char shm_path[512];
+    char saved_cache_dir[1024];
+    bool had_cache_dir;
+    char saved_grace[64];
+    bool had_grace;
+} prune_fixture_t;
+
+/* Returns false (with partial state cleaned up) if setup failed. */
+static bool prune_fixture_setup(prune_fixture_t *f, const char *grace_s) {
+    snprintf(f->rootdir, sizeof(f->rootdir), "/tmp/cbm_watcher_stale_root_XXXXXX");
+    if (!cbm_mkdtemp(f->rootdir)) {
+        return false;
+    }
+    snprintf(f->cachedir, sizeof(f->cachedir), "/tmp/cbm_watcher_stale_cache_XXXXXX");
+    if (!cbm_mkdtemp(f->cachedir)) {
+        th_rmtree(f->rootdir);
+        return false;
+    }
+
+    f->had_cache_dir = cbm_safe_getenv("CBM_CACHE_DIR", f->saved_cache_dir,
+                                       sizeof(f->saved_cache_dir), NULL) != NULL;
+    f->had_grace = cbm_safe_getenv("CBM_WATCHER_PRUNE_GRACE_S", f->saved_grace,
+                                   sizeof(f->saved_grace), NULL) != NULL;
+    cbm_setenv("CBM_CACHE_DIR", f->cachedir, 1);
+    cbm_setenv("CBM_WATCHER_PRUNE_GRACE_S", grace_s, 1);
+
+    snprintf(f->db_path, sizeof(f->db_path), "%s/stale-project.db", f->cachedir);
+    snprintf(f->wal_path, sizeof(f->wal_path), "%s/stale-project.db-wal", f->cachedir);
+    snprintf(f->shm_path, sizeof(f->shm_path), "%s/stale-project.db-shm", f->cachedir);
+    th_write_file(f->db_path, "db\n");
+    th_write_file(f->wal_path, "wal\n");
+    th_write_file(f->shm_path, "shm\n");
+    return true;
+}
+
+static void prune_fixture_teardown(prune_fixture_t *f) {
+    if (f->had_cache_dir) {
+        cbm_setenv("CBM_CACHE_DIR", f->saved_cache_dir, 1);
+    } else {
+        cbm_unsetenv("CBM_CACHE_DIR");
+    }
+    if (f->had_grace) {
+        cbm_setenv("CBM_WATCHER_PRUNE_GRACE_S", f->saved_grace, 1);
+    } else {
+        cbm_unsetenv("CBM_WATCHER_PRUNE_GRACE_S");
+    }
+    th_rmtree(f->rootdir);
+    th_rmtree(f->cachedir);
+}
+
+TEST(watcher_prunes_sustained_missing_root) {
+    /* Positive prune path. Grace window 0s isolates the streak-threshold
+     * logic; the time gate is guarded by watcher_grace_window_blocks_prune. */
+    prune_fixture_t f;
+    if (!prune_fixture_setup(&f, "0")) {
+        FAIL("prune fixture setup failed");
+    }
+
+    cbm_store_t *store = cbm_store_open_memory();
+    cbm_watcher_t *w = cbm_watcher_new(store, index_callback, NULL);
+    cbm_watcher_watch(w, "stale-project", f.rootdir);
+    ASSERT_EQ(cbm_watcher_watch_count(w), 1);
+
+    /* Existing root: first poll initializes baseline only. */
+    cbm_watcher_poll_once(w);
+    ASSERT_EQ(cbm_watcher_watch_count(w), 1);
+
+    th_rmtree(f.rootdir);
+
+    /* Misses #1 and #2: below the streak threshold — keep project + DB. */
+    cbm_watcher_touch(w, "stale-project");
+    cbm_watcher_poll_once(w);
+    ASSERT_EQ(cbm_watcher_watch_count(w), 1);
+    ASSERT_EQ(access(f.db_path, F_OK), 0);
+    cbm_watcher_touch(w, "stale-project");
+    cbm_watcher_poll_once(w);
+    ASSERT_EQ(cbm_watcher_watch_count(w), 1);
+    ASSERT_EQ(access(f.db_path, F_OK), 0);
+
+    /* Miss #3 with the grace window already satisfied: prune the watch
+     * entry and the cached DB files. */
+    cbm_watcher_touch(w, "stale-project");
+    cbm_watcher_poll_once(w);
+    ASSERT_EQ(cbm_watcher_watch_count(w), 0);
+    ASSERT_NEQ(access(f.db_path, F_OK), 0);
+    ASSERT_NEQ(access(f.wal_path, F_OK), 0);
+    ASSERT_NEQ(access(f.shm_path, F_OK), 0);
+
+    cbm_watcher_free(w);
+    cbm_store_close(store);
+    prune_fixture_teardown(&f);
+    PASS();
+}
+
+TEST(watcher_grace_window_blocks_prune) {
+    /* 3+ missing polls but elapsed < grace → NOT pruned. Uses an explicit
+     * 600s window so a fast poll burst can never satisfy the time gate. */
+    prune_fixture_t f;
+    if (!prune_fixture_setup(&f, "600")) {
+        FAIL("prune fixture setup failed");
+    }
+
+    cbm_store_t *store = cbm_store_open_memory();
+    cbm_watcher_t *w = cbm_watcher_new(store, index_callback, NULL);
+    cbm_watcher_watch(w, "stale-project", f.rootdir);
+
+    cbm_watcher_poll_once(w); /* baseline */
+    th_rmtree(f.rootdir);
+
+    /* 4 consecutive misses in quick succession: streak threshold reached,
+     * but the sustained-absence window (600s) has not elapsed. */
+    for (int i = 0; i < 4; i++) {
+        cbm_watcher_touch(w, "stale-project");
+        cbm_watcher_poll_once(w);
+    }
+    ASSERT_EQ(cbm_watcher_watch_count(w), 1);
+    ASSERT_EQ(access(f.db_path, F_OK), 0);
+    ASSERT_EQ(access(f.wal_path, F_OK), 0);
+    ASSERT_EQ(access(f.shm_path, F_OK), 0);
+
+    cbm_watcher_free(w);
+    cbm_store_close(store);
+    prune_fixture_teardown(&f);
+    PASS();
+}
+
+TEST(watcher_root_missing_errno_classification) {
+    /* Only ENOENT/ENOTDIR may count toward pruning; EACCES-style failures
+     * (permissions, I/O errors, transient mounts, macOS TCC revocation)
+     * must never increment the missing streak. The classifier is unit-
+     * tested with injected errno values because a real EACCES cannot be
+     * simulated portably (tests may run as root on CI; Windows ACLs). */
+    ASSERT_TRUE(cbm_watcher_root_missing_errno(ENOENT));
+    ASSERT_TRUE(cbm_watcher_root_missing_errno(ENOTDIR));
+    ASSERT_FALSE(cbm_watcher_root_missing_errno(0));
+    ASSERT_FALSE(cbm_watcher_root_missing_errno(EACCES));
+    ASSERT_FALSE(cbm_watcher_root_missing_errno(EIO));
+    ASSERT_FALSE(cbm_watcher_root_missing_errno(EINVAL));
+    ASSERT_FALSE(cbm_watcher_root_missing_errno(ENAMETOOLONG));
+    PASS();
+}
+
+TEST(watcher_root_restore_resets_prune_streak) {
+    /* A reappearing root must reset the missing streak AND its first-miss
+     * timestamp — pruning requires a fresh uninterrupted streak. */
+    prune_fixture_t f;
+    if (!prune_fixture_setup(&f, "0")) {
+        FAIL("prune fixture setup failed");
+    }
+
+    cbm_store_t *store = cbm_store_open_memory();
+    cbm_watcher_t *w = cbm_watcher_new(store, index_callback, NULL);
+    cbm_watcher_watch(w, "stale-project", f.rootdir);
+
+    cbm_watcher_poll_once(w); /* baseline */
+    th_rmtree(f.rootdir);
+
+    /* Misses #1 and #2 — one short of the threshold. */
+    cbm_watcher_touch(w, "stale-project");
+    cbm_watcher_poll_once(w);
+    cbm_watcher_touch(w, "stale-project");
+    cbm_watcher_poll_once(w);
+    ASSERT_EQ(cbm_watcher_watch_count(w), 1);
+
+    /* Root comes back (e.g. remount / re-clone): streak resets. */
+    if (!cbm_mkdir_p(f.rootdir, 0755)) {
+        FAIL("mkdir_p restore failed");
+    }
+    cbm_watcher_touch(w, "stale-project");
+    cbm_watcher_poll_once(w);
+    ASSERT_EQ(cbm_watcher_watch_count(w), 1);
+
+    th_rmtree(f.rootdir);
+
+    /* Misses #1 and #2 of the NEW streak: must not prune even though the
+     * total number of misses is now four. */
+    cbm_watcher_touch(w, "stale-project");
+    cbm_watcher_poll_once(w);
+    cbm_watcher_touch(w, "stale-project");
+    cbm_watcher_poll_once(w);
+    ASSERT_EQ(cbm_watcher_watch_count(w), 1);
+    ASSERT_EQ(access(f.db_path, F_OK), 0);
+
+    /* Miss #3 of the new streak → prune. */
+    cbm_watcher_touch(w, "stale-project");
+    cbm_watcher_poll_once(w);
+    ASSERT_EQ(cbm_watcher_watch_count(w), 0);
+    ASSERT_NEQ(access(f.db_path, F_OK), 0);
+
+    cbm_watcher_free(w);
+    cbm_store_close(store);
+    prune_fixture_teardown(&f);
     PASS();
 }
 
@@ -1693,6 +1902,10 @@ SUITE(watcher) {
     /* Polling */
     RUN_TEST(watcher_poll_no_projects);
     RUN_TEST(watcher_poll_nonexistent_path);
+    RUN_TEST(watcher_prunes_sustained_missing_root);
+    RUN_TEST(watcher_grace_window_blocks_prune);
+    RUN_TEST(watcher_root_missing_errno_classification);
+    RUN_TEST(watcher_root_restore_resets_prune_streak);
     RUN_TEST(watcher_poll_this_repo);
     RUN_TEST(watcher_stop_flag);
 
