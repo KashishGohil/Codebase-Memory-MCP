@@ -1,5 +1,5 @@
 /*
- * system_info.c — CPU core count and RAM detection.
+ * system_info.c 鈥?CPU core count and RAM detection.
  *
  * macOS: sysctlbyname for core counts, hw.memsize for RAM.
  * BSD: sysconf + sysctl(HW_PHYSMEM64 / HW_PHYSMEM).
@@ -40,7 +40,7 @@ enum { DEFAULT_CORES = 1, MIN_WORKERS = 1, CBM_WORKERS_MAX = 256 };
 #include <unistd.h>
 #endif
 
-/* ── macOS detection ─────────────────────────────────────────────── */
+/* 鈹€鈹€ macOS detection 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€ */
 
 #ifdef __APPLE__
 
@@ -133,11 +133,11 @@ int cbm_detect_cgroup_cpus(const char *cgroup_root) {
     char path[CBM_PATH_MAX];
     char buf[CBM_SZ_64];
 
-    /* cgroup v2: "<root>/cpu.max" — "<quota> <period>" or "max <period>". */
+    /* cgroup v2: "<root>/cpu.max" 鈥?"<quota> <period>" or "max <period>". */
     snprintf(path, sizeof(path), "%s/cpu.max", cgroup_root);
     if (read_small_file(path, buf, sizeof(buf)) > 0) {
         if (strncmp(buf, "max", 3) == 0) {
-            return -1; /* no quota → caller falls back to sysconf */
+            return -1; /* no quota 鈫?caller falls back to sysconf */
         }
         long quota = 0;
         long period = 0;
@@ -177,7 +177,7 @@ size_t cbm_detect_cgroup_mem(const char *cgroup_root) {
     char path[CBM_PATH_MAX];
     char buf[CBM_SZ_64];
 
-    /* cgroup v2: "<root>/memory.max" — "max" or integer bytes. */
+    /* cgroup v2: "<root>/memory.max" 鈥?"max" or integer bytes. */
     snprintf(path, sizeof(path), "%s/memory.max", cgroup_root);
     if (read_small_file(path, buf, sizeof(buf)) > 0) {
         if (strncmp(buf, "max", 3) == 0) {
@@ -234,7 +234,7 @@ static cbm_system_info_t detect_system_linux(void) {
 
 #endif /* __APPLE__ / BSD / Linux */
 
-/* ── Windows detection ───────────────────────────────────────────── */
+/* 鈹€鈹€ Windows detection 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€ */
 
 #ifdef _WIN32
 static cbm_system_info_t detect_system_windows(void) {
@@ -259,7 +259,7 @@ static cbm_system_info_t detect_system_windows(void) {
 }
 #endif
 
-/* ── Public API ──────────────────────────────────────────────────── */
+/* 鈹€鈹€ Public API 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€ */
 
 static int info_cached = 0;
 static cbm_system_info_t cached_info;
@@ -297,8 +297,9 @@ int cbm_default_worker_count(bool initial) {
 
     cbm_system_info_t info = cbm_system_info();
     if (initial) {
-        /* Use all cores for initial indexing — user is waiting */
-        return info.total_cores;
+        /* Use all cores for initial indexing 鈥?user is waiting */
+        int cap = info.total_cores > 8 ? 8 : info.total_cores;
+        return cap;
     }
     /* Incremental: leave headroom for user's apps */
     int workers = info.perf_cores - SKIP_ONE;
