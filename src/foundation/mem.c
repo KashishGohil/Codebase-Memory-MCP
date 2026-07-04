@@ -122,8 +122,10 @@ void cbm_mem_init(double ram_fraction) {
     mi_option_set(mi_option_arena_eager_commit, 0);
     mi_option_set(mi_option_purge_decommits, SKIP_ONE);
     mi_option_set(mi_option_purge_delay, 0); /* immediate purge, no 1s delay */
-    mi_option_set(mi_option_arena_purge_mult, 1); /* purge arenas aggressively, not 10x delay */
-    mi_option_set(mi_option_page_reclaim_on_free, 1); /* reclaim pages from abandoned worker threads */
+    /* Purge arenas aggressively (default multiplier is 10x purge_delay). */
+    mi_option_set(mi_option_arena_purge_mult, 1);
+    /* Reclaim pages from exited worker thread heaps on free. */
+    mi_option_set(mi_option_page_reclaim_on_free, 1);
 
     /* CBM_MEM_BUDGET_MB env override (memory analogue of CBM_WORKERS).
      * Lets users cap the budget directly without an enclosing cgroup —
