@@ -23,6 +23,7 @@
 #include <unistd.h>
 #include "graph_buffer/graph_buffer.h"
 #include "yyjson/yyjson.h"
+#include "sqlite3.h" /* vendored/sqlite3 — PRAGMA integrity_check on dumped DBs */
 
 /* ── Helper: create temp test repo with known layout ───────────── */
 
@@ -1686,6 +1687,61 @@ TEST(pipeline_python_project) {
     cbm_store_find_nodes_by_label(s, proj, "Method", &methods, &mc);
     ASSERT_GTE(mc, 1); /* transform */
     cbm_store_free_nodes(methods, mc);
+
+    cbm_store_close(s);
+    cbm_pipeline_free(p);
+    teardown_lang_repo();
+    PASS();
+}
+
+/* #768 end-to-end: `import { A, B } from './lib'` must survive the REAL
+ * pipeline (extract -> gbuf dedup -> raw SQLite dump) as TWO IMPORTS edges
+ * with distinct local_name — and the dumped DB must satisfy its own schema.
+ * With only the graph-buffer half of the fix, both edges reach the dump but
+ * violate an unwidened UNIQUE(source_id,target_id,type), which PRAGMA
+ * integrity_check flags as a non-unique autoindex entry. */
+TEST(pipeline_imports_multi_symbol_edges) {
+    const char *files[] = {"consumer.ts", "lib.ts"};
+    const char *contents[] = {
+        "import { A, B } from './lib';\n\nexport function useBoth() {\n  return A() + B();\n}\n",
+        "export function A() {\n  return 1;\n}\nexport function B() {\n  return 2;\n}\n"};
+
+    if (setup_lang_repo(files, contents, 2) != 0)
+        FAIL("tmpdir");
+    char db[512];
+    snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
+
+    cbm_pipeline_t *p = cbm_pipeline_new(g_lang_tmpdir, db, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+
+    /* The dumped DB must pass SQLite's own full integrity check — this is
+     * what catches a buffer-only fix shipping DBs that violate their own
+     * UNIQUE constraint. */
+    sqlite3 *raw = NULL;
+    ASSERT_EQ(sqlite3_open(db, &raw), SQLITE_OK);
+    sqlite3_stmt *stmt = NULL;
+    sqlite3_prepare_v2(raw, "PRAGMA integrity_check", -1, &stmt, NULL);
+    ASSERT_EQ(sqlite3_step(stmt), SQLITE_ROW);
+    const char *integrity = (const char *)sqlite3_column_text(stmt, 0);
+    ASSERT_STR_EQ(integrity, "ok");
+    sqlite3_finalize(stmt);
+    sqlite3_close(raw);
+
+    /* Both named imports must be queryable as separate IMPORTS edges. */
+    cbm_store_t *s = cbm_store_open_path(db);
+    ASSERT_NOT_NULL(s);
+    const char *proj = cbm_pipeline_project_name(p);
+
+    cbm_edge_t *edges = NULL;
+    int count = 0;
+    ASSERT_EQ(cbm_store_find_edges_by_type(s, proj, "IMPORTS", &edges, &count), CBM_STORE_OK);
+    ASSERT_EQ(count, 2);
+    ASSERT_TRUE(strstr(edges[0].properties_json, "\"local_name\":\"A\"") != NULL ||
+                strstr(edges[1].properties_json, "\"local_name\":\"A\"") != NULL);
+    ASSERT_TRUE(strstr(edges[0].properties_json, "\"local_name\":\"B\"") != NULL ||
+                strstr(edges[1].properties_json, "\"local_name\":\"B\"") != NULL);
+    cbm_store_free_edges(edges, count);
 
     cbm_store_close(s);
     cbm_pipeline_free(p);
@@ -6197,6 +6253,7 @@ SUITE(pipeline) {
     RUN_TEST(usages_kotlin_no_duplicate_calls);
     /* Language integration tests */
     RUN_TEST(pipeline_python_project);
+    RUN_TEST(pipeline_imports_multi_symbol_edges);
     RUN_TEST(pipeline_go_cross_package_call);
     RUN_TEST(pipeline_python_cross_module_call);
     RUN_TEST(pipeline_go_type_classification);

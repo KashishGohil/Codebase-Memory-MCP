@@ -60,6 +60,8 @@ enum {
 #include "pipeline/artifact.h"
 
 #ifdef _WIN32
+#include <direct.h>
+#include <io.h>
 #include <process.h>
 #define getpid _getpid
 #else
@@ -491,7 +493,8 @@ static const tool_def_t TOOLS[] = {
 
     {"ingest_traces", "Ingest traces", "Ingest runtime traces to enhance the knowledge graph",
      "{\"type\":\"object\",\"properties\":{\"traces\":{\"type\":\"array\",\"items\":{\"type\":"
-     "\"object\"}},\"project\":{\"type\":"
+     "\"object\",\"properties\":{\"caller\":{\"type\":\"string\"},\"callee\":{\"type\":\"string\"},"
+     "\"count\":{\"type\":\"integer\"}},\"additionalProperties\":false}},\"project\":{\"type\":"
      "\"string\"}},\"required\":[\"traces\",\"project\"]}"},
 };
 
@@ -657,7 +660,7 @@ char *cbm_mcp_initialize_response(const char *params_json) {
 
     yyjson_mut_val *impl = yyjson_mut_obj(doc);
     yyjson_mut_obj_add_str(doc, impl, "name", "codebase-memory-mcp");
-    yyjson_mut_obj_add_str(doc, impl, "version", "0.10.0");
+    yyjson_mut_obj_add_str(doc, impl, "version", cbm_cli_get_version());
     yyjson_mut_obj_add_val(doc, root, "serverInfo", impl);
 
     yyjson_mut_val *caps = yyjson_mut_obj(doc);
@@ -720,6 +723,59 @@ char *cbm_mcp_get_string_arg(const char *args_json, const char *key) {
     return result;
 }
 
+static char *canonicalize_repo_path_if_exists(char *repo_path) {
+    if (!repo_path) {
+        return NULL;
+    }
+    bool root_syntax = true;
+    for (const char *p = repo_path; *p; p++) {
+        if (*p != '/' && *p != '\\' && *p != ':') {
+            root_syntax = false;
+            break;
+        }
+    }
+    if (root_syntax) {
+        return repo_path;
+    }
+
+    char real[CBM_SZ_4K];
+#ifdef _WIN32
+    if (_access(repo_path, 0) == 0 && _fullpath(real, repo_path, sizeof(real))) {
+        cbm_normalize_path_sep(real);
+        char *canonical = heap_strdup(real);
+        if (canonical) {
+            free(repo_path);
+            return canonical;
+        }
+    }
+#else
+    if (realpath(repo_path, real)) {
+        cbm_normalize_path_sep(real);
+        char *canonical = heap_strdup(real);
+        if (canonical) {
+            free(repo_path);
+            return canonical;
+        }
+    }
+#endif
+
+    return repo_path;
+}
+
+static char *normalize_project_arg(char *project) {
+    if (!project || (!strchr(project, '/') && !strchr(project, '\\'))) {
+        return project;
+    }
+
+    project = canonicalize_repo_path_if_exists(project);
+    char *normalized = cbm_project_name_from_path(project);
+    if (normalized) {
+        free(project);
+        return normalized;
+    }
+    return project;
+}
+
 /* Resolve the project argument, accepting the canonical "project" key plus the
  * aliases a caller naturally reaches for (#640): list_projects surfaces the
  * field as "name" and the not-found hint says "pass the project name", so
@@ -737,7 +793,7 @@ static char *get_project_arg(const char *args_json) {
     if (!p) {
         p = cbm_mcp_get_string_arg(args_json, "projectName");
     }
-    return p;
+    return normalize_project_arg(p);
 }
 
 int cbm_mcp_get_int_arg(const char *args_json, const char *key, int default_val) {
@@ -1163,6 +1219,26 @@ static char *build_no_store_error(const char *project) {
         }                                                 \
     } while (0)
 
+static bool project_has_adr(cbm_store_t *store, const char *project, const char *root_path) {
+    if (store && project) {
+        cbm_adr_t adr;
+        memset(&adr, 0, sizeof(adr));
+        if (cbm_store_adr_get(store, project, &adr) == CBM_STORE_OK) {
+            cbm_store_adr_free(&adr);
+            return true;
+        }
+    }
+
+    if (!root_path) {
+        return false;
+    }
+
+    char adr_path[CBM_SZ_4K];
+    snprintf(adr_path, sizeof(adr_path), "%s/.codebase-memory/adr.md", root_path);
+    struct stat adr_st;
+    return stat(adr_path, &adr_st) == 0;
+}
+
 /* ── Tool handler implementations ─────────────────────────────── */
 
 /* Return true if filename is a valid project .db file (not temp/internal).
@@ -1411,10 +1487,7 @@ static char *handle_get_graph_schema(cbm_mcp_server_t *srv, const char *args) {
     /* Check ADR presence */
     cbm_project_t proj_info = {0};
     if (cbm_store_get_project(store, project, &proj_info) == 0 && proj_info.root_path) {
-        char adr_path[CBM_SZ_4K];
-        snprintf(adr_path, sizeof(adr_path), "%s/.codebase-memory/adr.md", proj_info.root_path);
-        struct stat adr_st;
-        bool adr_exists = (stat(adr_path, &adr_st) == 0);
+        bool adr_exists = project_has_adr(store, project, proj_info.root_path);
         yyjson_mut_obj_add_bool(doc, root, "adr_present", adr_exists);
         if (!adr_exists) {
             yyjson_mut_obj_add_str(
@@ -2146,6 +2219,11 @@ static char *handle_delete_project(cbm_mcp_server_t *srv, const char *args) {
     }
 
     cbm_pipeline_unlock();
+
+    if (srv->watcher) {
+        cbm_watcher_unwatch(srv->watcher, name);
+    }
+
     cbm_mem_collect(); /* return freed pages to OS after closing database */
 
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
@@ -3287,17 +3365,14 @@ static bool build_index_success_response(cbm_mcp_server_t *srv, yyjson_mut_doc *
         }
     }
 
-    char adr_path[CBM_SZ_4K];
-    snprintf(adr_path, sizeof(adr_path), "%s/.codebase-memory/adr.md", repo_path);
-    struct stat adr_st;
-    bool adr_exists = (stat(adr_path, &adr_st) == 0);
+    bool adr_exists = project_has_adr(store, project_name, repo_path);
     yyjson_mut_obj_add_bool(doc, root, "adr_present", adr_exists);
     if (!adr_exists && !degraded) {
         yyjson_mut_obj_add_str(
             doc, root, "adr_hint",
             "Project indexed. Consider creating an Architecture Decision Record: "
             "explore the codebase with get_architecture(aspects=['all']), then use "
-            "manage_adr(mode='store') to persist architectural insights across sessions.");
+            "manage_adr(mode='update') to persist architectural insights across sessions.");
     }
 
     bool has_artifact = cbm_artifact_exists(repo_path);
@@ -3322,6 +3397,8 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
         free(name_override);
         return cbm_mcp_text_result("repo_path is required", true);
     }
+
+    repo_path = canonicalize_repo_path_if_exists(repo_path);
 
     if (mode_str && strcmp(mode_str, "cross-repo-intelligence") == 0) {
         free(mode_str);
@@ -4358,9 +4435,19 @@ static void classify_all_grep_hits(grep_match_t *gm, int gm_count, cbm_store_t *
     }
 }
 
-/* Write indexed file list for scoped grep. Returns true if scoped. */
+/* Write indexed file list for scoped grep. Returns true if scoped.
+ * When a path_filter is provided, apply it here — before grep — so large
+ * indexed projects do not scan files only for collect_grep_matches to discard
+ * them later. The predicate is IDENTICAL to the post-grep filter: the same
+ * compiled regex run against the same root-relative path (separators
+ * normalized on Windows first), so prefiltering can only skip files whose
+ * hits would be dropped anyway — results-preserving by construction.
+ * *out_written receives the number of records written (0 = the filter
+ * excluded every indexed file). */
 static bool write_scoped_filelist(cbm_mcp_server_t *srv, const char *project, const char *root_path,
-                                  const char *filelist) {
+                                  const char *filelist, bool has_path_filter,
+                                  cbm_regex_t *path_regex, int *out_written) {
+    *out_written = 0;
     cbm_store_t *pre_store = resolve_store(srv, project);
     if (!pre_store) {
         return false;
@@ -4373,8 +4460,17 @@ static bool write_scoped_filelist(cbm_mcp_server_t *srv, const char *project, co
     }
     FILE *fl = fopen(filelist, "wb");
     bool ok = false;
+    int written = 0;
     if (fl) {
         for (int fi = 0; fi < indexed_count; fi++) {
+            if (has_path_filter && path_regex) {
+#ifdef _WIN32
+                cbm_normalize_path_sep(indexed_files[fi]);
+#endif
+                if (cbm_regexec(path_regex, indexed_files[fi], 0, NULL, 0) != CBM_REG_OK) {
+                    continue;
+                }
+            }
             /* Write "<root>/<file>" piece-by-piece (no fixed-size buffer, so an
              * arbitrarily long absolute path cannot overflow). Forward slash join
              * so xargs doesn't treat Windows backslashes as escapes; binary mode
@@ -4391,6 +4487,7 @@ static bool write_scoped_filelist(cbm_mcp_server_t *srv, const char *project, co
 #else
             (void)fputc('\0', fl);
 #endif
+            written++;
         }
         (void)fclose(fl);
         ok = true;
@@ -4399,6 +4496,7 @@ static bool write_scoped_filelist(cbm_mcp_server_t *srv, const char *project, co
         free(indexed_files[fi]);
     }
     free(indexed_files);
+    *out_written = written;
     return ok;
 }
 
@@ -4622,33 +4720,47 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
     char filelist[CBM_SZ_256];
     snprintf(filelist, sizeof(filelist), "%s.files", tmpfile);
     bool scoped = false;
+    int scoped_written = 0;
 
-    scoped = write_scoped_filelist(srv, project, root_path, filelist);
+    scoped = write_scoped_filelist(srv, project, root_path, filelist, has_path_filter,
+                                   has_path_filter ? &path_regex : NULL, &scoped_written);
 
-    char cmd[CBM_SZ_4K];
-    build_grep_cmd(cmd, sizeof(cmd), use_regex, scoped, file_pattern, tmpfile, filelist, root_path);
+    /* Collect grep matches into array */
+    int gm_count = 0;
+    grep_match_t *gm = NULL;
+    if (scoped && scoped_written == 0) {
+        /* The path_filter excluded every indexed file — nothing to scan.
+         * Skip the grep subprocess: xargs on an empty filelist is
+         * platform-dependent (GNU execs grep once with no operands, BSD
+         * skips), and the post-grep filter would drop every hit anyway. */
+        gm = malloc(sizeof(grep_match_t)); /* empty set; freed below */
+        cbm_unlink(tmpfile);
+        cbm_unlink(filelist);
+    } else {
+        char cmd[CBM_SZ_4K];
+        build_grep_cmd(cmd, sizeof(cmd), use_regex, scoped, file_pattern, tmpfile, filelist,
+                       root_path);
 
-    FILE *fp = cbm_popen(cmd, "r");
-    if (!fp) {
+        FILE *fp = cbm_popen(cmd, "r");
+        if (!fp) {
+            cbm_unlink(tmpfile);
+            if (scoped) {
+                cbm_unlink(filelist);
+            }
+            free(root_path);
+            free(pattern);
+            free(project);
+            free(file_pattern);
+            return cbm_mcp_text_result("search failed", true);
+        }
+
+        gm = collect_grep_matches(fp, root_path, strlen(root_path), has_path_filter, &path_regex,
+                                  grep_limit, &gm_count);
+        cbm_pclose(fp);
         cbm_unlink(tmpfile);
         if (scoped) {
             cbm_unlink(filelist);
         }
-        free(root_path);
-        free(pattern);
-        free(project);
-        free(file_pattern);
-        return cbm_mcp_text_result("search failed", true);
-    }
-
-    /* Collect grep matches into array */
-    int gm_count = 0;
-    grep_match_t *gm = collect_grep_matches(fp, root_path, strlen(root_path), has_path_filter,
-                                            &path_regex, grep_limit, &gm_count);
-    cbm_pclose(fp);
-    cbm_unlink(tmpfile);
-    if (scoped) {
-        cbm_unlink(filelist);
     }
 
     /* ── Phase 2+3: Block expansion + graph ranking ──────────── */
@@ -4774,10 +4886,13 @@ static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
 
     char *root_path = get_project_root(srv, project);
     if (!root_path) {
+        char *err = build_no_store_error(project);
+        char *res = cbm_mcp_text_result(err, true);
+        free(err);
         free(project);
         free(base_branch);
         free(scope);
-        return cbm_mcp_text_result("project not found", true);
+        return res;
     }
 
     if (!validate_search_path_arg(root_path)) {
@@ -4992,10 +5107,13 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
      * the UI are visible to each other (#256). */
     cbm_store_t *resolved = resolve_store(srv, project);
     if (!resolved) {
+        char *err = build_no_store_error(project);
+        char *res = cbm_mcp_text_result(err, true);
+        free(err);
         free(project);
         free(mode_str);
         free(content);
-        return cbm_mcp_text_result("project not found", true);
+        return res;
     }
 
     /* resolve_store opens file-backed projects READ-ONLY (query stores must
@@ -5011,10 +5129,13 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
     if (resolved_db_path) {
         owned_rw = cbm_store_open_path(resolved_db_path);
         if (!owned_rw) {
+            char *err = build_no_store_error(project);
+            char *res = cbm_mcp_text_result(err, true);
+            free(err);
             free(project);
             free(mode_str);
             free(content);
-            return cbm_mcp_text_result("project not found", true);
+            return res;
         }
         store = owned_rw;
     }
@@ -5563,8 +5684,9 @@ static int poll_for_input_unix(cbm_mcp_server_t *srv, int fd, FILE *in) {
     /* Phase 2: peek FILE* buffer */
     int saved_flags = fcntl(fd, F_GETFL);
     if (saved_flags < 0) {
-        /* fcntl failed — fall through to blocking poll */
-        pr = poll(&pfd, SKIP_ONE, STORE_IDLE_TIMEOUT_S * MCP_TIMEOUT_MS);
+        /* fcntl failed — fall through to a short blocking poll (see the Phase-3
+         * note below on why the interval is bounded, not the full idle timeout) */
+        pr = poll(&pfd, SKIP_ONE, MCP_TIMEOUT_MS);
         if (pr < 0) {
             return CBM_NOT_FOUND;
         }
@@ -5584,8 +5706,15 @@ static int poll_for_input_unix(cbm_mcp_server_t *srv, int fd, FILE *in) {
             return CBM_NOT_FOUND; /* true EOF */
         }
         clearerr(in);
-        /* Phase 3: blocking poll */
-        pr = poll(&pfd, SKIP_ONE, STORE_IDLE_TIMEOUT_S * MCP_TIMEOUT_MS);
+        /* Phase 3: blocking poll, bounded to a SHORT interval (not the full idle
+         * timeout). macOS poll()/select() do NOT report POLLIN/POLLHUP when a
+         * FIFO's last writer closes — only read() returns 0 there (verified). A
+         * 60s poll would therefore leave the server blocked up to a full idle
+         * timeout after stdin EOF (a client that closes the pipe would appear to
+         * hang). Waking every MCP_TIMEOUT_MS lets the Phase-2 read() above detect
+         * the EOF within ~1s. Idle-store eviction (threshold STORE_IDLE_TIMEOUT_S)
+         * is idempotent, so checking it on each short tick is harmless. */
+        pr = poll(&pfd, SKIP_ONE, MCP_TIMEOUT_MS);
         if (pr < 0) {
             return CBM_NOT_FOUND;
         }

@@ -428,11 +428,13 @@ static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
         return 0;
     }
 
-    /* LSP-resolved calls take precedence over registry-textual matching. */
-    const CBMResolvedCall *lsp = cbm_pipeline_find_lsp_resolution(lsp_calls, call);
+    /* LSP-resolved calls take precedence over registry-textual matching.
+     * Unique-tail fallbacks are JVM-only (see cbm_pipeline_lsp_allow_tail_match). */
+    bool allow_tail = cbm_pipeline_lsp_allow_tail_match(lang);
+    const CBMResolvedCall *lsp = cbm_pipeline_find_lsp_resolution(lsp_calls, call, allow_tail);
     if (lsp) {
         const cbm_gbuf_node_t *target_node =
-            cbm_pipeline_lsp_target_node(ctx->gbuf, ctx->project_name, lsp->callee_qn);
+            cbm_pipeline_lsp_target_node(ctx->gbuf, ctx->project_name, lsp->callee_qn, allow_tail);
         if (target_node && source_node->id != target_node->id) {
             cbm_resolution_t res = {0};
             /* Use the gbuf node's QN so downstream edge props show the canonical

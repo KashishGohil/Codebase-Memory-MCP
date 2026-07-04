@@ -50,6 +50,9 @@ enum {
 #include <string.h>
 #include <signal.h>
 #include <stdatomic.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 #ifndef CBM_VERSION
 #define CBM_VERSION "dev"
@@ -120,9 +123,9 @@ static void *parent_watchdog_thread(void *arg) {
         /* initial_ppid > 1 guards against an already-orphaned start (ppid==1),
          * where a changing ppid carries no signal. */
         if (initial_ppid > 1 && getppid() != initial_ppid) {
-            cbm_log_warn("parent.exited", "reason", "ppid_changed");
-            request_shutdown();
-            exit(0);
+            static const char msg[] = "level=warn msg=parent.exited reason=ppid_changed\n";
+            (void)write(STDERR_FILENO, msg, sizeof(msg) - 1);
+            _exit(0);
         }
     }
     return NULL;
@@ -521,6 +524,7 @@ int main(int argc, char **argv) {
      * below opens sqlite early), else sqlite3_config returns SQLITE_MISUSE and
      * the bind is silently ignored. No-op in the test build. */
     cbm_alloc_init();
+    cbm_cli_set_version(CBM_VERSION);
     cbm_profile_init(); /* reads CBM_PROFILE env var, gates all prof macros */
     /* CBM_LOG_LEVEL support — distilled from #414 (closes #413). Apply before
      * the first log statement so the configured level governs all output. */
