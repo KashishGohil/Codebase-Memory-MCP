@@ -4915,7 +4915,7 @@ TEST(pkgmap_scan_repo_honors_discovery_exclusions) {
      * manifests (proves the excluded one is reachable + parseable). */
     cbm_pkg_entries_t control;
     cbm_pkg_entries_init(&control);
-    cbm_pkgmap_scan_repo(tmpdir, &control, NULL, 0);
+    cbm_pkgmap_scan_repo(tmpdir, &control, NULL, 0, NULL);
     ASSERT_TRUE(pkg_entries_has_name(&control, "@org/app"));
     ASSERT_TRUE(pkg_entries_has_name(&control, "@org/vendored"));
     cbm_pkg_entries_free(&control);
@@ -4925,7 +4925,7 @@ TEST(pkgmap_scan_repo_honors_discovery_exclusions) {
     char *excluded[] = {(char *)"vendor_big"};
     cbm_pkg_entries_t entries;
     cbm_pkg_entries_init(&entries);
-    cbm_pkgmap_scan_repo(tmpdir, &entries, excluded, 1);
+    cbm_pkgmap_scan_repo(tmpdir, &entries, excluded, 1, NULL);
     ASSERT_TRUE(pkg_entries_has_name(&entries, "@org/app"));
     ASSERT_FALSE(pkg_entries_has_name(&entries, "@org/vendored"));
     cbm_pkg_entries_free(&entries);

@@ -1158,6 +1158,45 @@ TEST(contract_edge_workspaces_imports_issue408) {
     PASS();
 }
 
+/* #271: npm `workspaces` where the member's package.json entry point (`main`)
+ * targets an UNBUILT artifact (dist/index.js) that is never indexed. The pkgmap
+ * still maps "@org/a" -> the dist entry QN, but no such node exists, so the
+ * pkgmap exact-lookup (Strategy 1) misses and today no IMPORTS edge is produced.
+ * The fix maps the workspace member NAME -> source DIR and probes conventional
+ * source entry files (src/index, ...). RED until workspace member resolution
+ * lands. (Distinct from #408, whose fixture points `main` at a real index.js.) */
+TEST(contract_edge_workspaces_dist_main_imports_issue271) {
+    static const LangFile f[] = {
+        {"package.json", "{\"name\":\"root\",\"private\":true,\"workspaces\":[\"packages/*\"]}\n"},
+        {"packages/a/package.json",
+         "{\"name\":\"@org/a\",\"version\":\"1.0.0\",\"main\":\"dist/index.js\"}\n"},
+        {"packages/a/src/index.ts", "export function fromA(): number {\n  return 1;\n}\n"},
+        {"packages/b/package.json",
+         "{\"name\":\"@org/b\",\"version\":\"1.0.0\",\"main\":\"dist/index.js\"}\n"},
+        {"packages/b/src/index.ts", "import { fromA } from '@org/a';\n\nexport function useA(): "
+                                    "number {\n  return fromA();\n}\n"}};
+    ASSERT_TRUE(edge_present(f, 5, "IMPORTS", 1));
+    PASS();
+}
+
+/* #271: subpath workspace import `@org/a/utils/helper`. The pkgmap slash-prefix
+ * fallback concatenates the (wrong) dist entry QN with the subpath, so no node
+ * matches. Workspace member resolution must decompose (member, subpath) and
+ * probe `<dir>/src/utils/helper`. RED until the subpath probe lands. */
+TEST(contract_edge_workspaces_subpath_imports_issue271) {
+    static const LangFile f[] = {
+        {"package.json", "{\"name\":\"root\",\"private\":true,\"workspaces\":[\"packages/*\"]}\n"},
+        {"packages/a/package.json",
+         "{\"name\":\"@org/a\",\"version\":\"1.0.0\",\"main\":\"dist/index.js\"}\n"},
+        {"packages/a/src/utils/helper.ts", "export function help(): number {\n  return 2;\n}\n"},
+        {"packages/b/package.json",
+         "{\"name\":\"@org/b\",\"version\":\"1.0.0\",\"main\":\"dist/index.js\"}\n"},
+        {"packages/b/src/index.ts", "import { help } from '@org/a/utils/helper';\n\n"
+                                    "export function useHelp(): number {\n  return help();\n}\n"}};
+    ASSERT_TRUE(edge_present(f, 5, "IMPORTS", 1));
+    PASS();
+}
+
 /* #767: a wildcard tsconfig alias for the "@lib" prefix (mapped to ./src/lib)
  * shares that prefix with an unrelated scoped npm package ("@lib/external-pkg",
  * meant to resolve normally from node_modules). The engine has no such file
@@ -1409,6 +1448,8 @@ SUITE(lang_contract) {
      * FILE_CHANGES_WITH (git co-change). Completes 25-edge-type coverage. */
     RUN_TEST(contract_edge_tests);
     RUN_TEST(contract_edge_workspaces_imports_issue408);
+    RUN_TEST(contract_edge_workspaces_dist_main_imports_issue271);
+    RUN_TEST(contract_edge_workspaces_subpath_imports_issue271);
     RUN_TEST(contract_edge_imports_alias_no_phantom_folder_edge_issue767);
     RUN_TEST(contract_edge_imports_alias_resolves_real_file_issue767);
     RUN_TEST(contract_edge_depends_on);

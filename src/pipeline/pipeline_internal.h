@@ -153,12 +153,77 @@ bool cbm_pkgmap_try_parse(const char *basename, const char *rel_path, const char
 CBMHashTable *cbm_pkgmap_build(cbm_pkg_entries_t *worker_entries, int worker_count,
                                const char *project_name);
 
-/* Build pkgmap by reading manifest files from the files array (sequential path). */
+/* ── npm workspaces (#271, Phase 1) ──────────────────────────────────
+ * Resolve bare cross-package imports in a Yarn/Lerna/npm monorepo where a
+ * package is referenced by its declared `name` (e.g. `@org/a`) but its
+ * package.json `main`/`exports` points at a build artifact (dist/…) that is
+ * never indexed. The pkgmap maps the name → that (dead) entry QN, so the
+ * ordinary pkgmap lookup misses. We additionally map the workspace member
+ * NAME → its source DIRECTORY and, at import-resolution time, probe for a
+ * real in-graph entry file. Detection piggybacks on the existing pkgmap
+ * manifest walk (no extra file IO). Phase 1 covers package.json `workspaces`
+ * only (array and {"packages":[…]} forms; '!' negation via the gitignore
+ * engine). Brace {a,b} expansion is out of scope (debug-logged). */
+enum {
+    CBM_WS_MAX_ROOTS = 16,     /* nested workspace roots per repo   */
+    CBM_WS_MAX_MEMBERS = 4096, /* member candidates per repo        */
+};
+
+/* A workspace-member manifest: declared name and its directory. */
+typedef struct {
+    char *name; /* heap: "@org/a" */
+    char *dir;  /* heap: dir of the member's package.json ("packages/a") */
+} cbm_ws_candidate_t;
+
+/* A workspace root: the dir of a package.json that declares `workspaces`,
+ * plus the member globs compiled into the reused gitignore engine. */
+typedef struct {
+    char *root_dir;            /* heap: dir of the root manifest ("" = repo root) */
+    cbm_gitignore_t *patterns; /* owned: compiled `workspaces` globs */
+} cbm_ws_root_t;
+
+/* Repo-wide workspace state. Candidates and roots are collected during the
+ * walk (any order), then resolved into `members` by cbm_workspaces_finalize. */
+typedef struct {
+    cbm_ws_root_t roots[CBM_WS_MAX_ROOTS];
+    int root_count;
+    cbm_ws_candidate_t *cands;
+    int cand_count;
+    int cand_cap;
+    CBMHashTable *members; /* finalize output: name → dir (both heap); NULL before finalize */
+} cbm_workspaces_t;
+
+/* Allocate an empty workspace collection (NULL on OOM). */
+cbm_workspaces_t *cbm_workspaces_new(void);
+
+/* Free a workspace collection and all owned strings. NULL-safe. */
+void cbm_workspaces_free(cbm_workspaces_t *ws);
+
+/* Inspect one manifest during the pkgmap walk. When basename is
+ * "package.json", records a workspace root (if it declares `workspaces`) and/or
+ * a member candidate (if it declares `name`). NULL-safe on ws (returns false).
+ * Returns true iff a workspace root was recorded for this manifest. */
+bool cbm_workspace_try_detect(const char *basename, const char *rel_path, const char *source,
+                              int source_len, cbm_workspaces_t *ws);
+
+/* Resolve collected candidates against roots into the `members` map
+ * (name → dir). Idempotent and NULL-safe. */
+void cbm_workspaces_finalize(cbm_workspaces_t *ws);
+
+/* Current pipeline's workspace collection (one active pipeline at a time,
+ * mirrors the pkgmap global). May be NULL. */
+cbm_workspaces_t *cbm_pipeline_get_workspaces(void);
+void cbm_pipeline_set_workspaces(cbm_workspaces_t *ws);
+
+/* Build pkgmap by reading manifest files from the files array (sequential path).
+ * `ws` (may be NULL) additionally receives npm-workspace roots/candidates
+ * detected in the same walk, so no manifest is read twice. */
 int cbm_pkgmap_scan_repo(const char *repo_path, cbm_pkg_entries_t *entries, char **excluded_dirs,
-                         int excluded_count);
+                         int excluded_count, cbm_workspaces_t *ws);
 CBMHashTable *cbm_pkgmap_build_from_repo(const char *repo_path, const cbm_file_info_t *files,
                                          int file_count, const char *project_name,
-                                         char **excluded_dirs, int excluded_count);
+                                         char **excluded_dirs, int excluded_count,
+                                         cbm_workspaces_t *ws);
 CBMHashTable *cbm_pkgmap_build_from_files(const cbm_file_info_t *files, int file_count,
                                           const char *project_name);
 

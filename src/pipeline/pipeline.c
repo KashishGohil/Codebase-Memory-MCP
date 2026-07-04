@@ -124,6 +124,26 @@ void cbm_pipeline_set_pkgmap(CBMHashTable *map) {
     g_pkgmap = map;
 }
 
+/* npm workspace member map, same "one active pipeline at a time" lifecycle.
+ * Unlike pkgmap (cbm_pkgmap_build returns NULL for a repo with no manifests, so
+ * the global simply stays NULL), cbm_workspaces_new() always allocates before
+ * detection runs. The setter therefore OWNS the lifecycle: it frees the
+ * previous collection when replaced, so callers that re-set without an
+ * intervening pipeline cleanup (e.g. tests that invoke cbm_parallel_extract
+ * directly) cannot leak the prior collection. Passing NULL clears + frees. */
+static cbm_workspaces_t *g_workspaces = NULL;
+
+cbm_workspaces_t *cbm_pipeline_get_workspaces(void) {
+    return g_workspaces;
+}
+
+void cbm_pipeline_set_workspaces(cbm_workspaces_t *ws) {
+    if (g_workspaces && g_workspaces != ws) {
+        cbm_workspaces_free(g_workspaces);
+    }
+    g_workspaces = ws;
+}
+
 /* ── Timing helper ──────────────────────────────────────────────── */
 
 static double elapsed_ms(struct timespec start) {
@@ -737,9 +757,14 @@ static int run_sequential_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
      * Use the repo-walking variant so manifests filtered out by the main
      * discoverer (package.json, composer.json) still feed pkgmap and let
      * workspace imports like `@my/pkg` resolve to their target Module. */
+    /* npm workspaces (#271): detected in the same manifest walk as pkgmap,
+     * then finalized (candidate → member map) before the resolve passes run. */
+    cbm_workspaces_t *ws = cbm_workspaces_new();
     cbm_pipeline_set_pkgmap(cbm_pkgmap_build_from_repo(ctx->repo_path, files, file_count,
                                                        ctx->project_name, ctx->excluded_dirs,
-                                                       ctx->excluded_count));
+                                                       ctx->excluded_count, ws));
+    cbm_workspaces_finalize(ws);
+    cbm_pipeline_set_workspaces(ws);
 
     CBMFileResult **seq_cache = (CBMFileResult **)calloc(file_count, sizeof(CBMFileResult *));
     if (seq_cache) {
@@ -1297,6 +1322,7 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
 cleanup:
     cbm_pkgmap_free(cbm_pipeline_get_pkgmap());
     cbm_pipeline_set_pkgmap(NULL);
+    cbm_pipeline_set_workspaces(NULL); /* guarded setter frees the current collection */
     cbm_discover_free(files, file_count);
     cbm_gbuf_free(p->gbuf);
     p->gbuf = NULL;

@@ -845,7 +845,8 @@ static bool pkgmap_is_reparse_point(const char *abs_path) {
  * it hang. On Windows we additionally skip reparse points before
  * descending as a best-effort early-out. */
 static int pkgmap_walk_dir(const char *abs_dir, const char *rel_dir, cbm_pkg_entries_t *entries,
-                           int depth, char **excluded_dirs, int excluded_count) {
+                           int depth, char **excluded_dirs, int excluded_count,
+                           cbm_workspaces_t *ws) {
     if (depth >= PKGMAP_WALK_MAX_DEPTH) {
         cbm_log_info("pkgmap.walk", "depth_cap", rel_dir && rel_dir[0] ? rel_dir : ".");
         return 0;
@@ -888,7 +889,7 @@ static int pkgmap_walk_dir(const char *abs_dir, const char *rel_dir, cbm_pkg_ent
             }
 #endif
             parsed += pkgmap_walk_dir(abs_path, rel_path, entries, depth + 1, excluded_dirs,
-                                      excluded_count);
+                                      excluded_count, ws);
             continue;
         }
         if (!S_ISREG(st.st_mode)) {
@@ -905,6 +906,8 @@ static int pkgmap_walk_dir(const char *abs_dir, const char *rel_dir, cbm_pkg_ent
         if (cbm_pkgmap_try_parse(name, rel_path, source, source_len, entries)) {
             parsed++;
         }
+        /* Same in-memory buffer feeds workspace detection — no extra file IO. */
+        cbm_workspace_try_detect(name, rel_path, source, source_len, ws);
         free(source);
     }
     cbm_closedir(dir);
@@ -923,11 +926,11 @@ static int pkgmap_walk_dir(const char *abs_dir, const char *rel_dir, cbm_pkg_ent
  * This is what lets bare workspace imports (e.g. "@org/pkg" declared in
  * an ignored package.json) resolve on Windows as well as POSIX. */
 int cbm_pkgmap_scan_repo(const char *repo_path, cbm_pkg_entries_t *entries, char **excluded_dirs,
-                         int excluded_count) {
+                         int excluded_count, cbm_workspaces_t *ws) {
     if (!repo_path || !entries) {
         return 0;
     }
-    int parsed = pkgmap_walk_dir(repo_path, "", entries, 0, excluded_dirs, excluded_count);
+    int parsed = pkgmap_walk_dir(repo_path, "", entries, 0, excluded_dirs, excluded_count, ws);
     cbm_log_info("pkgmap.scan_repo", "manifests", pkgmap_itoa(parsed));
     return parsed;
 }
@@ -965,7 +968,8 @@ CBMHashTable *cbm_pkgmap_build_from_files(const cbm_file_info_t *files, int file
  * Falls back to the files[]-only behaviour if repo_path is NULL. */
 CBMHashTable *cbm_pkgmap_build_from_repo(const char *repo_path, const cbm_file_info_t *files,
                                          int file_count, const char *project_name,
-                                         char **excluded_dirs, int excluded_count) {
+                                         char **excluded_dirs, int excluded_count,
+                                         cbm_workspaces_t *ws) {
     cbm_pkg_entries_t entries;
     cbm_pkg_entries_init(&entries);
 
@@ -986,10 +990,11 @@ CBMHashTable *cbm_pkgmap_build_from_repo(const char *repo_path, const cbm_file_i
             continue;
         }
         cbm_pkgmap_try_parse(basename, files[i].rel_path, source, source_len, &entries);
+        cbm_workspace_try_detect(basename, files[i].rel_path, source, source_len, ws);
         free(source);
     }
 
-    int from_walk = cbm_pkgmap_scan_repo(repo_path, &entries, excluded_dirs, excluded_count);
+    int from_walk = cbm_pkgmap_scan_repo(repo_path, &entries, excluded_dirs, excluded_count, ws);
     cbm_log_info("pkgmap.scan", "manifests_from_files", pkgmap_itoa(from_files),
                  "manifests_from_walk", pkgmap_itoa(from_walk), "entries",
                  pkgmap_itoa(entries.count));
@@ -1010,6 +1015,250 @@ void cbm_pkgmap_free(CBMHashTable *pkgmap) {
     }
     cbm_ht_foreach(pkgmap, pkgmap_free_entry, NULL);
     cbm_ht_free(pkgmap);
+}
+
+/* ── npm workspaces (#271, Phase 1) ──────────────────────────────── */
+
+cbm_workspaces_t *cbm_workspaces_new(void) {
+    return (cbm_workspaces_t *)calloc(CBM_ALLOC_ONE, sizeof(cbm_workspaces_t));
+}
+
+/* Normalize one npm workspace glob into a gitignore-engine pattern: strip a
+ * leading "./" and any trailing '/', drop empty/"." patterns. A leading '!'
+ * (negation) is preserved for the gitignore engine to apply. Brace expansion
+ * {a,b} is unsupported in Phase 1 — such a pattern is passed through (it then
+ * only matches a literal "{a,b}" directory, i.e. is effectively inert) and
+ * debug-logged. Writes into `out` (size outsz). Returns false to skip. */
+static bool ws_normalize_pattern(const char *pat, char *out, size_t outsz) {
+    if (!pat) {
+        return false;
+    }
+    const char *p = pat;
+    bool negated = false;
+    if (*p == '!') {
+        negated = true;
+        p++;
+    }
+    if (p[0] == '.' && p[1] == '/') {
+        p += PAIR_LEN;
+    }
+    char body[PKGMAP_PATH_BUF];
+    snprintf(body, sizeof(body), "%s", p);
+    size_t bl = strlen(body);
+    while (bl > 0 && body[bl - SKIP_ONE] == '/') {
+        body[--bl] = '\0';
+    }
+    if (bl == 0 || strcmp(body, ".") == 0) {
+        return false;
+    }
+    if (strchr(body, '{')) {
+        cbm_log_debug("workspace.brace_unsupported", "pattern", body);
+    }
+    /* npm workspace globs are ROOT-RELATIVE. Anchor every pattern with a
+     * leading '/' so the gitignore engine treats it as rooted (gi_add_pattern
+     * strips the '/' and sets rooted=true); otherwise a slash-less pattern like
+     * "*" or "docs" would match a candidate directory at ANY depth. The '!'
+     * negation prefix stays outermost so it is parsed before the anchor. */
+    snprintf(out, outsz, "%s/%s", negated ? "!" : "", body);
+    return true;
+}
+
+/* Record a member candidate (name → dir). Takes ownership of `dir`. */
+static void ws_add_candidate(cbm_workspaces_t *ws, const char *name, char *dir) {
+    if (ws->cand_count >= CBM_WS_MAX_MEMBERS) {
+        static bool warned = false; /* warn once, not once per over-cap manifest */
+        if (!warned) {
+            cbm_log_warn("workspace.members.cap_hit", "cap", pkgmap_itoa(CBM_WS_MAX_MEMBERS));
+            warned = true;
+        }
+        free(dir);
+        return;
+    }
+    if (ws->cand_count >= ws->cand_cap) {
+        int new_cap = ws->cand_cap == 0 ? PKGMAP_INIT_CAP : ws->cand_cap * PAIR_LEN;
+        cbm_ws_candidate_t *tmp = realloc(ws->cands, (size_t)new_cap * sizeof(cbm_ws_candidate_t));
+        if (!tmp) {
+            free(dir);
+            return;
+        }
+        ws->cands = tmp;
+        ws->cand_cap = new_cap;
+    }
+    ws->cands[ws->cand_count].name = strdup(name);
+    ws->cands[ws->cand_count].dir = dir; /* takes ownership */
+    ws->cand_count++;
+}
+
+/* Record a workspace root: compile `joined_patterns` (a '\n'-delimited list of
+ * normalized globs) via the gitignore engine. Takes ownership of `root_dir`.
+ * Returns true if a root was added. */
+static bool ws_add_root(cbm_workspaces_t *ws, char *root_dir, const char *joined_patterns) {
+    if (!root_dir) {
+        return false;
+    }
+    if (ws->root_count >= CBM_WS_MAX_ROOTS) {
+        cbm_log_warn("workspace.roots.cap_hit", "cap", pkgmap_itoa(CBM_WS_MAX_ROOTS));
+        free(root_dir);
+        return false;
+    }
+    cbm_gitignore_t *gi = cbm_gitignore_parse(joined_patterns);
+    if (!gi) {
+        free(root_dir);
+        return false;
+    }
+    ws->roots[ws->root_count].root_dir = root_dir; /* takes ownership */
+    ws->roots[ws->root_count].patterns = gi;
+    ws->root_count++;
+    return true;
+}
+
+bool cbm_workspace_try_detect(const char *basename, const char *rel_path, const char *source,
+                              int source_len, cbm_workspaces_t *ws) {
+    if (!ws || !basename || !source || source_len <= 0) {
+        return false;
+    }
+    if (strcmp(basename, "package.json") != 0) {
+        return false;
+    }
+    yyjson_doc *doc = yyjson_read(source, (size_t)source_len, 0);
+    if (!doc) {
+        return false;
+    }
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    if (!yyjson_is_obj(root)) {
+        yyjson_doc_free(doc);
+        return false;
+    }
+
+    /* Member candidate: any named manifest is a potential workspace member.
+     * Recorded independently of root detection so walk order doesn't matter
+     * (a member may be parsed before its declaring root). */
+    yyjson_val *name_val = yyjson_obj_get(root, "name");
+    if (yyjson_is_str(name_val)) {
+        const char *name = yyjson_get_str(name_val);
+        if (name && name[0]) {
+            ws_add_candidate(ws, name, path_dirname(rel_path));
+        }
+    }
+
+    /* Workspace root: `workspaces` is an array or {"packages":[…]}. */
+    yyjson_val *wsval = yyjson_obj_get(root, "workspaces");
+    yyjson_val *arr = NULL;
+    if (yyjson_is_arr(wsval)) {
+        arr = wsval;
+    } else if (yyjson_is_obj(wsval)) {
+        arr = yyjson_obj_get(wsval, "packages");
+    }
+    bool has_ws = false;
+    if (yyjson_is_arr(arr)) {
+        /* Join normalized globs with '\n' for the gitignore engine (native
+         * '*'/'**'/'!'/charclass support). */
+        char joined[PKGMAP_PATH_BUF * PAIR_LEN * PAIR_LEN];
+        size_t used = 0;
+        joined[0] = '\0';
+        yyjson_val *pv;
+        yyjson_arr_iter it;
+        yyjson_arr_iter_init(arr, &it);
+        while ((pv = yyjson_arr_iter_next(&it)) != NULL) {
+            if (!yyjson_is_str(pv)) {
+                continue;
+            }
+            char norm[PKGMAP_PATH_BUF];
+            if (!ws_normalize_pattern(yyjson_get_str(pv), norm, sizeof(norm))) {
+                continue;
+            }
+            int n = snprintf(joined + used, sizeof(joined) - used, "%s%s", used ? "\n" : "", norm);
+            if (n < 0 || (size_t)n >= sizeof(joined) - used) {
+                /* pattern list would overflow the join buffer — stop here; the
+                 * bytes already written stay valid. */
+                cbm_log_debug("workspace.pattern_buffer_full", "manifest", rel_path);
+                break;
+            }
+            used += (size_t)n;
+        }
+        if (used > 0) {
+            has_ws = ws_add_root(ws, path_dirname(rel_path), joined);
+        }
+    }
+
+    yyjson_doc_free(doc);
+    return has_ws;
+}
+
+static void ws_free_member(const char *key, void *value, void *userdata) {
+    (void)userdata;
+    free((void *)key);
+    free(value);
+}
+
+void cbm_workspaces_finalize(cbm_workspaces_t *ws) {
+    if (!ws || ws->members) {
+        return; /* NULL-safe + idempotent */
+    }
+    ws->members = cbm_ht_create(PKGMAP_HT_INIT);
+    if (!ws->members) {
+        return;
+    }
+    for (int c = 0; c < ws->cand_count; c++) {
+        const char *name = ws->cands[c].name;
+        const char *dir = ws->cands[c].dir;
+        if (!name || !dir) {
+            continue;
+        }
+        for (int r = 0; r < ws->root_count; r++) {
+            const cbm_ws_root_t *root = &ws->roots[r];
+            /* Compute `dir` relative to the root, then glob-match. A repo-root
+             * workspace (root_dir="") matches the member dir directly. */
+            const char *rel = NULL;
+            if (root->root_dir[0] == '\0') {
+                rel = dir;
+            } else {
+                size_t rl = strlen(root->root_dir);
+                if (strncmp(dir, root->root_dir, rl) == 0 && dir[rl] == '/') {
+                    rel = dir + rl + SKIP_ONE;
+                }
+            }
+            if (!rel || !rel[0]) {
+                continue;
+            }
+            if (cbm_gitignore_matches(root->patterns, rel, /*is_dir=*/true)) {
+                if (!cbm_ht_has(ws->members, name)) { /* first-wins */
+                    cbm_ht_set(ws->members, strdup(name), strdup(dir));
+                }
+                break;
+            }
+        }
+    }
+    /* Separate buffers: pkgmap_itoa returns one shared thread-local buffer, so
+     * three calls in a single log line would all render the last value. */
+    char members_s[PKGMAP_ITOA_BUF];
+    char roots_s[PKGMAP_ITOA_BUF];
+    char cands_s[PKGMAP_ITOA_BUF];
+    snprintf(members_s, sizeof(members_s), "%d", (int)cbm_ht_count(ws->members));
+    snprintf(roots_s, sizeof(roots_s), "%d", ws->root_count);
+    snprintf(cands_s, sizeof(cands_s), "%d", ws->cand_count);
+    cbm_log_info("workspace.finalize", "members", members_s, "roots", roots_s, "candidates",
+                 cands_s);
+}
+
+void cbm_workspaces_free(cbm_workspaces_t *ws) {
+    if (!ws) {
+        return;
+    }
+    for (int r = 0; r < ws->root_count; r++) {
+        free(ws->roots[r].root_dir);
+        cbm_gitignore_free(ws->roots[r].patterns);
+    }
+    for (int c = 0; c < ws->cand_count; c++) {
+        free(ws->cands[c].name);
+        free(ws->cands[c].dir);
+    }
+    free(ws->cands);
+    if (ws->members) {
+        cbm_ht_foreach(ws->members, ws_free_member, NULL);
+        cbm_ht_free(ws->members);
+    }
+    free(ws);
 }
 
 /* ── Resolver ──────────────────────────────────────────────────── */
@@ -1343,6 +1592,79 @@ static const cbm_gbuf_node_t *resolve_sibling_file(const cbm_pipeline_ctx_t *ctx
     return found;
 }
 
+/* Strategy 1c (#271): resolve a bare npm-workspace import (`@org/a` or
+ * `@org/a/utils/helper`) to a REAL in-graph source file. The pkgmap already
+ * maps `@org/a` → the package's declared entry QN, but when that entry points
+ * at an un-built artifact (dist/index.js) the QN has no node and Strategy 1
+ * misses. Here we map the workspace member NAME → source DIR (cbm_workspaces)
+ * and probe conventional entry files, so the IMPORTS edge lands on the source.
+ * The import-targetable-label filter preserves the #767 Folder-phantom guard;
+ * self-imports are rejected. Returns a borrowed node or NULL. */
+static const cbm_gbuf_node_t *resolve_workspace_member(const cbm_pipeline_ctx_t *ctx,
+                                                       const char *source_file_qn,
+                                                       const char *module_path) {
+    cbm_workspaces_t *ws = cbm_pipeline_get_workspaces();
+    if (!ws || !ws->members || !module_path || !module_path[0]) {
+        return NULL;
+    }
+    /* Split module_path into (member-name, subpath): the longest member prefix
+     * wins. Try the whole path first, then trim trailing '/' segments. */
+    char work[PKGMAP_PATH_BUF];
+    snprintf(work, sizeof(work), "%s", module_path);
+    const char *dir = NULL;
+    const char *subpath = "";
+    for (;;) {
+        const char *hit = (const char *)cbm_ht_get(ws->members, work);
+        if (hit) {
+            dir = hit;
+            subpath = module_path + strlen(work);
+            if (*subpath == '/') {
+                subpath++;
+            }
+            break;
+        }
+        char *slash = strrchr(work, '/');
+        if (!slash) {
+            break;
+        }
+        *slash = '\0';
+    }
+    if (!dir) {
+        return NULL;
+    }
+
+    /* Candidate relative source paths, in priority order (extension is stripped
+     * by fqn_module, so no suffix here). */
+    char cands[5][PKGMAP_PATH_BUF];
+    int ncand = 0;
+    if (subpath[0]) {
+        snprintf(cands[ncand++], PKGMAP_PATH_BUF, "%s/%s", dir, subpath);
+        snprintf(cands[ncand++], PKGMAP_PATH_BUF, "%s/src/%s", dir, subpath);
+        snprintf(cands[ncand++], PKGMAP_PATH_BUF, "%s/%s/index", dir, subpath);
+    } else {
+        snprintf(cands[ncand++], PKGMAP_PATH_BUF, "%s/src/index", dir);
+        snprintf(cands[ncand++], PKGMAP_PATH_BUF, "%s/index", dir);
+        snprintf(cands[ncand++], PKGMAP_PATH_BUF, "%s/src/main", dir);
+        snprintf(cands[ncand++], PKGMAP_PATH_BUF, "%s/main", dir);
+        snprintf(cands[ncand++], PKGMAP_PATH_BUF, "%s/lib/index", dir);
+    }
+
+    for (int i = 0; i < ncand; i++) {
+        char *qn = cbm_pipeline_fqn_module(ctx->project_name, cands[i]);
+        if (!qn) {
+            continue;
+        }
+        const cbm_gbuf_node_t *n = cbm_gbuf_find_by_qn(ctx->gbuf, qn);
+        free(qn);
+        if (n && import_targetable_label(n->label) &&
+            (!source_file_qn || !n->qualified_name ||
+             strcmp(n->qualified_name, source_file_qn) != 0)) {
+            return n;
+        }
+    }
+    return NULL;
+}
+
 const cbm_gbuf_node_t *cbm_pipeline_resolve_import_node(const cbm_pipeline_ctx_t *ctx,
                                                         const char *source_rel,
                                                         const char *source_file_qn,
@@ -1374,6 +1696,17 @@ const cbm_gbuf_node_t *cbm_pipeline_resolve_import_node(const cbm_pipeline_ctx_t
             resolve_sibling_file(ctx, source_rel, source_file_qn, imp->module_path);
         if (sib) {
             return sib;
+        }
+    }
+
+    /* Strategy 1c: npm workspace member resolution (#271). Maps a bare
+     * `@org/pkg[/subpath]` specifier to the member's real source entry when
+     * the declared package.json entry points at an un-indexed build artifact. */
+    {
+        const cbm_gbuf_node_t *wsn =
+            resolve_workspace_member(ctx, source_file_qn, imp->module_path);
+        if (wsn) {
+            return wsn;
         }
     }
 

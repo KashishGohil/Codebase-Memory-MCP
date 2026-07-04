@@ -817,9 +817,15 @@ static void merge_pkg_entries(cbm_pipeline_ctx_t *ctx, cbm_pkg_entries_t *pkg_en
     /* Supplement with a repo-wide filesystem walk so manifests filtered
      * by the main discoverer (package.json, composer.json — in
      * IGNORED_JSON_FILES) still feed pkgmap. Append into worker 0's
-     * array so the existing merge below sees them. */
-    cbm_pkgmap_scan_repo(ctx->repo_path, &pkg_entries[0], ctx->excluded_dirs, ctx->excluded_count);
+     * array so the existing merge below sees them. The same walk populates
+     * npm-workspace roots/candidates (#271); this runs in the sequential
+     * post-join region, so no worker races on `ws`. */
+    cbm_workspaces_t *ws = cbm_workspaces_new();
+    cbm_pkgmap_scan_repo(ctx->repo_path, &pkg_entries[0], ctx->excluded_dirs, ctx->excluded_count,
+                         ws);
     cbm_pipeline_set_pkgmap(cbm_pkgmap_build(pkg_entries, worker_count, ctx->project_name));
+    cbm_workspaces_finalize(ws);
+    cbm_pipeline_set_workspaces(ws);
     for (int i = 0; i < worker_count; i++) {
         cbm_pkg_entries_free(&pkg_entries[i]);
     }
