@@ -2993,18 +2993,40 @@ TEST(complexity_guarded_recursion) {
  * a method also named get) must not count either.  Bare names and self/this
  * receivers still count.  Guards the regression maintainer DeusData named. */
 TEST(complexity_receiver_aware_recursion) {
-    /* super().save() inside a method named save: parent-class call, NOT self. */
+    /* RED-FIRST GUARD: super().save() ONLY (no self.save()).  On the unfixed
+     * code the bare strcmp(callee_short, name) match flagged any same-named
+     * callee, so super().save() inside save() wrongly set is_recursive=true.
+     * super() targets the PARENT class — never self-recursion — so this must
+     * be false.  This is the headline guard the maintainer (DeusData) asked
+     * for: it fails on the unfixed codebase and only passes once the receiver
+     * whitelist is applied. */
     CBMFileResult *r = extract("class Repo:\n"
-                               "    def save(self):\n"
-                               "        if self.id:\n"
-                               "            super().save()\n"
-                               "        else:\n"
-                               "            self.save()\n"  /* genuine self-call */
-                               "}\n",
-                               CBM_LANG_PYTHON, "t", "super_call.py");
+                "    def save(self):\n"
+                "        if self.id:\n"
+                "            super().save()\n",
+                CBM_LANG_PYTHON, "t", "super_only.py");
     ASSERT_NOT_NULL(r);
     ASSERT_FALSE(r->has_error);
     const CBMDefinition *d = find_def(r, "save");
+    ASSERT_NOT_NULL(d);
+    ASSERT_FALSE(d->is_recursive);       /* super().save() is parent-class, NOT self */
+    ASSERT_FALSE(d->unguarded_recursion);
+    cbm_free_result(r);
+
+    /* Combined fixture: super().save() AND a genuine self.save() in the same
+     * method.  The self.save() branch is what triggers is_recursive here; the
+     * super().save() branch must NOT.  Kept as a complementary check to the
+     * super-only guard above. */
+    r = extract("class Repo:\n"
+                "    def save(self):\n"
+                "        if self.id:\n"
+                "            super().save()\n"
+                "        else:\n"
+                "            self.save()\n",  /* genuine self-call */
+                CBM_LANG_PYTHON, "t", "super_call.py");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    d = find_def(r, "save");
     ASSERT_NOT_NULL(d);
     ASSERT_TRUE(d->is_recursive);        /* self.save() still triggers it */
     ASSERT_FALSE(d->unguarded_recursion); /* both calls guarded by `if/else` */
@@ -3035,6 +3057,27 @@ TEST(complexity_receiver_aware_recursion) {
     ASSERT_NOT_NULL(d);
     ASSERT_TRUE(d->is_recursive);
     ASSERT_FALSE(d->unguarded_recursion); /* guarded by `if n > 0` */
+    cbm_free_result(r);
+
+    /* KNOWN LIMITATION — Go methods: receiver `s` in `func (s *Store) save()`
+     * is the Go-method receiver, the Go analogue of `self`/`this`.  But the
+     * self-receiver whitelist is {self, this, cls, @self} and does not include
+     * arbitrary receiver names like `s`, so `s.save()` inside `save()` is NOT
+     * flagged as self-recursion.  This test LOCKS the current (limiting)
+     * behavior so the trade-off is explicit; relaxing it later would require
+     * tracking the enclosing method's receiver name.  See PR #699. */
+    r = extract("package store\n\n"
+                "type Store struct{}\n\n"
+                "func (s *Store) save() {\n"
+                "    s.save()\n"
+                "}\n",
+                CBM_LANG_GO, "t", "go_method.go");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    d = find_def(r, "save");
+    ASSERT_NOT_NULL(d);
+    ASSERT_FALSE(d->is_recursive);      /* 's' is not in {self,this,cls,@self} */
+    ASSERT_FALSE(d->unguarded_recursion);
     cbm_free_result(r);
     PASS();
 }
