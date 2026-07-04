@@ -237,6 +237,32 @@ static void iso_timestamp(char *buf, size_t bufsz) {
     (void)strftime(buf, bufsz, "%Y-%m-%dT%H:%M:%SZ", &tm);
 }
 
+/* Parse a "YYYY-MM-DDTHH:MM:SSZ" (UTC) timestamp into unix epoch seconds.
+ * Returns -1 on any format/range mismatch. Computes epoch directly via
+ * days-from-civil so it is independent of libc timegm/timezone (portable
+ * across POSIX and Windows), matching the fixed format iso_timestamp emits. */
+static int64_t parse_iso8601_utc(const char *s) {
+    if (!s) {
+        return -1;
+    }
+    int Y, Mo, D, H, Mi, S;
+    char z = 0;
+    if (sscanf(s, "%d-%d-%dT%d:%d:%d%c", &Y, &Mo, &D, &H, &Mi, &S, &z) != 7 || z != 'Z') {
+        return -1;
+    }
+    if (Mo < 1 || Mo > 12 || D < 1 || D > 31 || H < 0 || H > 23 || Mi < 0 || Mi > 59 || S < 0 ||
+        S > 60) {
+        return -1;
+    }
+    int64_t y = (int64_t)Y - (Mo <= 2);
+    int64_t era = (y >= 0 ? y : y - 399) / 400;
+    int64_t yoe = y - era * 400;
+    int64_t doy = (153 * (Mo + (Mo > 2 ? -3 : 9)) + 2) / 5 + D - 1;
+    int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    int64_t days = era * 146097 + doe - 719468; /* days since 1970-01-01 */
+    return days * 86400 + (int64_t)H * 3600 + (int64_t)Mi * 60 + (int64_t)S;
+}
+
 /* ── Git + trust helpers for bootstrap reconciliation ────────────── */
 
 /* Non-NULL sentinel value stored in a membership hash set (key presence is all
@@ -904,6 +930,41 @@ bool cbm_artifact_exists(const char *repo_path) {
 }
 
 /* ── Commit hash extraction ──────────────────────────────────────── */
+
+/* Age of the existing artifact in seconds (now - artifact.json indexed_at).
+ * Returns -1 when there is no artifact.json or indexed_at is absent/unparseable.
+ * Uses the metadata timestamp, NOT the .zst filesystem mtime, because
+ * checkout/touch operations can make an old artifact look fresh. */
+int64_t cbm_artifact_age_seconds(const char *repo_path) {
+    if (!repo_path) {
+        return -1;
+    }
+    char meta_path[CBM_SZ_4K];
+    if (!artifact_path(meta_path, sizeof(meta_path), repo_path, CBM_ARTIFACT_META)) {
+        return -1;
+    }
+    size_t len = 0;
+    char *json = read_file_alloc(meta_path, &len);
+    if (!json) {
+        return -1;
+    }
+    yyjson_doc *doc = yyjson_read(json, len, 0);
+    free(json);
+    if (!doc) {
+        return -1;
+    }
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *val = yyjson_obj_get(root, "indexed_at");
+    int64_t age = -1;
+    if (val) {
+        int64_t t = parse_iso8601_utc(yyjson_get_str(val));
+        if (t >= 0) {
+            age = (int64_t)time(NULL) - t;
+        }
+    }
+    yyjson_doc_free(doc);
+    return age;
+}
 
 char *cbm_artifact_commit(const char *repo_path) {
     if (!repo_path) {

@@ -601,6 +601,100 @@ TEST(artifact_reconcile_skips_without_git) {
     PASS();
 }
 
+/* P3: artifact auto-export is debounced. With a small change set (< default
+ * threshold 10) and a fresh artifact (age < 24h) the incremental run must NOT
+ * re-export — the .zst inode mtime is unchanged and artifact.export_skipped is
+ * logged. CBM_ARTIFACT_EXPORT_MIN_CHANGES=0 forces per-run export (today's
+ * behavior). Nanosecond mtime compare needs no sleep: an untouched inode's
+ * mtime is bit-identical. */
+TEST(artifact_export_debounced) {
+    setup_artifact_test();
+    unsetenv("CBM_ARTIFACT_EXPORT_MIN_CHANGES");
+    git_init(g_repo);
+    char gi[1024];
+    snprintf(gi, sizeof(gi), "%s/.gitignore", g_repo);
+    write_text_file(gi, ".codebase-memory/\n");
+    const char *fnames[] = {"a.rs", "b.rs", "c.rs", "d.rs"};
+    for (int i = 0; i < 4; i++) {
+        char p[1024];
+        snprintf(p, sizeof(p), "%s/%s", g_repo, fnames[i]);
+        char body[64];
+        snprintf(body, sizeof(body), "pub fn f%d() {}\n", i);
+        write_text_file(p, body);
+    }
+    char src[1024];
+    snprintf(src, sizeof(src), "%s/a.rs", g_repo);
+
+    /* Run 1: full index + export → artifact exists, indexed_at = now. */
+    cbm_pipeline_t *p = cbm_pipeline_new(g_repo, g_db, CBM_MODE_FAST);
+    ASSERT_NOT_NULL(p);
+    cbm_pipeline_set_persistence(p, true);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+    cbm_pipeline_free(p);
+
+    char zst[1152];
+    snprintf(zst, sizeof(zst), "%s/.codebase-memory/graph.db.zst", g_repo);
+    int64_t mt0 = t_mtime_ns(zst);
+    ASSERT_GTE(mt0, 0);
+
+    /* Modify 1 file → incremental run, changed_total = 1 (< 10), age ~0 → skip. */
+    write_text_file(src, "pub fn f0() { /* modified */ }\n");
+    capture_logs_start();
+    p = cbm_pipeline_new(g_repo, g_db, CBM_MODE_FAST);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+    cbm_pipeline_free(p);
+    const char *logs = capture_logs_end();
+
+    ASSERT_EQ(t_mtime_ns(zst), mt0); /* untouched */
+    ASSERT(strstr(logs, "artifact.export_skipped") != NULL);
+
+    cleanup_dir(g_tmpdir);
+    PASS();
+}
+
+TEST(artifact_export_forced_by_env) {
+    setup_artifact_test();
+    git_init(g_repo);
+    char gi[1024];
+    snprintf(gi, sizeof(gi), "%s/.gitignore", g_repo);
+    write_text_file(gi, ".codebase-memory/\n");
+    const char *fnames[] = {"a.rs", "b.rs", "c.rs", "d.rs"};
+    for (int i = 0; i < 4; i++) {
+        char p[1024];
+        snprintf(p, sizeof(p), "%s/%s", g_repo, fnames[i]);
+        char body[64];
+        snprintf(body, sizeof(body), "pub fn f%d() {}\n", i);
+        write_text_file(p, body);
+    }
+    char src[1024];
+    snprintf(src, sizeof(src), "%s/a.rs", g_repo);
+
+    cbm_pipeline_t *p = cbm_pipeline_new(g_repo, g_db, CBM_MODE_FAST);
+    ASSERT_NOT_NULL(p);
+    cbm_pipeline_set_persistence(p, true);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+    cbm_pipeline_free(p);
+
+    char zst[1152];
+    snprintf(zst, sizeof(zst), "%s/.codebase-memory/graph.db.zst", g_repo);
+    int64_t mt0 = t_mtime_ns(zst);
+
+    /* CBM_ARTIFACT_EXPORT_MIN_CHANGES=0 forces export even for 1 change. */
+    ASSERT_EQ(setenv("CBM_ARTIFACT_EXPORT_MIN_CHANGES", "0", 1), 0);
+    write_text_file(src, "pub fn f0() { /* modified */ }\n");
+    p = cbm_pipeline_new(g_repo, g_db, CBM_MODE_FAST);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+    cbm_pipeline_free(p);
+    unsetenv("CBM_ARTIFACT_EXPORT_MIN_CHANGES");
+
+    ASSERT_NEQ(t_mtime_ns(zst), mt0); /* re-exported */
+
+    cleanup_dir(g_tmpdir);
+    PASS();
+}
+
 /* P2: persist_hashes now writes all hash rows in one batch transaction from
  * classify-time stamps (no per-file re-stat). Verify the round-trip via the
  * real pipeline route: index → modify → incremental reindex (batch persist) →
@@ -686,4 +780,6 @@ SUITE(artifact) {
     RUN_TEST(artifact_reconcile_skips_unknown_commit);
     RUN_TEST(artifact_reconcile_skips_without_git);
     RUN_TEST(incremental_persist_batch_roundtrip);
+    RUN_TEST(artifact_export_debounced);
+    RUN_TEST(artifact_export_forced_by_env);
 }

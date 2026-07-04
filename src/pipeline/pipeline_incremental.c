@@ -79,6 +79,30 @@ typedef struct {
     bool valid;
 } cbm_file_stamp_t;
 
+/* Artifact auto-export debounce (P3). A fast-mode artifact is re-exported on
+ * every incremental run by default; that churns the user's working tree and
+ * burns O(graph) I/O/CPU. Skip the export for small change sets unless the
+ * artifact's indexed_at is older than the max age. CBM_ARTIFACT_EXPORT_MIN_CHANGES=0
+ * restores per-run export (today's behavior). */
+enum {
+    CBM_ARTIFACT_EXPORT_MIN_CHANGES_DEFAULT = 10,
+    CBM_ARTIFACT_EXPORT_MAX_AGE_S = 24 * 60 * 60,
+};
+
+static int export_min_changes(void) {
+    const char *raw = getenv("CBM_ARTIFACT_EXPORT_MIN_CHANGES");
+    if (!raw || !raw[0]) {
+        return CBM_ARTIFACT_EXPORT_MIN_CHANGES_DEFAULT;
+    }
+    errno = 0;
+    char *end = NULL;
+    long v = strtol(raw, &end, 10);
+    if (errno != 0 || end == raw || *end != '\0' || v < 0) {
+        return CBM_ARTIFACT_EXPORT_MIN_CHANGES_DEFAULT;
+    }
+    return (int)v;
+}
+
 /* ── File classification ─────────────────────────────────────────── */
 
 /* Classify discovered files against stored hashes using mtime+size.
@@ -697,7 +721,7 @@ static void run_postpasses(cbm_pipeline_ctx_t *ctx, cbm_file_info_t *changed_fil
 static void dump_and_persist(cbm_gbuf_t *gbuf, const char *db_path, const char *project,
                              cbm_file_info_t *files, int file_count,
                              const cbm_file_stamp_t *stamps, const cbm_file_hash_t *mode_skipped,
-                             int mode_skipped_count, const char *repo_path) {
+                             int mode_skipped_count, const char *repo_path, int changed_total) {
     struct timespec t;
     cbm_clock_gettime(CLOCK_MONOTONIC, &t);
 
@@ -735,9 +759,22 @@ static void dump_and_persist(cbm_gbuf_t *gbuf, const char *db_path, const char *
         cbm_store_close(hash_store);
     }
 
-    /* Auto-update artifact if one already exists (persistence was enabled previously) */
+    /* Auto-update artifact if one already exists (persistence was enabled
+     * previously). Debounced: skip for small change sets unless the artifact's
+     * indexed_at is older than the max age. Staleness is cheap with P1's
+     * git reconcile (a slightly larger diff to reconcile on bootstrap); the
+     * skip is logged so staleness stays observable ("no silent caps"), and
+     * CBM_ARTIFACT_EXPORT_MIN_CHANGES=0 forces per-run export. */
     if (repo_path && cbm_artifact_exists(repo_path)) {
-        cbm_artifact_export(db_path, repo_path, project, CBM_ARTIFACT_FAST);
+        int min_changes = export_min_changes();
+        int64_t age_s = cbm_artifact_age_seconds(repo_path);
+        bool age_expired = (age_s >= 0 && age_s >= CBM_ARTIFACT_EXPORT_MAX_AGE_S);
+        if (changed_total >= min_changes || age_expired) {
+            cbm_artifact_export(db_path, repo_path, project, CBM_ARTIFACT_FAST);
+        } else {
+            cbm_log_info("artifact.export_skipped", "changed", itoa_buf(changed_total), "age_s",
+                         itoa_buf((int)age_s));
+        }
     }
 }
 
@@ -937,7 +974,7 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
     cbm_pipeline_set_committed_counts(p, cbm_gbuf_node_count(existing),
                                       cbm_gbuf_edge_count(existing));
     dump_and_persist(existing, db_path, project, files, file_count, stamps, mode_skipped,
-                     mode_skipped_count, cbm_pipeline_repo_path(p));
+                     mode_skipped_count, cbm_pipeline_repo_path(p), n_changed + deleted_count);
     free(stamps);
     free_mode_skipped(mode_skipped, mode_skipped_count);
     cbm_gbuf_free(existing);
