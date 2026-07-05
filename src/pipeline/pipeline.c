@@ -22,6 +22,7 @@ enum { CBM_DIR_PERMS = 0755, PL_RING = 4, PL_RING_MASK = 3, PL_SEQ_PASSES = 6, P
 #include "graph_buffer/graph_buffer.h"
 #include "git/git_context.h"
 #include "store/store.h"
+#include "cbm.h"
 #include "discover/discover.h"
 #include "discover/userconfig.h"
 #include "foundation/platform.h"
@@ -882,15 +883,22 @@ static int try_incremental_or_delete_db(cbm_pipeline_t *p, cbm_file_info_t *file
         int hash_count = 0;
         cbm_store_get_file_hashes(check_store, p->project_name, &hashes, &hash_count);
         cbm_store_free_file_hashes(hashes, hash_count);
+        int cache_ver = cbm_store_user_version(check_store);
         cbm_store_close(check_store);
-        if (hash_count > 0 && file_count <= hash_count + (hash_count / PAIR_LEN)) {
+        /* Incremental reuse copies unchanged files' nodes verbatim, so a cache
+         * written by older extractors would keep their property gaps forever.
+         * A version mismatch therefore routes to full reindex. */
+        if (cache_ver != CBM_CACHE_SCHEMA_VERSION) {
+            cbm_log_info("pipeline.route", "path", "schema_stale_reindex", "cache_version",
+                         itoa_buf(cache_ver), "current_version",
+                         itoa_buf(CBM_CACHE_SCHEMA_VERSION));
+        } else if (hash_count > 0 && file_count <= hash_count + (hash_count / PAIR_LEN)) {
             cbm_log_info("pipeline.route", "path", "incremental", "stored_hashes",
                          itoa_buf(hash_count));
             int rc = cbm_pipeline_run_incremental(p, db_path, files, file_count);
             free(db_path);
             return rc;
-        }
-        if (hash_count > 0) {
+        } else if (hash_count > 0) {
             cbm_log_info("pipeline.route", "path", "mode_change_reindex", "stored_hashes",
                          itoa_buf(hash_count), "discovered", itoa_buf(file_count));
         }
@@ -972,6 +980,11 @@ static int dump_and_persist_hashes(cbm_pipeline_t *p, const cbm_file_info_t *fil
     cbm_log_info("pass.timing", "pass", "dump", "elapsed_ms", itoa_buf((int)elapsed_ms(*t)));
     cbm_store_t *hash_store = cbm_store_open_path(db_path);
     if (hash_store) {
+        /* Stamp the extraction-schema version: the raw btree dump writes a
+         * fresh header, which zeroes any prior PRAGMA user_version. */
+        char ver_sql[48];
+        snprintf(ver_sql, sizeof(ver_sql), "PRAGMA user_version = %d;", CBM_CACHE_SCHEMA_VERSION);
+        cbm_store_exec(hash_store, ver_sql);
         cbm_store_delete_file_hashes(hash_store, p->project_name);
 
         /* Restore the ADR captured before the dump. Surface a failed restore

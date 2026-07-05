@@ -216,6 +216,10 @@ const char *cbm_store_db_path(const cbm_store_t *s);
  * Returns false if corruption is detected — caller should delete and re-index. */
 bool cbm_store_check_integrity(cbm_store_t *s);
 
+/* Read the cache's extraction-schema stamp (PRAGMA user_version). 0 for a
+ * never-stamped database. See CBM_CACHE_SCHEMA_VERSION in internal/cbm/cbm.h. */
+int cbm_store_user_version(cbm_store_t *s);
+
 /* Open database for a named project in the default cache dir. */
 cbm_store_t *cbm_store_open(const char *project);
 

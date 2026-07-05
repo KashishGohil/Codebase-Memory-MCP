@@ -6,6 +6,15 @@
 #include "arena.h"
 #include "tree_sitter/api.h"
 
+/* Extraction-schema version stamped into cache databases (PRAGMA
+ * user_version). Incremental indexing reuses unchanged files' nodes verbatim,
+ * so a cache written by older extractors would silently lack newer property
+ * fields forever; the pipeline treats a version mismatch as "full reindex".
+ * Bump when extractors emit new persisted fields.
+ *   1: base_types on class-likes (heritage with generic args, C#/Java)
+ *   2: type_params on class-likes (declared generic parameter names, C#/Java) */
+#define CBM_CACHE_SCHEMA_VERSION 2
+
 // Language enum mirrors lang.Language in Go.
 // Order must match lang_specs.c tables.
 typedef enum {
@@ -189,6 +198,10 @@ typedef struct {
     const char *parent_class;  // enclosing class QN for methods (NULL if none)
     const char **decorators;   // NULL-terminated array (NULL if none)
     const char **base_classes; // NULL-terminated array (NULL if none)
+    const char **base_types;   // like base_classes but with generic type args
+                               // preserved (IHandler<Foo>); C#/Java, else NULL
+    const char **type_params;  // generic parameter names the declaration itself
+                               // declares (Handler<T> -> ["T"]); C#/Java, else NULL
     const char **param_names;  // NULL-terminated array (NULL if none)
     const char **param_types;  // NULL-terminated array (NULL if none)
     const char **return_types; // NULL-terminated array (NULL if none)
@@ -610,5 +623,20 @@ void cbm_extract_k8s(CBMExtractCtx *ctx);
 // instead of scattering `|| strcmp(label,"Struct")==0` across the tree.
 // `label` may be NULL (returns false). Defined in helpers.c.
 bool cbm_label_is_type_like(const char *label);
+
+// Extracts the single plain type argument of a generic invocation's callee
+// text: "x.AddPublication<Order.Accepted>" -> "Accepted" (namespace dropped).
+// Returns 0 unless the callee carries exactly one non-nested, single type
+// argument. Used by the calls passes to keep a type-reference edge for
+// generic invocations of EXTERNAL methods (messaging registrations are the
+// canonical case) whose own resolution fails. Defined in helpers.c.
+int cbm_generic_type_arg(const char *callee, char *out, size_t out_sz);
+
+// Extracts the type constructed by a `new T(...)`/`new T{...}` argument
+// expression ("new Order.Accepted { X = 1 }" -> "Accepted"). Companion to
+// cbm_generic_type_arg for calls that carry the type reference in an argument
+// rather than a generic slot (`publisher.PublishAsync(new OrderAccepted{...})`).
+// Defined in helpers.c.
+int cbm_ctor_arg_type(const char *expr, char *out, size_t out_sz);
 
 #endif // CBM_H

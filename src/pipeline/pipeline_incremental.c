@@ -18,6 +18,7 @@ enum { INCR_RING_BUF = 4, INCR_RING_MASK = 3, INCR_TS_BUF = 24, INCR_WAL_BUF = 1
 #include <time.h>
 #include "pipeline/pipeline_internal.h"
 #include "store/store.h"
+#include "cbm.h"
 #include "graph_buffer/graph_buffer.h"
 #include "discover/discover.h"
 #include "foundation/log.h"
@@ -649,6 +650,11 @@ static void dump_and_persist(cbm_gbuf_t *gbuf, const char *db_path, const char *
 
     cbm_store_t *hash_store = cbm_store_open_path(db_path);
     if (hash_store) {
+        /* Re-stamp the extraction-schema version — the raw btree dump above
+         * rewrote the header, zeroing PRAGMA user_version. */
+        char ver_sql[48];
+        snprintf(ver_sql, sizeof(ver_sql), "PRAGMA user_version = %d;", CBM_CACHE_SCHEMA_VERSION);
+        cbm_store_exec(hash_store, ver_sql);
         persist_hashes(hash_store, project, files, file_count, mode_skipped, mode_skipped_count);
 
         /* FTS5 rebuild after incremental dump.  The btree dump path bypasses

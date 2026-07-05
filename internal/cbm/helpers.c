@@ -1443,3 +1443,85 @@ int cbm_classify_string(const char *str, int len) {
 
     return NOT_FOUND;
 }
+
+/* cbm_generic_type_arg — single plain type argument of a generic invocation.
+ * "x.AddPublication<Order.Accepted>" -> "Accepted"; 0 when the callee has no
+ * generic argument, a nested one (<A<B>>), or a list (<A,B>) — those carry no
+ * single symbol reference. See cbm.h for the consumer contract. */
+int cbm_generic_type_arg(const char *callee, char *out, size_t out_sz) {
+    if (!callee || out_sz == 0) {
+        return 0;
+    }
+    const char *lt = strchr(callee, '<');
+    const char *gt = strrchr(callee, '>');
+    if (!lt || lt == callee || !gt || gt < lt + 1) {
+        return 0;
+    }
+    const char *start = lt + 1;
+    const char *end = gt;
+    while (start < end && (*start == ' ' || *start == '\t')) {
+        start++;
+    }
+    while (end > start && (end[-1] == ' ' || end[-1] == '\t')) {
+        end--;
+    }
+    if (start >= end) {
+        return 0;
+    }
+    for (const char *p = start; p < end; p++) {
+        if (*p == '<' || *p == ',') {
+            return 0;
+        }
+        if (*p == '.') {
+            start = p + 1; /* drop namespace qualification as we scan */
+        }
+    }
+    size_t n = (size_t)(end - start);
+    if (n == 0 || n >= out_sz) {
+        return 0;
+    }
+    memcpy(out, start, n);
+    out[n] = '\0';
+    return 1;
+}
+
+/* cbm_ctor_arg_type — type constructed by a `new T(...)` / `new T{...}`
+ * argument expression: "new Order.Accepted { X = 1 }" -> "Accepted". 0 when
+ * the expression is not an object creation or the type token is empty. */
+int cbm_ctor_arg_type(const char *expr, char *out, size_t out_sz) {
+    if (!expr || out_sz == 0) {
+        return 0;
+    }
+    while (*expr == ' ' || *expr == '\t' || *expr == '\n' || *expr == '\r') {
+        expr++;
+    }
+    if (strncmp(expr, "new", 3) != 0) {
+        return 0;
+    }
+    const char *p = expr + 3;
+    if (*p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') {
+        return 0;
+    }
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') {
+        p++;
+    }
+    const char *start = p;
+    const char *last_seg = p;
+    while (*p && *p != '(' && *p != '{' && *p != '<' && *p != ' ' && *p != '\t' && *p != '\n' &&
+           *p != '\r') {
+        if (*p == '.') {
+            last_seg = p + 1;
+        }
+        p++;
+    }
+    if (p == start || p == last_seg) {
+        return 0;
+    }
+    size_t n = (size_t)(p - last_seg);
+    if (n >= out_sz) {
+        return 0;
+    }
+    memcpy(out, last_seg, n);
+    out[n] = '\0';
+    return 1;
+}

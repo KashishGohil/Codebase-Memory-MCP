@@ -2161,6 +2161,172 @@ static const char **extract_julia_base_classes(CBMArena *a, TSNode node, const c
     return result;
 }
 
+/* extract_base_types — heritage entries with generic type arguments preserved
+ * (IHandlerAsync<Foo> stays IHandlerAsync<Foo>), complementing
+ * extract_base_classes, whose stripped names feed INHERITS resolution.
+ * Symbol-keyed messaging frameworks (JustSaying, MassTransit, ...) carry the
+ * message TYPE in the generic slot, so graph consumers need the full text.
+ * Additive: captured for C# and Java; NULL for other languages until needed. */
+static const char **extract_base_types(CBMArena *a, TSNode node, const char *source,
+                                       CBMLanguage lang) {
+    const char *bases[MAX_BASES];
+    int count = 0;
+
+    if (lang == CBM_LANG_CSHARP) {
+        uint32_t cc = ts_node_child_count(node);
+        for (uint32_t i = 0; i < cc; i++) {
+            TSNode child = ts_node_child(node, i);
+            if (strcmp(ts_node_type(child), "base_list") != 0) {
+                continue;
+            }
+            uint32_t bnc = ts_node_named_child_count(child);
+            for (uint32_t bi = 0; bi < bnc && count < MAX_BASES_MINUS_1; bi++) {
+                TSNode bc = ts_node_named_child(child, bi);
+                const char *bk = ts_node_type(bc);
+                char *text = NULL;
+                if (strcmp(bk, "identifier") == 0 || strcmp(bk, "generic_name") == 0 ||
+                    strcmp(bk, "qualified_name") == 0) {
+                    text = cbm_node_text(a, bc, source);
+                } else {
+                    TSNode inner = ts_node_named_child(bc, 0);
+                    if (!ts_node_is_null(inner)) {
+                        text = cbm_node_text(a, inner, source);
+                    }
+                }
+                if (text && text[0]) {
+                    bases[count++] = text;
+                }
+            }
+        }
+    } else if (lang == CBM_LANG_JAVA) {
+        /* superclass field: `extends Base<T>` — the field's named child is the
+         * type node (type_identifier | generic_type | scoped_type_identifier). */
+        TSNode sc = ts_node_child_by_field_name(node, TS_FIELD("superclass"));
+        if (!ts_node_is_null(sc)) {
+            uint32_t nc = ts_node_named_child_count(sc);
+            for (uint32_t i = 0; i < nc && count < MAX_BASES_MINUS_1; i++) {
+                char *t = cbm_node_text(a, ts_node_named_child(sc, i), source);
+                if (t && t[0]) {
+                    bases[count++] = t;
+                }
+            }
+        }
+        /* `implements IFoo<X>, Closeable` / interface `extends A, B` — the
+         * heritage child wraps a (interface_)type_list of type nodes. */
+        uint32_t cc = ts_node_named_child_count(node);
+        for (uint32_t i = 0; i < cc; i++) {
+            TSNode child = ts_node_named_child(node, i);
+            const char *ck = ts_node_type(child);
+            if (strcmp(ck, "super_interfaces") != 0 && strcmp(ck, "extends_interfaces") != 0) {
+                continue;
+            }
+            uint32_t inc = ts_node_named_child_count(child);
+            for (uint32_t j = 0; j < inc; j++) {
+                TSNode lst = ts_node_named_child(child, j);
+                const char *lk = ts_node_type(lst);
+                if (strcmp(lk, "type_list") != 0 && strcmp(lk, "interface_type_list") != 0) {
+                    continue;
+                }
+                uint32_t tn = ts_node_named_child_count(lst);
+                for (uint32_t k = 0; k < tn && count < MAX_BASES_MINUS_1; k++) {
+                    char *t = cbm_node_text(a, ts_node_named_child(lst, k), source);
+                    if (t && t[0]) {
+                        bases[count++] = t;
+                    }
+                }
+            }
+        }
+    }
+
+    if (count == 0) {
+        return NULL;
+    }
+    const char **result =
+        (const char **)cbm_arena_alloc(a, (size_t)(count + NULL_TERM) * sizeof(const char *));
+    if (!result) {
+        return NULL;
+    }
+    for (int j = 0; j < count; j++) {
+        result[j] = bases[j];
+    }
+    result[count] = NULL;
+    return result;
+}
+
+/* extract_type_params — the generic parameter NAMES a class-like declaration
+ * itself declares (class RetryingHandler<THandler, TPayload> ->
+ * ["THandler","TPayload"]). Heritage-chain resolution needs them to tell an
+ * open generic base (IHandler<TPayload> where TPayload is the declarer's own
+ * parameter) from a closed one (IHandler<OrderAccepted>). Additive: captured
+ * for C# and Java alongside base_types; NULL for other languages until needed. */
+static const char **extract_type_params(CBMArena *a, TSNode node, const char *source,
+                                        CBMLanguage lang) {
+    if (lang != CBM_LANG_CSHARP && lang != CBM_LANG_JAVA) {
+        return NULL;
+    }
+    /* Scan direct children, like extract_base_types does for base_list: the
+     * list node is type_parameter_list in C# and type_parameters in Java,
+     * both holding type_parameter children. */
+    TSNode list;
+    bool found = false;
+    uint32_t cc = ts_node_child_count(node);
+    for (uint32_t ci = 0; ci < cc && !found; ci++) {
+        TSNode child = ts_node_child(node, ci);
+        const char *ck = ts_node_type(child);
+        if (strcmp(ck, "type_parameter_list") == 0 || strcmp(ck, "type_parameters") == 0) {
+            list = child;
+            found = true;
+        }
+    }
+    if (!found) {
+        return NULL;
+    }
+    const char *params[MAX_BASES];
+    int count = 0;
+    uint32_t nc = ts_node_named_child_count(list);
+    for (uint32_t i = 0; i < nc && count < MAX_BASES_MINUS_1; i++) {
+        TSNode tp = ts_node_named_child(list, i);
+        if (strcmp(ts_node_type(tp), "type_parameter") != 0) {
+            continue;
+        }
+        /* C# names the parameter identifier via a field; Java has no field —
+         * the name is the first (type_)identifier child, with any bound
+         * wrapped separately in type_bound. */
+        TSNode name = ts_node_child_by_field_name(tp, TS_FIELD("name"));
+        if (ts_node_is_null(name)) {
+            uint32_t tnc = ts_node_named_child_count(tp);
+            for (uint32_t j = 0; j < tnc; j++) {
+                TSNode cand = ts_node_named_child(tp, j);
+                const char *ct = ts_node_type(cand);
+                if (strcmp(ct, "identifier") == 0 || strcmp(ct, "type_identifier") == 0) {
+                    name = cand;
+                    break;
+                }
+            }
+        }
+        if (ts_node_is_null(name)) {
+            continue;
+        }
+        char *t = cbm_node_text(a, name, source);
+        if (t && t[0]) {
+            params[count++] = t;
+        }
+    }
+    if (count == 0) {
+        return NULL;
+    }
+    const char **result =
+        (const char **)cbm_arena_alloc(a, (size_t)(count + NULL_TERM) * sizeof(const char *));
+    if (!result) {
+        return NULL;
+    }
+    for (int j = 0; j < count; j++) {
+        result[j] = params[j];
+    }
+    result[count] = NULL;
+    return result;
+}
+
 static const char **extract_base_classes(CBMArena *a, TSNode node, const char *source,
                                          CBMLanguage lang) {
     // Languages whose heritage is not exposed via a tree-sitter field need
@@ -3633,6 +3799,8 @@ static void extract_class_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec
     def.lines = (int)(def.end_line - def.start_line + TS_LINE_OFFSET);
     def.is_exported = cbm_is_exported(name, ctx->language);
     def.base_classes = extract_base_classes(a, node, ctx->source, ctx->language);
+    def.base_types = extract_base_types(a, node, ctx->source, ctx->language);
+    def.type_params = extract_type_params(a, node, ctx->source, ctx->language);
     def.decorators = extract_decorators(a, node, ctx->source, ctx->language, spec);
     def.docstring = extract_docstring(a, node, ctx->source, ctx->language);
 

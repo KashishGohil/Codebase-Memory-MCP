@@ -257,6 +257,8 @@ static void build_def_props(char *buf, size_t bufsize, const CBMDefinition *def)
     append_json_string(buf, bufsize, &pos, "parent_class", def->parent_class);
     append_json_str_array(buf, bufsize, &pos, "decorators", def->decorators);
     append_json_str_array(buf, bufsize, &pos, "base_classes", def->base_classes);
+    append_json_str_array(buf, bufsize, &pos, "base_types", def->base_types);
+    append_json_str_array(buf, bufsize, &pos, "type_params", def->type_params);
     append_json_str_array(buf, bufsize, &pos, "param_names", def->param_names);
     append_json_str_array(buf, bufsize, &pos, "param_types", def->param_types);
     append_json_string(buf, bufsize, &pos, "route_path", def->route_path);

@@ -922,6 +922,22 @@ int cbm_store_exec(cbm_store_t *s, const char *sql) {
     return exec_sql(s, sql);
 }
 
+int cbm_store_user_version(cbm_store_t *s) {
+    if (!s || !s->db) {
+        return 0;
+    }
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(s->db, "PRAGMA user_version;", -1, &stmt, NULL) != SQLITE_OK) {
+        return 0;
+    }
+    int v = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        v = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    return v;
+}
+
 const char *cbm_store_error(cbm_store_t *s) {
     return s ? s->errbuf : "null store";
 }

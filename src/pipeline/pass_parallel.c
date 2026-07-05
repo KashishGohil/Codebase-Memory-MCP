@@ -300,6 +300,8 @@ static void build_def_props(char *buf, size_t bufsize, const CBMDefinition *def)
     append_json_string(buf, bufsize, &pos, "parent_class", def->parent_class);
     append_json_str_array(buf, bufsize, &pos, "decorators", def->decorators);
     append_json_str_array(buf, bufsize, &pos, "base_classes", def->base_classes);
+    append_json_str_array(buf, bufsize, &pos, "base_types", def->base_types);
+    append_json_str_array(buf, bufsize, &pos, "type_params", def->type_params);
     append_json_str_array(buf, bufsize, &pos, "param_names", def->param_names);
     append_json_str_array(buf, bufsize, &pos, "param_types", def->param_types);
     append_json_string(buf, bufsize, &pos, "route_path", def->route_path);
@@ -1739,6 +1741,46 @@ static void lsp_idx_free_key(const char *key, void *value, void *ud) {
 }
 
 /* Resolve calls for one file and emit CALLS/HTTP_CALLS/ASYNC_CALLS edges. */
+/* Generic-invocation fallback — mirrors pass_calls.c::emit_generic_type_arg_edge:
+ * an external method invoked with a generic type argument keeps a CALLS edge
+ * onto the TYPE's node (the type argument is the project symbol reference the
+ * graph must not lose; messaging registrations are the canonical case). */
+static int emit_generic_type_arg_edge_par(resolve_ctx_t *rc, resolve_worker_state_t *ws,
+                                          const CBMCall *call,
+                                          const cbm_gbuf_node_t *source_node,
+                                          const char *module_qn, const char **imp_keys,
+                                          const char **imp_vals, int imp_count) {
+    char tyname[256];
+    const char *strategy = "generic_type_arg";
+    if (!cbm_generic_type_arg(call->callee_name, tyname, sizeof(tyname))) {
+        /* No generic slot — the type reference may ride in an argument:
+         * `publisher.PublishAsync(new OrderAccepted {...})`. Mirrors pass_calls.c. */
+        strategy = "ctor_arg_type";
+        int found = 0;
+        for (int i = 0; i < call->arg_count && !found; i++) {
+            found = cbm_ctor_arg_type(call->args[i].expr, tyname, sizeof(tyname));
+        }
+        if (!found) {
+            return 0;
+        }
+    }
+    cbm_resolution_t tres =
+        cbm_registry_resolve(rc->registry, tyname, module_qn, imp_keys, imp_vals, imp_count);
+    if (!tres.qualified_name || tres.qualified_name[0] == '\0') {
+        return 0;
+    }
+    const cbm_gbuf_node_t *target = cbm_gbuf_find_by_qn(rc->main_gbuf, tres.qualified_name);
+    if (!target || target->id == source_node->id) {
+        return 0;
+    }
+    cbm_resolution_t res = tres;
+    res.strategy = strategy;
+    emit_service_edge(ws->local_edge_buf, source_node, target, call, &res, module_qn,
+                      rc->registry, rc->main_gbuf, imp_keys, imp_vals, imp_count);
+    ws->calls_resolved++;
+    return 1;
+}
+
 static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CBMFileResult *result,
                                const char *rel, const char *module_qn, const char **imp_keys,
                                const char **imp_vals, int imp_count, CBMLanguage lang) {
@@ -1897,6 +1939,10 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
                 emit_service_edge(ws->local_edge_buf, source_node, source_node, call, &fake_res,
                                   module_qn, rc->registry, rc->main_gbuf, imp_keys, imp_vals,
                                   imp_count);
+            } else {
+                /* Generic-invocation fallback — mirrors pass_calls.c. */
+                emit_generic_type_arg_edge_par(rc, ws, call, source_node, module_qn, imp_keys,
+                                               imp_vals, imp_count);
             }
             continue;
         }
@@ -1930,6 +1976,12 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
                                       rc->registry, rc->main_gbuf, imp_keys, imp_vals, imp_count);
                     ws->calls_resolved++;
                 }
+            } else if (!target_node) {
+                /* Resolved to an unindexed QN (external library) — keep the
+                 * type-argument reference when the invocation carries one.
+                 * Mirrors pass_calls.c. */
+                emit_generic_type_arg_edge_par(rc, ws, call, source_node, module_qn, imp_keys,
+                                               imp_vals, imp_count);
             }
             continue;
         }

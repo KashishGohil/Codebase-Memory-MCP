@@ -417,6 +417,46 @@ static const cbm_gbuf_node_t *calls_find_source(cbm_pipeline_ctx_t *ctx, const c
     return src;
 }
 
+/* Generic-invocation fallback: `x.AddPublication<OrderAccepted>()` — the
+ * method lives in an EXTERNAL library so its own resolution fails, but the
+ * TYPE ARGUMENT is a project symbol reference the graph must not lose (it is
+ * the only edge tying the caller to that type; messaging registrations are
+ * the canonical case). Resolve the type argument instead and emit the CALLS
+ * edge onto the type's node — the callee text (generics included) rides in
+ * the edge props. Mirrored in pass_parallel.c::resolve_file_calls. */
+static int emit_generic_type_arg_edge(cbm_pipeline_ctx_t *ctx, const CBMCall *call,
+                                      const cbm_gbuf_node_t *source_node, const char *module_qn,
+                                      const char **imp_keys, const char **imp_vals, int imp_count) {
+    char tyname[256];
+    const char *strategy = "generic_type_arg";
+    if (!cbm_generic_type_arg(call->callee_name, tyname, sizeof(tyname))) {
+        /* No generic slot — the type reference may ride in an argument:
+         * `publisher.PublishAsync(new OrderAccepted {...})`. */
+        strategy = "ctor_arg_type";
+        int found = 0;
+        for (int i = 0; i < call->arg_count && !found; i++) {
+            found = cbm_ctor_arg_type(call->args[i].expr, tyname, sizeof(tyname));
+        }
+        if (!found) {
+            return 0;
+        }
+    }
+    cbm_resolution_t tres =
+        cbm_registry_resolve(ctx->registry, tyname, module_qn, imp_keys, imp_vals, imp_count);
+    if (!tres.qualified_name || tres.qualified_name[0] == '\0') {
+        return 0;
+    }
+    const cbm_gbuf_node_t *target = cbm_gbuf_find_by_qn(ctx->gbuf, tres.qualified_name);
+    if (!target || target->id == source_node->id) {
+        return 0;
+    }
+    cbm_resolution_t res = tres;
+    res.strategy = strategy;
+    emit_classified_edge(ctx, call, source_node, target, &res, module_qn, imp_keys, imp_vals,
+                         imp_count);
+    return 1;
+}
+
 /* Resolve one call and emit the appropriate edge. Returns 1 if resolved, 0 if not. */
 static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
                                const CBMResolvedCallArray *lsp_calls, const char *rel,
@@ -497,6 +537,10 @@ static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
                 return SKIP_ONE;
             }
         }
+        if (emit_generic_type_arg_edge(ctx, call, source_node, module_qn, imp_keys, imp_vals,
+                                       imp_count)) {
+            return SKIP_ONE;
+        }
         return 0;
     }
 
@@ -535,6 +579,12 @@ static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
 
     const cbm_gbuf_node_t *target_node = cbm_gbuf_find_by_qn(ctx->gbuf, res.qualified_name);
     if (!target_node || source_node->id == target_node->id) {
+        /* Resolved to an unindexed QN (external library) — keep the
+         * type-argument reference when the invocation carries one. */
+        if (!target_node && emit_generic_type_arg_edge(ctx, call, source_node, module_qn, imp_keys,
+                                                       imp_vals, imp_count)) {
+            return SKIP_ONE;
+        }
         return 0;
     }
     emit_classified_edge(ctx, call, source_node, target_node, &res, module_qn, imp_keys, imp_vals,
