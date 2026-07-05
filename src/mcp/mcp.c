@@ -5815,8 +5815,12 @@ static bool rm_resolve_anchor(cbm_store_t *store, const char *project, const cha
         cbm_node_t one = {0};
         if (cbm_store_find_node_by_qn(store, project, anchor, &one) == CBM_STORE_OK) {
             nodes = malloc(sizeof(cbm_node_t));
-            nodes[0] = one; /* ownership moves into the array */
-            count = 1;
+            if (nodes) {
+                nodes[0] = one; /* ownership moves into the array */
+                count = 1;
+            } else {
+                cbm_node_free_fields(&one);
+            }
         }
     }
     if (count == 0) {
@@ -5910,6 +5914,13 @@ static char *handle_repo_map(cbm_mcp_server_t *srv, const char *args) {
 
     /* Resolve seeds -> x50 boosts + seed records. */
     rm_boost_list_t *boosts = calloc(CBM_ALLOC_ONE, sizeof(*boosts));
+    if (!boosts) {
+        for (int i = 0; i < anchor_count; i++) {
+            free(anchors[i]);
+        }
+        free(project);
+        return cbm_mcp_text_result("repo_map: allocation failed", true);
+    }
     rm_seed_t seeds[REPO_MAP_MAX_BOOSTED];
     int seed_count = 0;
     int seeds_resolved = 0;
