@@ -2843,13 +2843,16 @@ int cbm_store_bfs(cbm_store_t *s, int64_t start_id, const char *direction, const
     }
 
     snprintf(sql, sizeof(sql),
-             "WITH RECURSIVE bfs(node_id, hop) AS ("
-             "  SELECT %lld, 0"
+             "WITH RECURSIVE bfs(node_id, hop, edge_path) AS ("
+             "  SELECT %lld, 0, ''"
              "  UNION"
-             "  SELECT %s, bfs.hop + 1"
+             "  SELECT %s, bfs.hop + 1,"
+             "         CASE WHEN bfs.edge_path = '' THEN CAST(e.id AS TEXT)"
+             "              ELSE bfs.edge_path || ',' || e.id END"
              "  FROM bfs"
              "  JOIN edges e ON %s"
              "  WHERE e.type IN (%s) AND bfs.hop < %d"
+             "    AND instr(',' || bfs.edge_path || ',', ',' || e.id || ',') = 0"
              ")"
              "SELECT DISTINCT n.id, n.project, n.label, n.name, n.qualified_name, "
              "n.file_path, n.start_line, n.end_line, n.properties, bfs.hop "
