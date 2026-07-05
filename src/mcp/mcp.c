@@ -5959,8 +5959,8 @@ static char *handle_repo_map(cbm_mcp_server_t *srv, const char *args) {
         if (cbm_store_find_node_by_id(store, onehop[i], &nb) != CBM_STORE_OK) {
             continue;
         }
-        bool is_module = nb.label && (strcmp(nb.label, "Module") == 0 ||
-                                      strcmp(nb.label, "File") == 0);
+        bool is_module =
+            nb.label && (strcmp(nb.label, "Module") == 0 || strcmp(nb.label, "File") == 0);
         if (is_module && nb.file_path && nb.project && strcmp(nb.project, project) == 0) {
             cbm_node_t *fnodes = NULL;
             int fcount = 0;

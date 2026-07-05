@@ -409,9 +409,9 @@ TEST(mcp_get_architecture_aspects_schema_enum_pr560) {
     ASSERT_TRUE(yyjson_is_arr(enum_arr));
 
     /* The enum must be exactly the valid-token set — no more, no less. */
-    static const char *expected[] = {"all",        "overview",   "structure", "dependencies",
-                                     "routes",     "languages",  "packages",  "entry_points",
-                                     "hotspots",   "boundaries", "layers",    "file_tree",
+    static const char *expected[] = {"all",      "overview",   "structure", "dependencies",
+                                     "routes",   "languages",  "packages",  "entry_points",
+                                     "hotspots", "boundaries", "layers",    "file_tree",
                                      "clusters"};
     size_t expected_count = sizeof(expected) / sizeof(expected[0]);
     ASSERT_EQ(yyjson_arr_size(enum_arr), expected_count);
@@ -1015,18 +1015,34 @@ TEST(tool_trace_call_path_distinct_defs_not_over_unioned) {
     cbm_mcp_server_set_project(srv, proj);
     cbm_store_upsert_project(st, proj, "/tmp/ou");
     /* two unrelated real definitions of "dupreal", DIFFERENT body spans */
-    cbm_node_t da = {.project = proj, .label = "Function", .name = "dupreal",
-                     .qualified_name = "ou-proj.a.dupreal", .file_path = "a.c",
-                     .start_line = 10, .end_line = 20}; /* span 10 */
-    cbm_node_t db = {.project = proj, .label = "Function", .name = "dupreal",
-                     .qualified_name = "ou-proj.b.dupreal", .file_path = "b.c",
-                     .start_line = 10, .end_line = 40}; /* span 30 (no tie) */
-    cbm_node_t ca = {.project = proj, .label = "Function", .name = "callerA",
-                     .qualified_name = "ou-proj.a.callerA", .file_path = "a.c",
-                     .start_line = 30, .end_line = 40};
-    cbm_node_t cb = {.project = proj, .label = "Function", .name = "callerB",
-                     .qualified_name = "ou-proj.b.callerB", .file_path = "b.c",
-                     .start_line = 50, .end_line = 60};
+    cbm_node_t da = {.project = proj,
+                     .label = "Function",
+                     .name = "dupreal",
+                     .qualified_name = "ou-proj.a.dupreal",
+                     .file_path = "a.c",
+                     .start_line = 10,
+                     .end_line = 20}; /* span 10 */
+    cbm_node_t db = {.project = proj,
+                     .label = "Function",
+                     .name = "dupreal",
+                     .qualified_name = "ou-proj.b.dupreal",
+                     .file_path = "b.c",
+                     .start_line = 10,
+                     .end_line = 40}; /* span 30 (no tie) */
+    cbm_node_t ca = {.project = proj,
+                     .label = "Function",
+                     .name = "callerA",
+                     .qualified_name = "ou-proj.a.callerA",
+                     .file_path = "a.c",
+                     .start_line = 30,
+                     .end_line = 40};
+    cbm_node_t cb = {.project = proj,
+                     .label = "Function",
+                     .name = "callerB",
+                     .qualified_name = "ou-proj.b.callerB",
+                     .file_path = "b.c",
+                     .start_line = 50,
+                     .end_line = 60};
     int64_t id_da = cbm_store_upsert_node(st, &da);
     int64_t id_db = cbm_store_upsert_node(st, &db);
     int64_t id_ca = cbm_store_upsert_node(st, &ca);
@@ -1041,9 +1057,10 @@ TEST(tool_trace_call_path_distinct_defs_not_over_unioned) {
     cbm_store_insert_edge(st, &eb);
 
     char *resp = cbm_mcp_server_handle(
-        srv, "{\"jsonrpc\":\"2.0\",\"id\":63,\"method\":\"tools/call\","
-             "\"params\":{\"name\":\"trace_call_path\",\"arguments\":{\"function_name\":\"dupreal\","
-             "\"project\":\"ou-proj\",\"direction\":\"inbound\"}}}");
+        srv,
+        "{\"jsonrpc\":\"2.0\",\"id\":63,\"method\":\"tools/call\","
+        "\"params\":{\"name\":\"trace_call_path\",\"arguments\":{\"function_name\":\"dupreal\","
+        "\"project\":\"ou-proj\",\"direction\":\"inbound\"}}}");
     ASSERT_NOT_NULL(resp);
     char *inner = extract_text_content(resp);
     ASSERT_NOT_NULL(inner);
@@ -1067,18 +1084,34 @@ TEST(tool_trace_call_path_dts_stub_unions_with_impl) {
     const char *proj = "dts-proj";
     cbm_mcp_server_set_project(srv, proj);
     cbm_store_upsert_project(st, proj, "/tmp/dts");
-    cbm_node_t impl = {.project = proj, .label = "Function", .name = "sym546",
-                       .qualified_name = "dts-proj.impl.sym546", .file_path = "src/sym.ts",
-                       .start_line = 10, .end_line = 30}; /* real body */
-    cbm_node_t stub = {.project = proj, .label = "Function", .name = "sym546",
-                       .qualified_name = "dts-proj.stub.sym546", .file_path = "types/sym.d.ts",
-                       .start_line = 5, .end_line = 5}; /* body-less ambient decl */
-    cbm_node_t crel = {.project = proj, .label = "Function", .name = "callerRel",
-                       .qualified_name = "dts-proj.callerRel", .file_path = "src/rel.ts",
-                       .start_line = 1, .end_line = 8};
-    cbm_node_t cali = {.project = proj, .label = "Function", .name = "callerAlias",
-                       .qualified_name = "dts-proj.callerAlias", .file_path = "src/ali.ts",
-                       .start_line = 1, .end_line = 8};
+    cbm_node_t impl = {.project = proj,
+                       .label = "Function",
+                       .name = "sym546",
+                       .qualified_name = "dts-proj.impl.sym546",
+                       .file_path = "src/sym.ts",
+                       .start_line = 10,
+                       .end_line = 30}; /* real body */
+    cbm_node_t stub = {.project = proj,
+                       .label = "Function",
+                       .name = "sym546",
+                       .qualified_name = "dts-proj.stub.sym546",
+                       .file_path = "types/sym.d.ts",
+                       .start_line = 5,
+                       .end_line = 5}; /* body-less ambient decl */
+    cbm_node_t crel = {.project = proj,
+                       .label = "Function",
+                       .name = "callerRel",
+                       .qualified_name = "dts-proj.callerRel",
+                       .file_path = "src/rel.ts",
+                       .start_line = 1,
+                       .end_line = 8};
+    cbm_node_t cali = {.project = proj,
+                       .label = "Function",
+                       .name = "callerAlias",
+                       .qualified_name = "dts-proj.callerAlias",
+                       .file_path = "src/ali.ts",
+                       .start_line = 1,
+                       .end_line = 8};
     int64_t id_impl = cbm_store_upsert_node(st, &impl);
     int64_t id_stub = cbm_store_upsert_node(st, &stub);
     int64_t id_crel = cbm_store_upsert_node(st, &crel);
@@ -1670,7 +1703,8 @@ TEST(search_code_scoped_path_with_spaces_issue687) {
  * a project with two indexed files that both contain the search pattern —
  * src/handler.go (inside the filter) and vendor/other.go (outside it). */
 static cbm_mcp_server_t *setup_prefilter_server(char *tmp, size_t tmp_sz, char *src_path,
-                                                size_t src_sz, char *vendor_path, size_t vendor_sz) {
+                                                size_t src_sz, char *vendor_path,
+                                                size_t vendor_sz) {
     snprintf(tmp, tmp_sz, "/tmp/cbm_srch_pref_XXXXXX");
     if (!cbm_mkdtemp(tmp)) {
         return NULL;
@@ -2212,9 +2246,8 @@ TEST(tool_manage_adr_not_found_rich_error) {
     cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
     ASSERT_NOT_NULL(srv);
 
-    char *resp =
-        cbm_mcp_handle_tool(srv, "manage_adr",
-                            "{\"project\":\"cbm-no-such-project-zzz\",\"mode\":\"get\"}");
+    char *resp = cbm_mcp_handle_tool(srv, "manage_adr",
+                                     "{\"project\":\"cbm-no-such-project-zzz\",\"mode\":\"get\"}");
     ASSERT_NOT_NULL(resp);
     ASSERT_NOT_NULL(strstr(resp, "or not indexed"));
     ASSERT_NOT_NULL(strstr(resp, "hint"));
@@ -4160,8 +4193,7 @@ TEST(index_supervisor_gate_requires_marked_host_issue845) {
     if (signalled) {
         printf("    child killed by signal %d (alarm => recursive spawn chain hang)\n", sig);
     } else if (code != IDX845_OK) {
-        printf("    child exit code %d (41=worker spawned, 42=no result, 43=not indexed)\n",
-               code);
+        printf("    child exit code %d (41=worker spawned, 42=no result, 43=not indexed)\n", code);
     }
     ASSERT_FALSE(signalled);
     ASSERT_EQ(code, IDX845_OK);
@@ -4714,8 +4746,8 @@ static void rm_add_budget_fixture(cbm_store_t *st, const char *project) {
         snprintf(name, sizeof(name), "f%02d", i);
         snprintf(qn, sizeof(qn), "q.f%02d", i);
         snprintf(sig, sizeof(sig), "f%02d(a, b, c int) (int, error)", i);
-        rm_add_node(st, project, "Function", name, qn, "pkg/file.go",
-                   (double)(RM_FANOUT_COUNT - i), sig);
+        rm_add_node(st, project, "Function", name, qn, "pkg/file.go", (double)(RM_FANOUT_COUNT - i),
+                    sig);
     }
 }
 
@@ -4743,7 +4775,8 @@ static long rm_json_int(const char *json, const char *key) {
     return result;
 }
 
-/* Read a string field out of a repo_map response's inner JSON text (caller frees). NULL if absent. */
+/* Read a string field out of a repo_map response's inner JSON text (caller frees). NULL if absent.
+ */
 static char *rm_json_str(const char *json, const char *key) {
     if (!json) {
         return NULL;
@@ -4777,7 +4810,7 @@ TEST(repo_map_dispatchable_via_full_jsonrpc) {
     cbm_mcp_server_t *srv = rm_setup_server("rm-dispatch");
     cbm_store_t *st = cbm_mcp_server_store(srv);
     rm_add_node(st, "rm-dispatch", "Function", "Foo", "rm-dispatch.Foo", "pkg/foo.go", 5.0,
-               "Foo() error");
+                "Foo() error");
 
     char *resp = cbm_mcp_server_handle(
         srv, "{\"jsonrpc\":\"2.0\",\"id\":500,\"method\":\"tools/call\","
@@ -4866,8 +4899,8 @@ TEST(repo_map_budget_zero_or_negative_is_input_error) {
     cbm_store_t *st = cbm_mcp_server_store(srv);
     rm_add_budget_fixture(st, "rm-budget-bad");
 
-    char *raw = cbm_mcp_handle_tool(srv, "repo_map",
-                                    "{\"project\":\"rm-budget-bad\",\"token_budget\":0}");
+    char *raw =
+        cbm_mcp_handle_tool(srv, "repo_map", "{\"project\":\"rm-budget-bad\",\"token_budget\":0}");
     ASSERT_NOT_NULL(raw);
     ASSERT_NOT_NULL(strstr(raw, "\"isError\":true"));
     /* Discriminating: must be the tool's own budget validation, not the
@@ -4876,8 +4909,8 @@ TEST(repo_map_budget_zero_or_negative_is_input_error) {
     ASSERT_NULL(strstr(raw, "unknown tool"));
     free(raw);
 
-    raw = cbm_mcp_handle_tool(srv, "repo_map",
-                              "{\"project\":\"rm-budget-bad\",\"token_budget\":-5}");
+    raw =
+        cbm_mcp_handle_tool(srv, "repo_map", "{\"project\":\"rm-budget-bad\",\"token_budget\":-5}");
     ASSERT_NOT_NULL(raw);
     ASSERT_NOT_NULL(strstr(raw, "\"isError\":true"));
     ASSERT_NOT_NULL(strstr(raw, "token_budget"));
@@ -4899,8 +4932,8 @@ static void rm_add_seed_boost_fixture(cbm_store_t *st, const char *project) {
     rm_add_node(st, project, "Function", "D1", "proj.D1", "pkg/distant.go", 90.0, "D1() error");
     rm_add_node(st, project, "Function", "D2", "proj.D2", "pkg/distant.go", 80.0, "D2() error");
 
-    int64_t s = rm_add_node(st, project, "Function", "S", "proj.S", "pkg/seed.go", 5.0,
-                            "S() error");
+    int64_t s =
+        rm_add_node(st, project, "Function", "S", "proj.S", "pkg/seed.go", 5.0, "S() error");
     int64_t n1 =
         rm_add_node(st, project, "Function", "N1", "proj.N1", "pkg/seed_n.go", 4.0, "N1() error");
     int64_t n2 =
@@ -4922,9 +4955,8 @@ TEST(repo_map_seed_boost_ranks_neighbourhood_above_distant) {
     rm_add_seed_boost_fixture(st, "rm-seed-boost");
 
     /* Seeded: S's neighbourhood must outrank the distant high-importance cluster. */
-    char *seeded =
-        rm_call(srv, "{\"project\":\"rm-seed-boost\",\"seed_anchors\":[\"S\"],"
-                     "\"token_budget\":100000}");
+    char *seeded = rm_call(srv, "{\"project\":\"rm-seed-boost\",\"seed_anchors\":[\"S\"],"
+                                "\"token_budget\":100000}");
     ASSERT_NOT_NULL(seeded);
     const char *s_pos = strstr(seeded, "S() error");
     const char *d0_pos = strstr(seeded, "D0() error");
@@ -4955,9 +4987,8 @@ TEST(repo_map_tight_budget_seed_crowds_out_distant) {
     /* Budget fits only the top ~2 lines of the seeded ranking — since the
      * whole 5-member seed cluster outranks the distant trio, none of the
      * distant symbols can appear at all. */
-    char *text =
-        rm_call(srv, "{\"project\":\"rm-seed-tight\",\"seed_anchors\":[\"S\"],"
-                     "\"token_budget\":15}");
+    char *text = rm_call(srv, "{\"project\":\"rm-seed-tight\",\"seed_anchors\":[\"S\"],"
+                              "\"token_budget\":15}");
     ASSERT_NOT_NULL(text);
     /* Positive discriminator first: the top seeded symbol IS in the map
      * (guards the red-boundary trivial pass where an error response also
@@ -4977,7 +5008,7 @@ TEST(repo_map_seed_by_file_path) {
     rm_add_seed_boost_fixture(st, "rm-seed-file");
 
     char *text = rm_call(srv, "{\"project\":\"rm-seed-file\",\"seed_anchors\":[\"pkg/seed.go\"],"
-                             "\"token_budget\":100000}");
+                              "\"token_budget\":100000}");
     ASSERT_NOT_NULL(text);
     const char *s_pos = strstr(text, "S() error");
     const char *d0_pos = strstr(text, "D0() error");
@@ -5000,7 +5031,7 @@ TEST(repo_map_seed_resolves_multiple_nodes) {
     rm_add_node(st, project, "Function", "Dup", "proj.pkgC.Dup", "pkg/c.go", 2.0, "DupC() error");
 
     char *text = rm_call(srv, "{\"project\":\"rm-seed-multi\",\"seed_anchors\":[\"Dup\"],"
-                             "\"token_budget\":100000}");
+                              "\"token_budget\":100000}");
     ASSERT_NOT_NULL(text);
     ASSERT_NOT_NULL(strstr(text, "\"seed_anchors_resolved\":1"));
     const char *dupb_pos = strstr(text, "DupB() error");
@@ -5035,23 +5066,23 @@ TEST(repo_map_weak_seed_triggers_widen_walk) {
 
     int64_t w = rm_add_node(st, project, "Function", "W", "rm-weak-seed.W", "pkg/weak.go", 1.0,
                             "W() error");
-    int64_t w1 = rm_add_node(st, project, "Function", "W1", "rm-weak-seed.W1", "pkg/other.go",
-                             1.0, "W1() error");
+    int64_t w1 = rm_add_node(st, project, "Function", "W1", "rm-weak-seed.W1", "pkg/other.go", 1.0,
+                             "W1() error");
     rm_add_node(st, project, "Function", "WSibling", "rm-weak-seed.WSibling", "pkg/weak.go", 1.0,
-               "WSibling() error");
-    int64_t w1a = rm_add_node(st, project, "Function", "W1a", "rm-weak-seed.W1a",
-                              "pkg/other2.go", 1.0, "W1a() error");
+                "WSibling() error");
+    int64_t w1a = rm_add_node(st, project, "Function", "W1a", "rm-weak-seed.W1a", "pkg/other2.go",
+                              1.0, "W1a() error");
     /* Raw importance between the widen boost (1*25=25) and the strong seed
      * boost (1*50=50) — proves the widen-boosted symbols outrank a *higher*
      * raw-importance unrelated symbol, not just "small graph, all fits". */
     rm_add_node(st, project, "Function", "Filler", "rm-weak-seed.Filler", "pkg/filler.go", 10.0,
-               "Filler() error");
+                "Filler() error");
 
     rm_add_edge(st, project, w, w1, "CALLS");
     rm_add_edge(st, project, w1, w1a, "CALLS");
 
     char *text = rm_call(srv, "{\"project\":\"rm-weak-seed\",\"seed_anchors\":[\"W\"],"
-                             "\"token_budget\":100000}");
+                              "\"token_budget\":100000}");
     ASSERT_NOT_NULL(text);
     const char *wsib_pos = strstr(text, "WSibling() error");
     const char *w1a_pos = strstr(text, "W1a() error");
@@ -5082,15 +5113,15 @@ TEST(repo_map_module_usage_neighbor_expands_to_its_file_symbols) {
     int64_t mod = rm_add_node_no_score(st, project, "Module", "pkg/user.py", "rm-module-nb.mod",
                                        "pkg/user.py");
     rm_add_node(st, project, "Function", "UserHelper", "rm-module-nb.UserHelper", "pkg/user.py",
-               1.0, "UserHelper() int");
+                1.0, "UserHelper() int");
     /* Raw importance ABOVE the widened symbol's raw (1.0) but below its
      * boosted score (1x25): proves the expansion boost does the ranking. */
     rm_add_node(st, project, "Function", "BigDeal", "rm-module-nb.BigDeal", "pkg/big.go", 20.0,
-               "BigDeal() error");
+                "BigDeal() error");
     rm_add_edge(st, project, mod, s2, "USAGE");
 
     char *text = rm_call(srv, "{\"project\":\"rm-module-nb\",\"seed_anchors\":[\"S2\"],"
-                             "\"token_budget\":100000}");
+                              "\"token_budget\":100000}");
     ASSERT_NOT_NULL(text);
     const char *helper_pos = strstr(text, "UserHelper() int");
     const char *big_pos = strstr(text, "BigDeal() error");
@@ -5112,8 +5143,8 @@ TEST(repo_map_no_seed_and_empty_seed_and_all_unresolvable_yield_identical_global
     rm_add_simple_fixture(st, "rm-empty-seed");
 
     char *no_seed = rm_call(srv, "{\"project\":\"rm-empty-seed\",\"token_budget\":100000}");
-    char *empty_arr = rm_call(
-        srv, "{\"project\":\"rm-empty-seed\",\"seed_anchors\":[],\"token_budget\":100000}");
+    char *empty_arr =
+        rm_call(srv, "{\"project\":\"rm-empty-seed\",\"seed_anchors\":[],\"token_budget\":100000}");
     char *all_unresolvable =
         rm_call(srv, "{\"project\":\"rm-empty-seed\",\"seed_anchors\":[\"nonexistent_xyz\"],"
                      "\"token_budget\":100000}");
@@ -5358,8 +5389,7 @@ TEST(repo_map_param_only_signature_gets_name_prefix_and_ws_flatten) {
     n.start_line = 1;
     n.end_line = 4;
     /* JSON-escaped newlines inside the signature value. */
-    n.properties_json =
-        "{\"importance\":10.0,\"signature\":\"(\\n    self,\\n    x: int\\n)\"}";
+    n.properties_json = "{\"importance\":10.0,\"signature\":\"(\\n    self,\\n    x: int\\n)\"}";
     ASSERT_GT(cbm_store_upsert_node(st, &n), 0);
 
     char *text = rm_call(srv, "{\"project\":\"rm-render-prefix\"}");
