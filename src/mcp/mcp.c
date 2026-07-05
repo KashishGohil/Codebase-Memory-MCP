@@ -1084,6 +1084,18 @@ static cbm_store_t *resolve_store(cbm_mcp_server_t *srv, const char *project) {
     return srv->store;
 }
 
+static void invalidate_cached_file_store(cbm_mcp_server_t *srv) {
+    if (!srv || !srv->store || !cbm_store_db_path(srv->store)) {
+        return;
+    }
+    if (srv->owns_store) {
+        cbm_store_close(srv->store);
+        srv->store = NULL;
+        free(srv->current_project);
+        srv->current_project = NULL;
+    }
+}
+
 /* Forward decl — definition lives below alongside list_projects. */
 static bool is_project_db_file(const char *name, size_t len);
 
@@ -2192,7 +2204,10 @@ static char *handle_delete_project(cbm_mcp_server_t *srv, const char *args) {
     }
 
     /* Wait for any in-progress pipeline to finish before deleting */
-    cbm_pipeline_lock();
+    if (!cbm_pipeline_lock_project(name)) {
+        free(name);
+        return cbm_mcp_text_result("failed to acquire pipeline lock", true);
+    }
 
     /* Delete the .db file + WAL/SHM */
     char path[CBM_SZ_1K];
@@ -3811,7 +3826,12 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
     /* Serialize pipeline runs to prevent concurrent writes.
      * Track active pipeline so signal handler and notifications/cancelled
      * can cancel it mid-run. */
-    cbm_pipeline_lock();
+    if (!cbm_pipeline_lock_project(project_name)) {
+        cbm_pipeline_free(p);
+        free(project_name);
+        free(repo_path);
+        return cbm_mcp_text_result("failed to acquire pipeline lock", true);
+    }
     srv->active_pipeline = p;
     int rc = cbm_pipeline_run(p);
     srv->active_pipeline = NULL;
@@ -5468,11 +5488,20 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
     /* ADRs are stored in the SQLite store (project_summaries), the SAME
      * backend the UI /api/adr endpoints use — so writes via the MCP tool and
      * the UI are visible to each other (#256). */
+    if (!cbm_pipeline_lock_project(project)) {
+        free(project);
+        free(mode_str);
+        free(content);
+        return cbm_mcp_text_result("failed to acquire pipeline lock", true);
+    }
+    invalidate_cached_file_store(srv);
+
     cbm_store_t *resolved = resolve_store(srv, project);
     if (!resolved) {
         char *err = build_no_store_error(project);
         char *res = cbm_mcp_text_result(err, true);
         free(err);
+        cbm_pipeline_unlock();
         free(project);
         free(mode_str);
         free(content);
@@ -5495,6 +5524,7 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
             char *err = build_no_store_error(project);
             char *res = cbm_mcp_text_result(err, true);
             free(err);
+            cbm_pipeline_unlock();
             free(project);
             free(mode_str);
             free(content);
@@ -5553,6 +5583,7 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
     if (owned_rw) {
         cbm_store_close(owned_rw);
     }
+    cbm_pipeline_unlock();
     free(project);
     free(mode_str);
     free(content);
@@ -5741,7 +5772,11 @@ static void *autoindex_thread(void *arg) {
     }
 
     /* Block until any concurrent pipeline finishes */
-    cbm_pipeline_lock();
+    if (!cbm_pipeline_lock_project(srv->session_project)) {
+        cbm_pipeline_free(p);
+        cbm_log_warn("autoindex.err", "msg", "pipeline_lock_failed");
+        return NULL;
+    }
     int rc = cbm_pipeline_run(p);
     cbm_pipeline_unlock();
 
