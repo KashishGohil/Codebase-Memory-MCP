@@ -53,4 +53,12 @@ bool cbm_artifact_exists(const char *repo_path);
  * Returns NULL if artifact doesn't exist or has no commit field. */
 char *cbm_artifact_commit(const char *repo_path);
 
+/* Whether repo_path is safe to interpolate into a double-quoted `git -C "…"` shell
+ * command (as artifact.c does via cbm_popen). Rejects quote / backslash / shell
+ * substitution metacharacters (cbm_validate_shell_arg); on Windows also rejects the
+ * cmd.exe expansion metacharacters % ! ^. Spaces ARE allowed — double quotes handle
+ * them on both POSIX sh and cmd.exe (single quotes, which cmd.exe does not honor,
+ * were the pre-existing bug). Exposed so the shell-safety contract is unit-tested. */
+bool cbm_artifact_repo_path_is_shell_safe(const char *repo_path);
+
 #endif /* CBM_ARTIFACT_H */
