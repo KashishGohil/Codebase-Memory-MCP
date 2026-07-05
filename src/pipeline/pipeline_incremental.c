@@ -494,8 +494,7 @@ static void incr_free_edge_capture(cbm_edge_capture_t *cap) {
 static void persist_hashes_row_by_row(cbm_store_t *store, const char *project,
                                       cbm_file_info_t *files, int file_count,
                                       const cbm_file_stamp_t *stamps,
-                                      const cbm_file_hash_t *mode_skipped,
-                                      int mode_skipped_count) {
+                                      const cbm_file_hash_t *mode_skipped, int mode_skipped_count) {
     int current_failed = 0;
     int ms_failed = 0;
 
@@ -734,9 +733,9 @@ static void run_postpasses(cbm_pipeline_ctx_t *ctx, cbm_file_info_t *changed_fil
  * reindexes can correctly distinguish "never indexed" from "indexed but
  * not visited this pass". */
 static void dump_and_persist(cbm_gbuf_t *gbuf, const char *db_path, const char *project,
-                             cbm_file_info_t *files, int file_count,
-                             const cbm_file_stamp_t *stamps, const cbm_file_hash_t *mode_skipped,
-                             int mode_skipped_count, const char *repo_path, int changed_total) {
+                             cbm_file_info_t *files, int file_count, const cbm_file_stamp_t *stamps,
+                             const cbm_file_hash_t *mode_skipped, int mode_skipped_count,
+                             const char *repo_path, int changed_total) {
     struct timespec t;
     cbm_clock_gettime(CLOCK_MONOTONIC, &t);
 
@@ -755,7 +754,7 @@ static void dump_and_persist(cbm_gbuf_t *gbuf, const char *db_path, const char *
     cbm_store_t *hash_store = cbm_store_open_path(db_path);
     if (hash_store) {
         persist_hashes(hash_store, project, files, file_count, stamps, mode_skipped,
-                         mode_skipped_count);
+                       mode_skipped_count);
 
         /* FTS5 rebuild after incremental dump.  The btree dump path bypasses
          * any triggers that could have kept nodes_fts synchronized, so we
@@ -840,8 +839,8 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
     int n_changed = 0;
     int n_unchanged = 0;
     cbm_file_stamp_t *stamps = calloc((size_t)file_count, sizeof(cbm_file_stamp_t));
-    bool *is_changed = classify_files(files, file_count, stored, stored_count, stamps, &n_changed,
-                                      &n_unchanged);
+    bool *is_changed =
+        classify_files(files, file_count, stored, stored_count, stamps, &n_changed, &n_unchanged);
 
     /* Classify stored files absent from current discovery: truly-deleted
      * (purge) vs mode-skipped (preserve nodes AND hash rows). */
