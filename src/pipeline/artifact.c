@@ -973,6 +973,10 @@ static void reconcile_add_nul_entries(CBMHashTable *ht, const char *buf, size_t 
  * incremental run then classifies by actual git diff instead of re-parsing
  * ~every file (whose stored mtime_ns is the exporter's, not local).
  *
+ * Only rows tracked at the artifact commit are eligible: files git ignores can
+ * still be indexed (.cbmignore negations, #500), and git cannot vouch for their
+ * content — they stay foreign and are re-parsed.
+ *
  * Returns the number of rows re-stamped, or -1 when reconciliation was skipped
  * (no git / untrusted metadata / unknown or non-hex commit / shallow clone /
  * any popen or parse uncertainty). Best-effort: never fails the import — a -1
@@ -1009,15 +1013,25 @@ int cbm_artifact_reconcile_hashes(const char *repo_path, const char *cache_db_pa
         return CBM_NOT_FOUND;
     }
 
-    /* 3. Build the changed set relative to the artifact commit. NUL-delimited
-     *    (-z) output is parsed directly; line-oriented parsing cannot handle
-     *    paths containing newlines or quotes. */
+    /* 3. Build the changed set relative to the artifact commit, plus the set of
+     *    paths tracked AT that commit. NUL-delimited (-z) output is parsed
+     *    directly; line-oriented parsing cannot handle paths containing
+     *    newlines or quotes. The tracked set exists because git diff/ls-files
+     *    are blind to files git ignores: a gitignored-yet-indexed file (e.g. a
+     *    .cbmignore negation un-skipping a generated dir, #500) would otherwise
+     *    be restamped as "unchanged" while its content is not under git's
+     *    control at all. Only rows tracked at the artifact commit are eligible
+     *    for restamping; everything git can't vouch for stays foreign. */
     char diff_args[CBM_SZ_256];
     snprintf(diff_args, sizeof(diff_args), "diff -z --name-only --no-renames %s --", commit);
+    char lstree_args[CBM_SZ_256];
+    snprintf(lstree_args, sizeof(lstree_args), "ls-tree -r -z --name-only %s --", commit);
     char *diff_out = NULL;
     size_t diff_len = 0;
     char *ls_out = NULL;
     size_t ls_len = 0;
+    char *tracked_out = NULL;
+    size_t tracked_len = 0;
     if (git_capture_full(repo_path, diff_args, &diff_out, &diff_len) != 0) {
         free(commit);
         return CBM_NOT_FOUND;
@@ -1028,14 +1042,22 @@ int cbm_artifact_reconcile_hashes(const char *repo_path, const char *cache_db_pa
         free(commit);
         return CBM_NOT_FOUND;
     }
+    if (git_capture_full(repo_path, lstree_args, &tracked_out, &tracked_len) != 0) {
+        free(diff_out);
+        free(ls_out);
+        free(commit);
+        return CBM_NOT_FOUND;
+    }
     /* Parse-invariant guard: git -z NUL-terminates every entry including the
      * last; a non-empty buffer not ending in NUL means truncated/corrupt output
      * → untrusted → skip rather than risk misclassifying a changed file as
      * unchanged (graph corruption). */
     if ((diff_len > 0 && diff_out[diff_len - 1] != '\0') ||
-        (ls_len > 0 && ls_out[ls_len - 1] != '\0')) {
+        (ls_len > 0 && ls_out[ls_len - 1] != '\0') ||
+        (tracked_len > 0 && tracked_out[tracked_len - 1] != '\0')) {
         free(diff_out);
         free(ls_out);
+        free(tracked_out);
         free(commit);
         return CBM_NOT_FOUND;
     }
@@ -1044,10 +1066,13 @@ int cbm_artifact_reconcile_hashes(const char *repo_path, const char *cache_db_pa
     reconcile_add_nul_entries(changed, diff_out, diff_len);
     reconcile_add_nul_entries(changed, ls_out, ls_len);
     int changed_count = (int)cbm_ht_count(changed);
+    CBMHashTable *tracked = cbm_ht_create(CBM_SZ_64);
+    reconcile_add_nul_entries(tracked, tracked_out, tracked_len);
 
-    /* 4. Restamp every row whose rel_path is NOT in the changed set with local
-     *    stat() values. Changed rows stay foreign → re-parsed; rows whose file
-     *    is missing locally stay foreign → find_deleted_files purges them. */
+    /* 4. Restamp every row whose rel_path IS tracked at the artifact commit and
+     *    is NOT in the changed set, with local stat() values. Changed or
+     *    untracked rows stay foreign → re-parsed; rows whose file is missing
+     *    locally stay foreign → find_deleted_files purges them. */
     cbm_store_t *store = cbm_store_open_path(cache_db_path);
     int restamped = 0;
     int skipped = 0;
@@ -1061,7 +1086,8 @@ int cbm_artifact_reconcile_hashes(const char *repo_path, const char *cache_db_pa
             if (batch) {
                 int batch_n = 0;
                 for (int i = 0; i < stored_count; i++) {
-                    if (cbm_ht_get(changed, stored[i].rel_path)) {
+                    if (!cbm_ht_get(tracked, stored[i].rel_path) ||
+                        cbm_ht_get(changed, stored[i].rel_path)) {
                         continue;
                     }
                     char abs[CBM_SZ_4K];
@@ -1097,8 +1123,10 @@ int cbm_artifact_reconcile_hashes(const char *repo_path, const char *cache_db_pa
     }
 
     cbm_ht_free(changed);
+    cbm_ht_free(tracked);
     free(diff_out);
     free(ls_out);
+    free(tracked_out);
     free(commit);
 
     cbm_log_info("artifact.reconcile", "restamped", itoa_buf(restamped), "changed",

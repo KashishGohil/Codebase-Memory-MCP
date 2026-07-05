@@ -508,6 +508,56 @@ TEST(artifact_reconcile_restamps_unchanged) {
     PASS();
 }
 
+TEST(artifact_reconcile_skips_untracked_rows) {
+    setup_artifact_test();
+    char *proj = build_trusted_artifact_repo();
+    ASSERT_NOT_NULL(proj);
+    char repoB[1024];
+    ASSERT(clone_to_b(repoB, sizeof(repoB)));
+
+    /* B: a gitignored-yet-indexed file (the .cbmignore-negation shape, #500).
+     * git diff/ls-files are both blind to it, so without the tracked-at-commit
+     * gate it would be restamped as "unchanged" even though git cannot vouch
+     * for its content. */
+    char gen[1152], gi[1152];
+    snprintf(gen, sizeof(gen), "%s/gen.rs", repoB);
+    snprintf(gi, sizeof(gi), "%s/.gitignore", repoB);
+    write_text_file(gen, "pub fn generated_local() {}\n");
+    write_text_file(gi, "gen.rs\n");
+    ASSERT_EQ(runf("git -C '%s' add .gitignore && git -C '%s' commit -qm ignore", repoB, repoB),
+              0);
+
+    char dbB[1152];
+    snprintf(dbB, sizeof(dbB), "%s/b.db", g_tmpdir);
+    ASSERT_EQ(cbm_artifact_import(repoB, dbB), 0);
+
+    /* Simulate the exporter having indexed gen.rs: insert a foreign-mtime row. */
+    const int64_t foreign_mtime = 12345;
+    cbm_store_t *s = cbm_store_open_path(dbB);
+    ASSERT_NOT_NULL(s);
+    ASSERT_EQ(cbm_store_upsert_file_hash(s, proj, "gen.rs", "", foreign_mtime, 7), CBM_STORE_OK);
+    cbm_store_close(s);
+
+    /* Reconcile: the 5 tracked unchanged rows restamp; gen.rs must not. */
+    ASSERT_EQ(cbm_artifact_reconcile_hashes(repoB, dbB, proj), 5);
+
+    s = cbm_store_open_path(dbB);
+    ASSERT_NOT_NULL(s);
+    cbm_file_hash_t *rows = NULL;
+    int n = 0;
+    ASSERT_EQ(cbm_store_get_file_hashes(s, proj, &rows, &n), CBM_STORE_OK);
+    ASSERT_EQ(row_mtime(rows, n, "gen.rs"), foreign_mtime);
+    char c_path[1152];
+    snprintf(c_path, sizeof(c_path), "%s/c.rs", repoB);
+    ASSERT_EQ(row_mtime(rows, n, "c.rs"), t_mtime_ns(c_path));
+    cbm_store_free_file_hashes(rows, n);
+    cbm_store_close(s);
+
+    free(proj);
+    cleanup_dir(g_tmpdir);
+    PASS();
+}
+
 TEST(artifact_reconcile_skips_untrusted_metadata) {
     setup_artifact_test();
     char *proj = build_trusted_artifact_repo();
@@ -614,6 +664,7 @@ SUITE(artifact) {
     RUN_TEST(artifact_null_safety);
     RUN_TEST(artifact_export_marks_clean_basis);
     RUN_TEST(artifact_reconcile_restamps_unchanged);
+    RUN_TEST(artifact_reconcile_skips_untracked_rows);
     RUN_TEST(artifact_reconcile_skips_untrusted_metadata);
     RUN_TEST(artifact_reconcile_skips_unknown_commit);
     RUN_TEST(artifact_reconcile_skips_without_git);
