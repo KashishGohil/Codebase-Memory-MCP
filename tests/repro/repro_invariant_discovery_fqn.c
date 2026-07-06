@@ -261,6 +261,51 @@ TEST(invariant_discovery_always_skip_dirs) {
     PASS();
 }
 
+/* ── PART A TEST — CBM_EXTRA_SKIP_DIRS env var ─────────────────────────────
+ *
+ * Verifies the env-var-configurable extra skip list (discover.c
+ * cbm_should_skip_dir -> str_in_env_csv): a name NOT in the hardcoded
+ * ALWAYS_SKIP_DIRS is skipped once listed in CBM_EXTRA_SKIP_DIRS, and goes
+ * back to being indexed once the env var is cleared — proving the behavior
+ * is genuinely env-gated, not accidentally hardcoded.
+ */
+TEST(invariant_discovery_env_extra_skip_dirs) {
+    const char *custom_dir = "dbt_target_test_fixture";
+
+    /* Baseline: not in any hardcoded list, so it must be discovered today. */
+    cbm_unsetenv("CBM_EXTRA_SKIP_DIRS");
+    int baseline = check_dir_skipped(custom_dir, CBM_MODE_FULL);
+    if (baseline < 0) {
+        printf("    SETUP-ERROR  %-32s baseline\n", custom_dir);
+        ASSERT_EQ(1, 0);
+    }
+    if (baseline == 0) {
+        printf("    UNEXPECTED   %-32s already skipped with no env var set\n", custom_dir);
+    }
+    ASSERT_GT(baseline, 0);
+
+    /* With the env var listing it (alongside noise entries, whitespace-padded
+     * to also exercise the trimming path), it must now be skipped. */
+    cbm_setenv("CBM_EXTRA_SKIP_DIRS", ".codegraph, graphify-out ,dbt_target_test_fixture,.wiki", 1);
+    int with_env = check_dir_skipped(custom_dir, CBM_MODE_FULL);
+    cbm_unsetenv("CBM_EXTRA_SKIP_DIRS");
+
+    if (with_env < 0) {
+        printf("    SETUP-ERROR  %-32s with env var\n", custom_dir);
+        ASSERT_EQ(1, 0);
+    }
+    if (with_env != 0) {
+        printf("    REGRESSION   %-32s not skipped with CBM_EXTRA_SKIP_DIRS set\n", custom_dir);
+    }
+    ASSERT_EQ(with_env, 0);
+
+    /* And clearing it restores the baseline (not permanently sticky). */
+    int after_clear = check_dir_skipped(custom_dir, CBM_MODE_FULL);
+    ASSERT_GT(after_clear, 0);
+
+    PASS();
+}
+
 /* ── PART A TEST — FAST_SKIP_DIRS table (mode != CBM_MODE_FULL) ────────────
  *
  * FAST_SKIP_DIRS entries are only skipped when mode != CBM_MODE_FULL.
@@ -794,6 +839,7 @@ SUITE(repro_invariant_discovery_fqn) {
     /* Part A — Discovery hygiene */
     RUN_TEST(invariant_discovery_control_always_found);
     RUN_TEST(invariant_discovery_always_skip_dirs);
+    RUN_TEST(invariant_discovery_env_extra_skip_dirs);
     RUN_TEST(invariant_discovery_fast_skip_dirs);
 
     /* Part B — FQN same-stem distinctness */

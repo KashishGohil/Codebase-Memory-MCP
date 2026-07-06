@@ -69,7 +69,12 @@ a path wins. For directories:
 1. **Built-in skip list** — `.git`, `node_modules`, `dist`, `target`,
    `vendor`, tool caches, etc. (60+ names; the fast/moderate index modes add
    more, e.g. `docs`, `examples`, `testdata`). Not overridable from any
-   ignore file today.
+   ignore file today. The hardcoded list is intentionally fixed across all
+   repos, but you can extend it per invocation with the `CBM_EXTRA_SKIP_DIRS`
+   environment variable — a comma-separated list of extra directory names to
+   skip in every mode (e.g. `CBM_EXTRA_SKIP_DIRS=".dbt,.terraform-state"`).
+   Useful for site- or repo-specific artifact directories that don't belong
+   in the universal list. Whitespace around each name is trimmed.
 2. **Repo `.gitignore`** — `<repo>/.gitignore` merged with
    `<git-common-dir>/info/exclude` (worktree-aware); later patterns win on
    conflict. Honored even when the indexed directory is not a git repo root.
