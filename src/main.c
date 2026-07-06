@@ -198,6 +198,12 @@ static int watcher_index_fn(const char *project_name, const char *root_path, voi
 
     int rc = cbm_pipeline_run(p);
     cbm_pipeline_free(p);
+    cbm_mem_collect(); /* #832: return mimalloc pages to OS after the in-process
+                        * fallback re-index — mirrors the free()+collect() pairing at
+                        * mcp.c:5758/pipeline.c:834. This is the watcher's unattended
+                        * degrade path (supervisor off or spawn failed); without the
+                        * collect, worker-thread pages mimalloc abandons at pool
+                        * teardown are never returned, so RSS ratchets every poll. */
     cbm_pipeline_unlock();
     return rc;
 }
