@@ -4874,11 +4874,50 @@ TEST(mcp_auto_watch_false_skips_supervised_autoindex_issue853) {
 #endif
 }
 
+/* The containment guard both MCP file-read sinks route through
+ * (resolve_snippet_source for get_code_snippet, attach_result_source for
+ * search_code). A result path that resolves outside the indexed project root
+ * — via a `..` segment or a followed symlink/junction — must be rejected so
+ * its contents never reach a tool response. */
+extern bool cbm_path_within_root(const char *root_path, const char *abs_path);
+
+TEST(mcp_path_within_root_rejects_escape) {
+#ifdef _WIN32
+    SKIP_PLATFORM("POSIX realpath repro; the Windows _fullpath branch is the same guard");
+#else
+    char root[512];
+    snprintf(root, sizeof(root), "%s/cbm_pwr_XXXXXX", cbm_tmpdir());
+    if (!cbm_mkdtemp(root)) {
+        FAIL("cbm_mkdtemp failed");
+    }
+    char inside[700];
+    snprintf(inside, sizeof(inside), "%s/inside.c", root);
+    FILE *fp = fopen(inside, "w");
+    ASSERT_NOT_NULL(fp);
+    fputs("int x;\n", fp);
+    fclose(fp);
+
+    /* The abs_path a sink builds for an in-root result stays contained; a `..`
+     * escape to an existing outside file (/etc/hosts) resolves out and must be
+     * rejected. */
+    char escape[900];
+    snprintf(escape, sizeof(escape), "%s/../../../../etc/hosts", root);
+    ASSERT_TRUE(cbm_path_within_root(root, inside));
+    ASSERT_FALSE(cbm_path_within_root(root, escape));
+    ASSERT_FALSE(cbm_path_within_root(root, "/etc/hosts"));
+
+    remove(inside);
+    cbm_rmdir(root);
+    PASS();
+#endif
+}
+
 /* ══════════════════════════════════════════════════════════════════
  *  SUITE
  * ══════════════════════════════════════════════════════════════════ */
 
 SUITE(mcp) {
+    RUN_TEST(mcp_path_within_root_rejects_escape);
     /* JSON-RPC parsing */
     RUN_TEST(jsonrpc_parse_request);
     RUN_TEST(jsonrpc_parse_notification);

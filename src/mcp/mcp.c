@@ -4080,19 +4080,19 @@ static yyjson_doc *enrich_node_properties(yyjson_mut_doc *doc, yyjson_mut_val *o
 /* Resolve an absolute path from root_path + file_path, verify containment,
  * and read source lines. Sets *out_abs_path (caller frees). Returns source
  * string (caller frees) or NULL if path is invalid/unreadable. */
-static char *resolve_snippet_source(const char *root_path, const char *file_path, int start,
-                                    int end, char **out_abs_path) {
-    *out_abs_path = NULL;
-    if (!root_path || !file_path) {
-        return NULL;
+/* True only when abs_path, after realpath/_fullpath resolution (which collapses
+ * `..` and resolves symlinks/junctions), stays within root_path. This is the
+ * single containment guard every MCP file-read sink must pass before reading a
+ * file into a tool response: both the snippet path (resolve_snippet_source) and
+ * the search path (attach_result_source) route through it, so a result whose
+ * indexed path escapes the project root — via a `..` segment, or a symlink /
+ * Windows junction picked up during discovery — is never read back out. */
+bool cbm_path_within_root(const char *root_path, const char *abs_path) {
+    if (!root_path || !abs_path) {
+        return false;
     }
-    size_t apsz = strlen(root_path) + strlen(file_path) + MCP_SEPARATOR;
-    char *abs_path = malloc(apsz);
-    snprintf(abs_path, apsz, "%s/%s", root_path, file_path);
-
     char real_root[CBM_SZ_4K];
     char real_file[CBM_SZ_4K];
-    bool path_ok = false;
 #ifdef _WIN32
     if (_fullpath(real_root, root_path, sizeof(real_root)) &&
         _fullpath(real_file, abs_path, sizeof(real_file))) {
@@ -4104,11 +4104,24 @@ static char *resolve_snippet_source(const char *root_path, const char *file_path
         size_t root_len = strlen(real_root);
         if (strncmp(real_file, real_root, root_len) == 0 &&
             (real_file[root_len] == '/' || real_file[root_len] == '\0')) {
-            path_ok = true;
+            return true;
         }
     }
+    return false;
+}
+
+static char *resolve_snippet_source(const char *root_path, const char *file_path, int start,
+                                    int end, char **out_abs_path) {
+    *out_abs_path = NULL;
+    if (!root_path || !file_path) {
+        return NULL;
+    }
+    size_t apsz = strlen(root_path) + strlen(file_path) + MCP_SEPARATOR;
+    char *abs_path = malloc(apsz);
+    snprintf(abs_path, apsz, "%s/%s", root_path, file_path);
+
     *out_abs_path = abs_path;
-    if (path_ok) {
+    if (cbm_path_within_root(root_path, abs_path)) {
         return read_file_lines(abs_path, start, end);
     }
     return NULL;
@@ -4569,6 +4582,14 @@ static void attach_result_source(yyjson_mut_doc *doc, yyjson_mut_val *item, sear
     }
     char abs_path[CBM_SZ_1K];
     snprintf(abs_path, sizeof(abs_path), "%s/%s", root_path, r->file);
+
+    /* Containment: a search result whose indexed path resolves outside the
+     * project root (a `..` segment, or a symlink/junction that discovery
+     * followed) must not be read back into the response. Same guard the
+     * snippet path already uses. */
+    if (!cbm_path_within_root(root_path, abs_path)) {
+        return;
+    }
 
     if (mode == MODE_FULL) {
         char *source = read_file_lines(abs_path, r->start_line, r->end_line);
