@@ -26,6 +26,15 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#ifdef _WIN32
+#include <process.h>
+#include <windows.h>
+#define cbm_writer_getpid _getpid
+#else
+#include <unistd.h>
+#define cbm_writer_getpid getpid
+#endif
+
 #define CBM_PAGE_SIZE 65536
 
 /* SQLite reserves the page containing the 1 GiB file offset (the "pending byte"
@@ -1706,6 +1715,8 @@ static uint32_t build_node_index_sorted(FILE *fp, uint32_t *next_page, CBMDumpNo
 typedef struct {
     FILE *fp;
     uint32_t next_page;
+    char final_path[CBM_SZ_4K];
+    char temp_path[CBM_SZ_4K];
     const char *project;
     const char *root_path;
     const char *indexed_at;
@@ -1718,6 +1729,65 @@ typedef struct {
     CBMDumpTokenVec *token_vecs;
     int token_vec_count;
 } write_db_ctx_t;
+
+static int make_writer_temp_path(const char *path, const void *token, char *out, size_t out_size) {
+    int n = snprintf(out, out_size, "%s.tmp.%ld.%p", path, (long)cbm_writer_getpid(), token);
+    return (n >= 0 && (size_t)n < out_size) ? 0 : ERR_WRITE_FAILED;
+}
+
+static void remove_sqlite_sidecars(const char *path) {
+    char sidecar[CBM_SZ_4K];
+    int n = snprintf(sidecar, sizeof(sidecar), "%s-wal", path);
+    if (n >= 0 && (size_t)n < sizeof(sidecar)) {
+        (void)remove(sidecar);
+    }
+    n = snprintf(sidecar, sizeof(sidecar), "%s-shm", path);
+    if (n >= 0 && (size_t)n < sizeof(sidecar)) {
+        (void)remove(sidecar);
+    }
+}
+
+static int replace_writer_output(const char *tmp, const char *path) {
+#ifdef _WIN32
+    return MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)
+               ? 0
+               : ERR_WRITE_FAILED;
+#else
+    return rename(tmp, path) == 0 ? 0 : ERR_WRITE_FAILED;
+#endif
+}
+
+static int discard_writer_output(write_db_ctx_t *w, int rc) {
+    if (w->fp) {
+        (void)fclose(w->fp);
+        w->fp = NULL;
+    }
+    if (w->temp_path[0]) {
+        (void)remove(w->temp_path);
+    }
+    return rc;
+}
+
+static int publish_writer_output(write_db_ctx_t *w) {
+    if (fclose(w->fp) != 0) {
+        w->fp = NULL;
+        if (w->temp_path[0]) {
+            (void)remove(w->temp_path);
+        }
+        return ERR_WRITE_FAILED;
+    }
+    w->fp = NULL;
+    if (!w->temp_path[0] || !w->final_path[0]) {
+        return 0;
+    }
+    remove_sqlite_sidecars(w->final_path);
+    if (replace_writer_output(w->temp_path, w->final_path) != 0) {
+        (void)remove(w->temp_path);
+        return ERR_WRITE_FAILED;
+    }
+    remove_sqlite_sidecars(w->final_path);
+    return 0;
+}
 
 /* Callback type for building a record from an item at index i. */
 typedef uint8_t *(*build_record_fn)(const void *items, int i, int *out_len);
@@ -1991,20 +2061,17 @@ static int write_db_after_nodes(write_db_ctx_t *w, uint32_t nodes_root) {
     int rc =
         write_one_table(w, &edges_root, w->edges, w->edge_count, adapt_build_edge, adapt_edge_id);
     if (rc != 0) {
-        (void)fclose(fp);
-        return rc;
+        return discard_writer_output(w, rc);
     }
     rc = write_one_table(w, &vectors_root, w->vectors, w->vector_count, adapt_build_vector,
                          adapt_vector_id);
     if (rc != 0) {
-        (void)fclose(fp);
-        return rc;
+        return discard_writer_output(w, rc);
     }
     rc = write_one_table(w, &token_vecs_root, w->token_vecs, w->token_vec_count,
                          adapt_build_token_vec, adapt_token_vec_id);
     if (rc != 0) {
-        (void)fclose(fp);
-        return rc;
+        return discard_writer_output(w, rc);
     }
     CBM_PROF_END_N("write_db", "1_data_tables", t_data, node_count + edge_count);
 
@@ -2057,8 +2124,7 @@ static int write_db_after_nodes(write_db_ctx_t *w, uint32_t nodes_root) {
                                  &idx_nodes_name_root, &idx_nodes_file_root, &autoindex_nodes_root);
     CBM_PROF_END_N("write_db", "4_node_indexes_seq", t_node_idx, node_count * NODE_SORT_THREADS);
     if (nrc != 0) {
-        (void)fclose(fp);
-        return nrc;
+        return discard_writer_output(w, nrc);
     }
 
     CBM_PROF_START(t_edge_idx);
@@ -2075,8 +2141,7 @@ static int write_db_after_nodes(write_db_ctx_t *w, uint32_t nodes_root) {
                                  &idx_edges_url_path_root, &autoindex_edges_root);
     CBM_PROF_END_N("write_db", "5_edge_indexes_seq", t_edge_idx, edge_count * EDGE_SORT_THREADS);
     if (erc != 0) {
-        (void)fclose(fp);
-        return erc;
+        return discard_writer_output(w, erc);
     }
 
     // Autoindex for projects(name TEXT PK) — single text column
@@ -2187,12 +2252,10 @@ static int write_db_after_nodes(write_db_ctx_t *w, uint32_t nodes_root) {
     int master_count = sizeof(master) / sizeof(master[0]);
     int rc2 = write_master_page1(fp, master, master_count, next_page);
     if (rc2 != 0) {
-        (void)fclose(fp);
-        return rc2;
+        return discard_writer_output(w, rc2);
     }
     pad_file_to_page_boundary(fp, next_page);
-    (void)fclose(fp);
-    return 0;
+    return publish_writer_output(w);
 }
 
 // --- Streaming writer (incremental bulk node-table append) ---
@@ -2206,13 +2269,20 @@ struct cbm_db_writer {
 };
 
 cbm_db_writer_t *cbm_writer_open(const char *path) {
-    FILE *fp = fopen(path, "wb");
-    if (!fp) {
-        return NULL;
-    }
     cbm_db_writer_t *w = (cbm_db_writer_t *)calloc(CBM_ALLOC_ONE, sizeof(*w));
     if (!w) {
-        (void)fclose(fp);
+        return NULL;
+    }
+    int n = snprintf(w->wc.final_path, sizeof(w->wc.final_path), "%s", path);
+    if (n < 0 || (size_t)n >= sizeof(w->wc.final_path) ||
+        make_writer_temp_path(path, w, w->wc.temp_path, sizeof(w->wc.temp_path)) != 0) {
+        free(w);
+        return NULL;
+    }
+    FILE *fp = fopen(w->wc.temp_path, "wb");
+    if (!fp) {
+        (void)remove(w->wc.temp_path);
+        free(w);
         return NULL;
     }
     w->wc.fp = fp;
@@ -2278,8 +2348,7 @@ int cbm_writer_finalize(cbm_db_writer_t *w, const char *project, const char *roo
     write_db_ctx_t wc = w->wc; /* value copy survives free(w) */
     free(w);
     if (err != 0) {
-        (void)fclose(wc.fp); /* wc is a value copy, valid after free(w) */
-        return err;
+        return discard_writer_output(&wc, err);
     }
     return write_db_after_nodes(&wc, nodes_root);
 }
