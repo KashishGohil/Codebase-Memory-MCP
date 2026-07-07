@@ -1376,7 +1376,7 @@ static void handle_layout(cbm_http_conn_t *c, const cbm_http_req_t *req) {
         return;
     }
 
-    int max_nodes = 50000;
+    int max_nodes = 0; /* 0 → layout default budget */
     if (cbm_http_query_param(req->query, "max_nodes", max_str, (int)sizeof(max_str))) {
         int v = atoi(max_str);
         if (v > 0)
