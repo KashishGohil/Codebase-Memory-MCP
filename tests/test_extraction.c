@@ -1237,6 +1237,52 @@ TEST(cpp_out_of_line_method_issue428) {
     PASS();
 }
 
+/* #946: C++ code commonly gates alternate out-of-line method signatures with
+ * #ifdef/#else/#endif. Raw tree-sitter can mis-balance the duplicate opening
+ * braces and lose methods that follow the conditional block; extraction must
+ * still recover later methods from the translation unit. */
+TEST(cpp_preproc_signature_gap_issue946) {
+    CBMFileResult *r =
+        extract("struct Rect {};\n"
+                "struct IBinder {};\n"
+                "struct IRegionSamplingListener {};\n"
+                "typedef int status_t;\n"
+                "\n"
+                "class SurfaceFlinger {\n"
+                "public:\n"
+                "    status_t addRegionSamplingListener(const Rect&, const IBinder&,\n"
+                "                                       const IRegionSamplingListener&, bool);\n"
+                "    status_t addRegionSamplingListener(const Rect&, const IBinder&,\n"
+                "                                       const IRegionSamplingListener&);\n"
+                "    void commit();\n"
+                "    void composite();\n"
+                "};\n"
+                "\n"
+                "#ifdef FLYME_GRAPHICS_EXTEND_LUMARGB\n"
+                "status_t SurfaceFlinger::addRegionSamplingListener(const Rect& samplingArea,\n"
+                "                                                   const IBinder& stopLayerHandle,\n"
+                "                                                   const IRegionSamplingListener& listener,\n"
+                "                                                   const bool rgbSample) {\n"
+                "#else\n"
+                "status_t SurfaceFlinger::addRegionSamplingListener(const Rect& samplingArea,\n"
+                "                                                   const IBinder& stopLayerHandle,\n"
+                "                                                   const IRegionSamplingListener& listener) {\n"
+                "#endif\n"
+                "    return 0;\n"
+                "}\n"
+                "\n"
+                "void SurfaceFlinger::commit() {}\n"
+                "\n"
+                "void SurfaceFlinger::composite() {}\n",
+                CBM_LANG_CPP, "t", "SurfaceFlinger.cpp");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    ASSERT(has_def(r, "Method", "commit"));
+    ASSERT(has_def(r, "Method", "composite"));
+    cbm_free_result(r);
+    PASS();
+}
+
 /* --- COBOL paragraph --- */
 TEST(cobol_paragraph) {
     CBMFileResult *r =
@@ -3601,6 +3647,7 @@ SUITE(extraction) {
     RUN_TEST(zig_struct);
     RUN_TEST(cpp_function);
     RUN_TEST(cpp_out_of_line_method_issue428);
+    RUN_TEST(cpp_preproc_signature_gap_issue946);
     RUN_TEST(cobol_paragraph);
     RUN_TEST(verilog_module);
     RUN_TEST(cuda_kernel);

@@ -148,6 +148,48 @@ void cbm_rw_push(CBMRWArray *arr, CBMArena *a, CBMReadWrite rw) {
     arr->items[arr->count++] = rw;
 }
 
+static bool def_label_is_preprocessed_callable(const char *label) {
+    return label &&
+           (strcmp(label, "Function") == 0 || strcmp(label, "Method") == 0);
+}
+
+static bool result_has_same_def_identity(const CBMFileResult *result, const CBMDefinition *def) {
+    if (!result || !def || !def->label || !def->qualified_name) {
+        return false;
+    }
+    for (int i = 0; i < result->defs.count; i++) {
+        const CBMDefinition *cur = &result->defs.items[i];
+        if (!cur->label || !cur->qualified_name) {
+            continue;
+        }
+        if (strcmp(cur->label, def->label) == 0 &&
+            strcmp(cur->qualified_name, def->qualified_name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void merge_missing_preprocessed_callables(CBMFileResult *dst, const CBMFileResult *src,
+                                                 CBMArena *arena) {
+    if (!dst || !src) {
+        return;
+    }
+    for (int i = 0; i < src->defs.count; i++) {
+        const CBMDefinition *def = &src->defs.items[i];
+        if (!def->qualified_name || !def->name) {
+            continue;
+        }
+        if (!def_label_is_preprocessed_callable(def->label)) {
+            continue;
+        }
+        if (result_has_same_def_identity(dst, def)) {
+            continue;
+        }
+        cbm_defs_push(&dst->defs, arena, *def);
+    }
+}
+
 void cbm_typerefs_push(CBMTypeRefArray *arr, CBMArena *a, CBMTypeRef tr) {
     GROW_ARRAY(arr, a);
     arr->items[arr->count++] = tr;
@@ -1052,8 +1094,10 @@ static CBMFileResult *cbm_extract_file_impl(const char *source, int source_len,
     // metrics. Remember the boundary.
     int orig_calls_count = result->calls.count;
 
-    // Second pass: preprocess C/C++/CUDA and extract additional macro-hidden calls.
-    // Defs keep original-source line numbers; only CALLS are extracted from expanded source.
+    // Second pass: preprocess C/C++/CUDA and extract additional macro-hidden
+    // callables/calls. Existing defs keep original-source line numbers; only
+    // callables missing from the raw tree-sitter pass are filled from expanded
+    // source so #ifdef/#else signature blocks cannot swallow later methods.
     if (language == CBM_LANG_C || language == CBM_LANG_CPP || language == CBM_LANG_CUDA) {
         uint64_t pp_start = now_ns();
         char *expanded = cbm_preprocess(source, source_len, rel_path, extra_defines, include_paths,
@@ -1092,6 +1136,14 @@ static CBMFileResult *cbm_extract_file_impl(const char *source, int source_len,
                         .module_qn = result->module_qn,
                         .root = pp_root,
                     };
+                    CBMFileResult pp_defs_result = {0};
+                    pp_defs_result.module_qn = result->module_qn;
+                    pp_defs_result.is_test_file = result->is_test_file;
+                    CBMExtractCtx pp_defs_ctx = pp_ctx;
+                    pp_defs_ctx.result = &pp_defs_result;
+                    cbm_extract_definition_nodes(&pp_defs_ctx);
+                    merge_missing_preprocessed_callables(result, &pp_defs_result, a);
+
                     // Re-run unified extraction on expanded source.
                     // This adds macro-expanded calls; duplicates with original calls are
                     // harmless (pipeline deduplicates by caller+callee).
