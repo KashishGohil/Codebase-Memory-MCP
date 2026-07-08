@@ -149,8 +149,7 @@ void cbm_rw_push(CBMRWArray *arr, CBMArena *a, CBMReadWrite rw) {
 }
 
 static bool def_label_is_preprocessed_callable(const char *label) {
-    return label &&
-           (strcmp(label, "Function") == 0 || strcmp(label, "Method") == 0);
+    return label && (strcmp(label, "Function") == 0 || strcmp(label, "Method") == 0);
 }
 
 static bool result_has_same_def_identity(const CBMFileResult *result, const CBMDefinition *def) {
