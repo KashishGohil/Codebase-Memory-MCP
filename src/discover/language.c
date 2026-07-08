@@ -542,6 +542,9 @@ static const ext_entry_t EXT_TABLE[] = {
 
     /* Scheme */
     {".scm", CBM_LANG_SCHEME},
+    {".clsp", CBM_LANG_CHIALISP},
+    {".clib", CBM_LANG_CHIALISP},
+    {".clinc", CBM_LANG_CHIALISP},
 
     /* Slang */
     {".slang", CBM_LANG_SLANG},
@@ -752,6 +755,7 @@ static const char *LANG_NAMES[CBM_LANG_COUNT] = {
     [CBM_LANG_DLANG] = "D",
     [CBM_LANG_NIM] = "Nim",
     [CBM_LANG_SCHEME] = "Scheme",
+    [CBM_LANG_CHIALISP] = "Chialisp",
     [CBM_LANG_FENNEL] = "Fennel",
     [CBM_LANG_FISH] = "Fish",
     [CBM_LANG_AWK] = "AWK",

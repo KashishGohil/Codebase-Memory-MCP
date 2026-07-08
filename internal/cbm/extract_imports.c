@@ -1788,6 +1788,42 @@ static void lisp_process_list(CBMExtractCtx *ctx, TSNode node) {
         return;
     }
 
+    /* Chialisp (cl-26) include/embed forms. W3: `(include *standard-cl-26*)`
+     * and any `*…*` dialect sigil is a compiler directive, NOT a file
+     * dependency — mirror the compiler's own `!name.starts_with("*")` filter
+     * and drop it (record only real `(include "file.clib")` edges). W4:
+     * `(embed-file NAME kind "file")` / `(compile-file NAME "file")` create a
+     * file dependency on the embedded/compiled artifact — emit it as an import
+     * edge (no dedicated EMBEDS edge type; see task note). */
+    if (ctx->language == CBM_LANG_CHIALISP) {
+        if (strcmp(hn, "include") == 0) {
+            for (uint32_t j = 1; j < nc; j++) {
+                TSNode mod_node = ts_node_named_child(node, j);
+                const char *mk = ts_node_type(mod_node);
+                if (strcmp(mk, "symbol") == 0 || strcmp(mk, "sym_lit") == 0) {
+                    char *sig = cbm_node_text(ctx->arena, mod_node, ctx->source);
+                    if (sig && sig[0] == '*') {
+                        continue; /* dialect sigil, not a file */
+                    }
+                }
+                lisp_push_module(ctx, mod_node);
+            }
+            return;
+        }
+        if (strcmp(hn, "embed-file") == 0 || strcmp(hn, "compile-file") == 0) {
+            /* the embedded/compiled path is the last string arg. */
+            for (uint32_t j = nc; j-- > 1;) {
+                TSNode arg = ts_node_named_child(node, j);
+                const char *ak = ts_node_type(arg);
+                if (strcmp(ak, "string") == 0 || strcmp(ak, "str_lit") == 0) {
+                    lisp_push_module(ctx, arg);
+                    break;
+                }
+            }
+            return;
+        }
+    }
+
     /* Plain import head: `(require :util)`, `(import ...)`, `(use ...)`. */
     if (strcmp(hn, "import") == 0 || strcmp(hn, "require") == 0 || strcmp(hn, "load") == 0 ||
         strcmp(hn, "use") == 0 || strcmp(hn, "include") == 0) {
@@ -2852,6 +2888,7 @@ void cbm_extract_imports(CBMExtractCtx *ctx) {
     case CBM_LANG_FENNEL:
     case CBM_LANG_COMMONLISP:
     case CBM_LANG_CLOJURE:
+    case CBM_LANG_CHIALISP:
         parse_lisp_imports(ctx);
         break;
     case CBM_LANG_STARLARK:

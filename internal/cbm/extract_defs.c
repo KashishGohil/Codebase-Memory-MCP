@@ -6079,36 +6079,157 @@ static bool lisp_is_def_head(const char *t) {
     return false;
 }
 
+/* Chialisp (cl-26) definition-form heads. Distinct from the Clojure/Scheme
+ * lisp_is_def_head set because Chialisp shares the generic `list` node kind:
+ * treating e.g. `mod`/`defun`/`defconstant` as defs must NOT leak into the
+ * other lisp gates (in Scheme `(mod x y)` is a call, not a def). Excludes the
+ * expression-local binding forms (let, assign, lambda and friends) which, if
+ * made defs, would fragment call attribution. Mirror: chialisp_head_is_def()
+ * in extract_unified.c. */
+static bool chialisp_is_def_head(const char *t) {
+    if (!t) {
+        return false;
+    }
+    static const char *heads[] = {"mod",
+                                  "defun",
+                                  "defun-inline",
+                                  "defmacro",
+                                  "defmac",
+                                  "defconstant",
+                                  "defconst",
+                                  "namespace",
+                                  "export",
+                                  "embed-file",
+                                  "compile-file",
+                                  NULL};
+    for (int i = 0; heads[i]; i++) {
+        if (strcmp(t, heads[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Chialisp W6: a `(q ...)`/`(quote ...)`/`(qq ...)` form is quoted DATA, not
+ * code — a def-head or call symbol inside it must not mint a node. True when
+ * any ancestor list of `node` has a quote head. Bounded walk (arena for the
+ * head-text read). */
+static bool lisp_node_in_quote(CBMArena *a, TSNode node, const char *source) {
+    TSNode cur = ts_node_parent(node);
+    for (int guard = 0; guard < 256 && !ts_node_is_null(cur); guard++) {
+        const char *ck = ts_node_type(cur);
+        if ((strcmp(ck, "list") == 0 || strcmp(ck, "list_lit") == 0) &&
+            ts_node_named_child_count(cur) > 0) {
+            TSNode h = ts_node_named_child(cur, 0);
+            const char *hk = ts_node_type(h);
+            if (strcmp(hk, "symbol") == 0 || strcmp(hk, "sym_lit") == 0) {
+                char *ht = cbm_node_text(a, h, source);
+                if (ht && (strcmp(ht, "q") == 0 || strcmp(ht, "quote") == 0 ||
+                           strcmp(ht, "qq") == 0)) {
+                    return true;
+                }
+            }
+        }
+        cur = ts_node_parent(cur);
+    }
+    return false;
+}
+
+/* i-th named child skipping `comment` nodes (comments are NAMED in the
+ * Chialisp/Scheme grammar and count in named-child indexing). Cheap insurance
+ * for a comment interleaved between a def head and its name. */
+static TSNode lisp_named_child_skip_comments(TSNode node, uint32_t want) {
+    uint32_t nc = ts_node_named_child_count(node);
+    uint32_t seen = 0;
+    for (uint32_t i = 0; i < nc; i++) {
+        TSNode c = ts_node_named_child(node, i);
+        if (strcmp(ts_node_type(c), "comment") == 0) {
+            continue;
+        }
+        if (seen == want) {
+            return c;
+        }
+        seen++;
+    }
+    TSNode null_node = {0};
+    return null_node;
+}
+
+/* Basename stem (no dir, no extension) of a path, into an arena string. */
+static char *lisp_path_stem(CBMArena *a, const char *path) {
+    if (!path) {
+        return NULL;
+    }
+    const char *slash = strrchr(path, '/');
+    const char *base = slash ? slash + 1 : path;
+    const char *dot = strrchr(base, '.');
+    size_t len = (dot && dot != base) ? (size_t)(dot - base) : strlen(base);
+    return cbm_arena_strndup(a, base, len);
+}
+
 static void extract_lisp_def(CBMExtractCtx *ctx, TSNode node) {
     CBMArena *a = ctx->arena;
+    bool chialisp = (ctx->language == CBM_LANG_CHIALISP);
     if (ts_node_named_child_count(node) < 2) {
         return;
     }
-    char *head = cbm_node_text(a, ts_node_named_child(node, 0), ctx->source);
-    if (!lisp_is_def_head(head)) {
+    TSNode head_node = chialisp ? lisp_named_child_skip_comments(node, 0) : ts_node_named_child(node, 0);
+    if (ts_node_is_null(head_node)) {
         return;
     }
-    TSNode target = ts_node_named_child(node, 1);
-    const char *tk = ts_node_type(target);
-    TSNode name_node = target;
-    // (define (foo args) ...) — the name is the head symbol of the nested list.
-    if ((strcmp(tk, "list") == 0 || strcmp(tk, "list_lit") == 0) &&
-        ts_node_named_child_count(target) > 0) {
-        name_node = ts_node_named_child(target, 0);
-    }
-    if (ts_node_is_null(name_node)) {
+    char *head = cbm_node_text(a, head_node, ctx->source);
+    bool is_def = chialisp ? chialisp_is_def_head(head) : lisp_is_def_head(head);
+    if (!is_def) {
         return;
     }
-    char *name = cbm_node_text(a, name_node, ctx->source);
+    /* W6: skip def-heads that live inside quoted data (cl-26 macros embed
+     * puzzle-shaped literals under `(q ...)`). */
+    if (chialisp && lisp_node_in_quote(a, node, ctx->source)) {
+        return;
+    }
+    /* W1: a top-level `(mod (ARGS) ...)` is the puzzle entry point; its
+     * named_child(1) is the arg-LIST, so the generic nested-name path would
+     * name the module after the first curried arg. Name it by the filename. */
+    char *name = NULL;
+    if (chialisp && strcmp(head, "mod") == 0) {
+        name = lisp_path_stem(a, ctx->rel_path);
+    } else {
+        TSNode target = chialisp ? lisp_named_child_skip_comments(node, 1) : ts_node_named_child(node, 1);
+        if (ts_node_is_null(target)) {
+            return;
+        }
+        const char *tk = ts_node_type(target);
+        TSNode name_node = target;
+        // (define (foo args) ...) — the name is the head symbol of the nested list.
+        if ((strcmp(tk, "list") == 0 || strcmp(tk, "list_lit") == 0) &&
+            ts_node_named_child_count(target) > 0) {
+            name_node = ts_node_named_child(target, 0);
+        }
+        if (ts_node_is_null(name_node)) {
+            return;
+        }
+        name = cbm_node_text(a, name_node, ctx->source);
+    }
     if (!name || !name[0]) {
         return;
     }
     /* struct/record/type defining forms produce a type node, not a callable
      * (Racket `(struct point ...)`, Clojure `(defrecord ...)`, etc.). */
     const char *lisp_label = "Function";
-    if (strcmp(head, "struct") == 0 || strcmp(head, "define-struct") == 0 ||
-        strcmp(head, "define-record-type") == 0 || strcmp(head, "defrecord") == 0 ||
-        strcmp(head, "deftype") == 0) {
+    if (chialisp) {
+        /* W3/W4 label map: constants, macros, module entry, embedded artifacts. */
+        if (strcmp(head, "mod") == 0 || strcmp(head, "export") == 0 ||
+            strcmp(head, "namespace") == 0) {
+            lisp_label = "Module";
+        } else if (strcmp(head, "defconstant") == 0 || strcmp(head, "defconst") == 0 ||
+                   strcmp(head, "embed-file") == 0 || strcmp(head, "compile-file") == 0) {
+            lisp_label = "Constant";
+        } else if (strcmp(head, "defmacro") == 0 || strcmp(head, "defmac") == 0) {
+            lisp_label = "Macro";
+        }
+    } else if (strcmp(head, "struct") == 0 || strcmp(head, "define-struct") == 0 ||
+               strcmp(head, "define-record-type") == 0 || strcmp(head, "defrecord") == 0 ||
+               strcmp(head, "deftype") == 0) {
         lisp_label = "Struct";
     } else if (strcmp(head, "definterface") == 0 || strcmp(head, "defprotocol") == 0) {
         lisp_label = "Interface";
@@ -6291,9 +6412,22 @@ static void walk_defs(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec *spec, 
         }
 
         if ((ctx->language == CBM_LANG_CLOJURE || ctx->language == CBM_LANG_RACKET ||
-             ctx->language == CBM_LANG_SCHEME) &&
+             ctx->language == CBM_LANG_SCHEME || ctx->language == CBM_LANG_CHIALISP) &&
             (strcmp(kind, "list") == 0 || strcmp(kind, "list_lit") == 0)) {
             extract_lisp_def(ctx, node);
+            /* Chialisp nests every helper `(defun …)` inside the top-level
+             * `(mod …)` (and `.clib` files wrap defuns in an enclosing list —
+             * W7). The generic function_node_types match below fires on every
+             * `list` and `continue`s WITHOUT descending, so those nested defs
+             * would be lost. Push children and continue here so the whole tree
+             * is walked. Gated to Chialisp — other lisps keep prior behavior. */
+            if (ctx->language == CBM_LANG_CHIALISP) {
+                uint32_t cc = ts_node_child_count(node);
+                for (int i = (int)cc - SKIP_CHAR; i >= 0; i--) {
+                    wd_push(&s, ts_node_child(node, (uint32_t)i), frame.enclosing_class_qn);
+                }
+                continue;
+            }
             // fall through: descend into children so nested defs are captured too
         }
 

@@ -494,7 +494,63 @@ static char *extract_erlang_callee(CBMArena *a, TSNode node, const char *source,
 // Lisp dialects: a call is a list (`list` / `list_lit`) whose head (first named
 // child) is the function symbol (`symbol` / `sym_lit`). Generic field/first-child
 // extraction misses it because the head is not an `identifier` node.
-static char *extract_lisp_callee(CBMArena *a, TSNode node, const char *source, const char *nk) {
+/* Chialisp W2: a head atom that is a CLVM primitive/opcode, or a Chialisp
+ * syntax/binding/intrinsic/def keyword, is NOT a call — emit no CALLS edge.
+ * Sourced from clvm_tools_rs KW_PAIRS / clvm_rs operator set (pinned in #38).
+ * The def/include heads are here too so `(defun …)`/`(include …)` heads never
+ * mint a phantom call. Real helpers that merely *look* primitive — sha256tree
+ * and the curry helpers — are deliberately absent, so they pass through. */
+static bool chialisp_head_is_not_call(const char *t) {
+    if (!t) {
+        return true;
+    }
+    static const char *filtered[] = {
+        /* --- 49 CLVM primitives (VM ops) --- */
+        "q", "a", "i", "c", "f", "r", "l", "x", "=", ">s", "sha256", "substr", "strlen", "concat",
+        "+", "-", "*", "/", "divmod", ">", "ash", "lsh", "logand", "logior", "logxor", "lognot",
+        "point_add", "pubkey_for_exp", "not", "any", "all", "softfork", "coinid", "g1_subtract",
+        "g1_multiply", "g1_negate", "g2_add", "g2_subtract", "g2_multiply", "g2_negate", "g1_map",
+        "g2_map", "bls_pairing_identity", "bls_verify", "modpow", "%", "secp256k1_verify",
+        "secp256r1_verify", "keccak256",
+        /* --- Chialisp syntax / binding / intrinsics (not calls or defs) --- */
+        "quote", "qq", "unquote", "&rest", "let", "let*", "assign", "assign-inline",
+        "assign-lambda", "lambda", "mod", "if", "list", "com", "opt", "@", "@*env*", "print",
+        /* --- def / include heads (own their own node kinds, never a call) --- */
+        "defun", "defun-inline", "defmacro", "defmac", "defconstant", "defconst", "namespace",
+        "export", "embed-file", "compile-file", "include", NULL};
+    for (int i = 0; filtered[i]; i++) {
+        if (strcmp(t, filtered[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* W6: true when any ancestor list of `node` has a quote head (`q`/`quote`/`qq`)
+ * — quoted data must not mint calls. */
+static bool chialisp_node_in_quote(CBMArena *a, TSNode node, const char *source) {
+    TSNode cur = ts_node_parent(node);
+    for (int guard = 0; guard < 256 && !ts_node_is_null(cur); guard++) {
+        const char *ck = ts_node_type(cur);
+        if ((strcmp(ck, "list") == 0 || strcmp(ck, "list_lit") == 0) &&
+            ts_node_named_child_count(cur) > 0) {
+            TSNode h = ts_node_named_child(cur, 0);
+            const char *hk = ts_node_type(h);
+            if (strcmp(hk, "symbol") == 0 || strcmp(hk, "sym_lit") == 0) {
+                char *ht = cbm_node_text(a, h, source);
+                if (ht && (strcmp(ht, "q") == 0 || strcmp(ht, "quote") == 0 ||
+                           strcmp(ht, "qq") == 0)) {
+                    return true;
+                }
+            }
+        }
+        cur = ts_node_parent(cur);
+    }
+    return false;
+}
+
+static char *extract_lisp_callee(CBMArena *a, TSNode node, const char *source, const char *nk,
+                                 CBMLanguage lang) {
     if (strcmp(nk, "list") != 0 && strcmp(nk, "list_lit") != 0) {
         return NULL;
     }
@@ -503,7 +559,16 @@ static char *extract_lisp_callee(CBMArena *a, TSNode node, const char *source, c
         const char *hk = ts_node_type(head);
         if (strcmp(hk, "symbol") == 0 || strcmp(hk, "sym_lit") == 0 ||
             strcmp(hk, "identifier") == 0) {
-            return cbm_node_text(a, head, source);
+            char *ht = cbm_node_text(a, head, source);
+            if (lang == CBM_LANG_CHIALISP) {
+                /* W2: drop CLVM ops / syntax / def-heads. W6: drop anything
+                 * inside quoted data. Real helpers (sha256tree, curry helpers)
+                 * survive both filters. */
+                if (chialisp_head_is_not_call(ht) || chialisp_node_in_quote(a, node, source)) {
+                    return NULL;
+                }
+            }
+            return ht;
         }
     }
     return NULL;
@@ -1061,8 +1126,9 @@ static char *extract_callee_lang_specific(CBMArena *a, TSNode node, const char *
     }
 
     if (lang == CBM_LANG_CLOJURE || lang == CBM_LANG_COMMONLISP || lang == CBM_LANG_SCHEME ||
-        lang == CBM_LANG_FENNEL || lang == CBM_LANG_RACKET || lang == CBM_LANG_EMACSLISP) {
-        return extract_lisp_callee(a, node, source, nk);
+        lang == CBM_LANG_FENNEL || lang == CBM_LANG_RACKET || lang == CBM_LANG_EMACSLISP ||
+        lang == CBM_LANG_CHIALISP) {
+        return extract_lisp_callee(a, node, source, nk, lang);
     }
     if (lang == CBM_LANG_FSHARP) {
         return extract_fsharp_callee(a, node, source, nk);

@@ -9,7 +9,7 @@ The grammars were originally vendored as bare `parser.c`+`scanner.c` with **no r
 
 ## Summary
 
-- Grammars: **159** — vendored-from-upstream: **142**, first-party/self-maintained: **12**, registry-disagreement: **5** (nim removed 2026-06-12; objectscript_udl + objectscript_routine added 2026-06-24; mojo added 2026-07-01 — see notes below)
+- Grammars: **160** — vendored-from-upstream: **142**, first-party/self-maintained: **13**, registry-disagreement: **5** (nim removed 2026-06-12; objectscript_udl + objectscript_routine added 2026-06-24; mojo added 2026-07-01; chialisp added 2026-07-06 — see notes below)
 - ABI distribution: **7×** ABI-13 **85×** ABI-14 **64×** ABI-15 (runtime ceiling is ABI 15; never vendor ABI 16 without a runtime upgrade)
 - Vendored copies missing LICENSE: **0** — all upstream LICENSE files restored 2026-06-11 (first-party grammars carry the project MIT license; `move` uses the Helix-listed upstream tzakian/tree-sitter-move MIT text, `zsh` uses georgeharker/tree-sitter-zsh MIT)
 - `verdict`: VERIFIED-BOTH = our source matches *both* registries; VERIFIED-NVIM/HELIX = matches one; registry-disagreement = registries name a different repo (listed separately); `vendor-maintained` = the language vendor's own grammar, not in nvim/Helix.
@@ -36,6 +36,7 @@ Guarded by the `contract_all_grammars_in_graph` graph-breadth test in
 |---|---|
 | ada      | `resolve_func_name`: `subprogram_body`/`subprogram_declaration` → `procedure_specification`/`function_specification` child's `name` field |
 | cairo    | `resolve_func_name`: `function_definition`/`function_signature` → `identifier` child |
+| chialisp | `extract_lisp_def`: `(defun/defconstant/defmacro/mod …)` head-symbol forms in `list`; `mod`/`export` named by filename; CLVM operators + dialect sigils filtered from calls/imports |
 | clojure  | `extract_lisp_def`: `(defn …)` / `(def …)` head-symbol forms in `list_lit` |
 | d        | `resolve_func_name`: `function_declaration` → `identifier` child |
 | fortran  | `resolve_func_name`: `subroutine`/`function` → inner `*_statement`'s `name` field |
@@ -229,6 +230,7 @@ upstream author (correctly retained). The table now records the true origin.
 | magma | 15 | ✅ project MIT |
 | protobuf | 13 | ✅ project MIT |
 | wolfram | 13 | ✅ project MIT |
+| chialisp | 14 | ✅ MIT — irulast clean-room (cl-26), authored from clvm_tools_rs frontend; to be upstreamed (added 2026-07-06) |
 
 ### Self-maintained forks (upstream license retained, byte-verified 2026-06-12)
 
