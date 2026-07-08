@@ -3503,7 +3503,8 @@ static void extract_class_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec
 
     TSNode name_node = ts_node_child_by_field_name(node, TS_FIELD("name"));
     // ObjC/Java: class name is first identifier child (Java fallback for enum_declaration)
-    if (ts_node_is_null(name_node) && (ctx->language == CBM_LANG_OBJC || ctx->language == CBM_LANG_JAVA)) {
+    if (ts_node_is_null(name_node) &&
+        (ctx->language == CBM_LANG_OBJC || ctx->language == CBM_LANG_JAVA)) {
         name_node = cbm_find_child_by_kind(node, "identifier");
     }
 
@@ -5857,8 +5858,8 @@ static void push_class_body_children(TSNode node, const CBMLangSpec *spec, wd_st
         const char *ck = ts_node_type(child);
         if (strcmp(ck, "field_declaration_list") == 0 || strcmp(ck, "class_body") == 0 ||
             strcmp(ck, "declaration_list") == 0 || strcmp(ck, "body") == 0 ||
-            strcmp(ck, "block") == 0 || strcmp(ck, "suite") == 0 ||
-            strcmp(ck, "enum_body") == 0 || strcmp(ck, "enum_body_declarations") == 0 ||
+            strcmp(ck, "block") == 0 || strcmp(ck, "suite") == 0 || strcmp(ck, "enum_body") == 0 ||
+            strcmp(ck, "enum_body_declarations") == 0 ||
             // Groovy class bodies are a `closure` node; routing through the
             // nested-class path keeps methods from being re-walked (and thus
             // double-extracted) as top-level functions. Gated to Groovy so other
