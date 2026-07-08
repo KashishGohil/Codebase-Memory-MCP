@@ -3,6 +3,7 @@
  */
 #include "test_framework.h"
 #include "../src/foundation/compat.h" /* cbm_setenv / cbm_unsetenv (Windows-portable) */
+#include "../src/foundation/constants.h" /* CBM_PATH_MAX */
 #include "../src/foundation/platform.h"
 #include "../src/foundation/system_info_internal.h"
 #include <stdlib.h>
@@ -302,6 +303,238 @@ TEST(cgroup_no_mem_files) {
     PASS();
 }
 
+/* ── /proc/self/cgroup resolver tests ─────────────────────────────
+ *
+ * These exercise the fix for the OOM-in-container bug: on Fargate/
+ * Docker/Kubernetes the process lives in a nested sub-cgroup, so the
+ * limits at "/sys/fs/cgroup/{memory.max,...}" report the host's
+ * totals instead of the container's cap. The resolver reads
+ * /proc/self/cgroup, parses out the sub-path, and composes the real
+ * file path. Each test mocks both files under /tmp. */
+
+TEST(resolve_v2_mem_sub_cgroup) {
+    char proc_root[64];
+    char fs_root[64];
+    ASSERT_EQ(cgroup_test_setup(proc_root, sizeof(proc_root)), 0);
+    ASSERT_EQ(cgroup_test_setup(fs_root, sizeof(fs_root)), 0);
+
+    /* Simulate Fargate: process sits at /ecs/task-abc/cont-def. */
+    ASSERT_EQ(cgroup_test_write(proc_root, "cgroup", "0::/ecs/task-abc/cont-def\n"), 0);
+    /* Mark the fs as v2 by writing cgroup.controllers at the root. */
+    ASSERT_EQ(cgroup_test_write(fs_root, "cgroup.controllers", "cpu memory io\n"), 0);
+    /* The container limit lives in the sub-cgroup, not the root. */
+    ASSERT_EQ(cgroup_test_write(fs_root, "ecs/task-abc/cont-def/memory.max",
+                                "8388608000\n"),
+              0);
+
+    char proc_path[128];
+    snprintf(proc_path, sizeof(proc_path), "%s/cgroup", proc_root);
+
+    char out[CBM_PATH_MAX];
+    int is_v2 = -1;
+    ASSERT_EQ(cbm_resolve_process_cgroup_mem_path(proc_path, fs_root,
+                                                  out, sizeof(out), &is_v2),
+              0);
+    ASSERT_EQ(is_v2, 1);
+    ASSERT_EQ(cbm_detect_cgroup_mem_file(out), (size_t)8388608000UL);
+
+    cgroup_test_teardown(proc_root);
+    cgroup_test_teardown(fs_root);
+    PASS();
+}
+
+TEST(resolve_v2_mem_root) {
+    char proc_root[64];
+    char fs_root[64];
+    ASSERT_EQ(cgroup_test_setup(proc_root, sizeof(proc_root)), 0);
+    ASSERT_EQ(cgroup_test_setup(fs_root, sizeof(fs_root)), 0);
+
+    /* Process really lives at the root — the special case that would
+     * otherwise produce a double-slash "//memory.max" path. */
+    ASSERT_EQ(cgroup_test_write(proc_root, "cgroup", "0::/\n"), 0);
+    ASSERT_EQ(cgroup_test_write(fs_root, "cgroup.controllers", "cpu memory\n"), 0);
+    ASSERT_EQ(cgroup_test_write(fs_root, "memory.max", "4194304000\n"), 0);
+
+    char proc_path[128];
+    snprintf(proc_path, sizeof(proc_path), "%s/cgroup", proc_root);
+
+    char out[CBM_PATH_MAX];
+    int is_v2 = -1;
+    ASSERT_EQ(cbm_resolve_process_cgroup_mem_path(proc_path, fs_root,
+                                                  out, sizeof(out), &is_v2),
+              0);
+    ASSERT_EQ(is_v2, 1);
+    ASSERT_EQ(cbm_detect_cgroup_mem_file(out), (size_t)4194304000UL);
+
+    cgroup_test_teardown(proc_root);
+    cgroup_test_teardown(fs_root);
+    PASS();
+}
+
+TEST(resolve_v2_mem_unlimited) {
+    char proc_root[64];
+    char fs_root[64];
+    ASSERT_EQ(cgroup_test_setup(proc_root, sizeof(proc_root)), 0);
+    ASSERT_EQ(cgroup_test_setup(fs_root, sizeof(fs_root)), 0);
+
+    ASSERT_EQ(cgroup_test_write(proc_root, "cgroup", "0::/ecs/x\n"), 0);
+    ASSERT_EQ(cgroup_test_write(fs_root, "cgroup.controllers", "memory\n"), 0);
+    ASSERT_EQ(cgroup_test_write(fs_root, "ecs/x/memory.max", "max\n"), 0);
+
+    char proc_path[128];
+    snprintf(proc_path, sizeof(proc_path), "%s/cgroup", proc_root);
+
+    char out[CBM_PATH_MAX];
+    int is_v2 = -1;
+    ASSERT_EQ(cbm_resolve_process_cgroup_mem_path(proc_path, fs_root,
+                                                  out, sizeof(out), &is_v2),
+              0);
+    ASSERT_EQ(cbm_detect_cgroup_mem_file(out), (size_t)0);
+
+    cgroup_test_teardown(proc_root);
+    cgroup_test_teardown(fs_root);
+    PASS();
+}
+
+TEST(resolve_v1_mem_sub_cgroup) {
+    char proc_root[64];
+    char fs_root[64];
+    ASSERT_EQ(cgroup_test_setup(proc_root, sizeof(proc_root)), 0);
+    ASSERT_EQ(cgroup_test_setup(fs_root, sizeof(fs_root)), 0);
+
+    /* Multi-line v1 /proc/self/cgroup; the memory controller sits in
+     * its own row. No cgroup.controllers file → detected as v1. */
+    const char *proc_content =
+        "12:memory:/docker/abc123\n"
+        "11:cpuset:/docker/abc123\n"
+        "9:cpu,cpuacct:/docker/abc123\n";
+    ASSERT_EQ(cgroup_test_write(proc_root, "cgroup", proc_content), 0);
+    ASSERT_EQ(cgroup_test_write(fs_root, "memory/docker/abc123/memory.limit_in_bytes",
+                                "2097152000"),
+              0);
+
+    char proc_path[128];
+    snprintf(proc_path, sizeof(proc_path), "%s/cgroup", proc_root);
+
+    char out[CBM_PATH_MAX];
+    int is_v2 = -1;
+    ASSERT_EQ(cbm_resolve_process_cgroup_mem_path(proc_path, fs_root,
+                                                  out, sizeof(out), &is_v2),
+              0);
+    ASSERT_EQ(is_v2, 0);
+    ASSERT_EQ(cbm_detect_cgroup_mem_file(out), (size_t)2097152000UL);
+
+    cgroup_test_teardown(proc_root);
+    cgroup_test_teardown(fs_root);
+    PASS();
+}
+
+TEST(resolve_v1_combined_controller_no_memory_match) {
+    /* If the /proc/self/cgroup dump only has "cpu,cpuacct" (i.e. no
+     * memory row at all), the memory resolver must fail cleanly rather
+     * than silently pick up an unrelated controller's path. */
+    char proc_root[64];
+    char fs_root[64];
+    ASSERT_EQ(cgroup_test_setup(proc_root, sizeof(proc_root)), 0);
+    ASSERT_EQ(cgroup_test_setup(fs_root, sizeof(fs_root)), 0);
+
+    ASSERT_EQ(cgroup_test_write(proc_root, "cgroup", "9:cpu,cpuacct:/docker/xyz\n"), 0);
+    /* No cgroup.controllers → v1. */
+
+    char proc_path[128];
+    snprintf(proc_path, sizeof(proc_path), "%s/cgroup", proc_root);
+
+    char out[CBM_PATH_MAX];
+    int is_v2 = -1;
+    ASSERT_EQ(cbm_resolve_process_cgroup_mem_path(proc_path, fs_root,
+                                                  out, sizeof(out), &is_v2),
+              -1);
+
+    cgroup_test_teardown(proc_root);
+    cgroup_test_teardown(fs_root);
+    PASS();
+}
+
+TEST(resolve_missing_proc_file_returns_error) {
+    /* Non-existent /proc/self/cgroup mock → resolver fails, caller
+     * falls back to the pre-fix root-reading behaviour. */
+    char fs_root[64];
+    ASSERT_EQ(cgroup_test_setup(fs_root, sizeof(fs_root)), 0);
+    ASSERT_EQ(cgroup_test_write(fs_root, "cgroup.controllers", "memory\n"), 0);
+
+    char out[CBM_PATH_MAX];
+    int is_v2 = -1;
+    ASSERT_EQ(cbm_resolve_process_cgroup_mem_path(
+                  "/tmp/definitely-does-not-exist-cbm-cgroup-xyz",
+                  fs_root, out, sizeof(out), &is_v2),
+              -1);
+
+    /* And the root-reading fallback still works on the mock. */
+    ASSERT_EQ(cbm_detect_cgroup_mem(fs_root), (size_t)0);
+
+    cgroup_test_teardown(fs_root);
+    PASS();
+}
+
+TEST(resolve_v2_cpu_sub_cgroup) {
+    char proc_root[64];
+    char fs_root[64];
+    ASSERT_EQ(cgroup_test_setup(proc_root, sizeof(proc_root)), 0);
+    ASSERT_EQ(cgroup_test_setup(fs_root, sizeof(fs_root)), 0);
+
+    ASSERT_EQ(cgroup_test_write(proc_root, "cgroup", "0::/ecs/task-abc/cont-def\n"), 0);
+    ASSERT_EQ(cgroup_test_write(fs_root, "cgroup.controllers", "cpu memory\n"), 0);
+    ASSERT_EQ(cgroup_test_write(fs_root, "ecs/task-abc/cont-def/cpu.max",
+                                "200000 100000\n"),
+              0);
+
+    char proc_path[128];
+    snprintf(proc_path, sizeof(proc_path), "%s/cgroup", proc_root);
+
+    char out[CBM_PATH_MAX];
+    int is_v2 = -1;
+    ASSERT_EQ(cbm_resolve_process_cgroup_cpu_path(proc_path, fs_root,
+                                                  out, sizeof(out), &is_v2),
+              0);
+    ASSERT_EQ(is_v2, 1);
+    ASSERT_EQ(cbm_detect_cgroup_cpus_file(out, is_v2), 2);
+
+    cgroup_test_teardown(proc_root);
+    cgroup_test_teardown(fs_root);
+    PASS();
+}
+
+TEST(resolve_v1_cpu_combined_controller) {
+    /* v1 lists cpu as "cpu,cpuacct" — must still resolve. */
+    char proc_root[64];
+    char fs_root[64];
+    ASSERT_EQ(cgroup_test_setup(proc_root, sizeof(proc_root)), 0);
+    ASSERT_EQ(cgroup_test_setup(fs_root, sizeof(fs_root)), 0);
+
+    const char *proc_content =
+        "12:memory:/docker/abc\n"
+        "9:cpu,cpuacct:/docker/abc\n";
+    ASSERT_EQ(cgroup_test_write(proc_root, "cgroup", proc_content), 0);
+    /* v1 cpu path is a directory containing quota/period. */
+    ASSERT_EQ(cgroup_test_write(fs_root, "cpu/docker/abc/cpu.cfs_quota_us", "400000"), 0);
+    ASSERT_EQ(cgroup_test_write(fs_root, "cpu/docker/abc/cpu.cfs_period_us", "100000"), 0);
+
+    char proc_path[128];
+    snprintf(proc_path, sizeof(proc_path), "%s/cgroup", proc_root);
+
+    char out[CBM_PATH_MAX];
+    int is_v2 = -1;
+    ASSERT_EQ(cbm_resolve_process_cgroup_cpu_path(proc_path, fs_root,
+                                                  out, sizeof(out), &is_v2),
+              0);
+    ASSERT_EQ(is_v2, 0);
+    ASSERT_EQ(cbm_detect_cgroup_cpus_file(out, is_v2), 4);
+
+    cgroup_test_teardown(proc_root);
+    cgroup_test_teardown(fs_root);
+    PASS();
+}
+
 #endif /* __linux__ */
 
 SUITE(platform) {
@@ -328,5 +561,13 @@ SUITE(platform) {
     RUN_TEST(cgroup_v1_mem);
     RUN_TEST(cgroup_v1_mem_unlimited_sentinel);
     RUN_TEST(cgroup_no_mem_files);
+    RUN_TEST(resolve_v2_mem_sub_cgroup);
+    RUN_TEST(resolve_v2_mem_root);
+    RUN_TEST(resolve_v2_mem_unlimited);
+    RUN_TEST(resolve_v1_mem_sub_cgroup);
+    RUN_TEST(resolve_v1_combined_controller_no_memory_match);
+    RUN_TEST(resolve_missing_proc_file_returns_error);
+    RUN_TEST(resolve_v2_cpu_sub_cgroup);
+    RUN_TEST(resolve_v1_cpu_combined_controller);
 #endif
 }
