@@ -1129,6 +1129,146 @@ TEST(pipeline_tsjs_receiver_parallel_keeps_service_edges) {
     PASS();
 }
 
+/* Native `fetch()` (#856), sequential path (< 50 files → pass_calls.c). A bare
+ * unqualified call to the global fetch API has no import and no local
+ * definition anywhere in this project, so registry resolution comes back
+ * empty; classify it as HTTP_CALLS via the same #523-style empty-resolution
+ * fallback used for axios/requests. A member call on an unrelated receiver
+ * (`repo.fetch()`) must NOT be swept in — its callee_name is "repo.fetch",
+ * not the bare "fetch" this check matches exactly. */
+TEST(pipeline_native_fetch_classified_as_http_calls) {
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "/tmp/cbm_fetch_XXXXXX");
+    if (!cbm_mkdtemp(tmp)) {
+        FAIL("tmpdir");
+    }
+
+    write_temp_file(tmp, "src/api.ts",
+                    "export function loadData(): unknown {\n"
+                    "  return fetch('/api/data');\n"
+                    "}\n");
+    /* `repo.fetch()` — a method call, not the global. Must not over-match. */
+    write_temp_file(tmp, "src/repo.ts",
+                    "export function useRepo(repo: { fetch: () => unknown }): unknown {\n"
+                    "  return repo.fetch();\n"
+                    "}\n");
+
+    char db_path[512];
+    snprintf(db_path, sizeof(db_path), "%s/fetch.db", tmp);
+    cbm_pipeline_t *p = cbm_pipeline_new(tmp, db_path, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+    const char *project = cbm_pipeline_project_name(p);
+
+    cbm_store_t *s = cbm_store_open_path(db_path);
+    ASSERT_NOT_NULL(s);
+
+    ASSERT_GTE(cbm_store_count_edges_by_type(s, project, "HTTP_CALLS"), 1);
+    /* Exactly the bare call, not the method call too. */
+    ASSERT_EQ(cbm_store_count_edges_by_type(s, project, "HTTP_CALLS"), 1);
+
+    cbm_store_close(s);
+    cbm_pipeline_free(p);
+    th_rmtree(tmp);
+    PASS();
+}
+
+/* Native `fetch()` (#856), parallel path (>= 50 files -> pass_parallel.c's
+ * resolve_file_calls). Mirrors pipeline_native_fetch_classified_as_http_calls
+ * but forces the parallel resolver, since the empty-resolution fallback is a
+ * separate implementation there (resolve_file_calls calls
+ * emit_http_async_service_edge directly rather than through emit_service_edge,
+ * which would otherwise re-derive CBM_SVC_NONE for "fetch" and silently fall
+ * through to a plain CALLS edge). */
+TEST(pipeline_native_fetch_parallel_classified_as_http_calls) {
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "/tmp/cbm_fetch_par_XXXXXX");
+    if (!cbm_mkdtemp(tmp)) {
+        FAIL("tmpdir");
+    }
+
+    write_temp_file(tmp, "src/api.ts",
+                    "export function loadData(): unknown {\n"
+                    "  return fetch('/api/data');\n"
+                    "}\n");
+    for (int i = 0; i < 52; i++) {
+        char name[64];
+        char body[128];
+        snprintf(name, sizeof(name), "src/filler%d.ts", i);
+        snprintf(body, sizeof(body), "export function filler%d(): number {\n  return %d;\n}\n", i,
+                 i);
+        write_temp_file(tmp, name, body);
+    }
+
+    char *old_workers = getenv("CBM_WORKERS");
+    char *saved = old_workers ? strdup(old_workers) : NULL;
+    cbm_setenv("CBM_WORKERS", "4", 1); /* force parallel regardless of host cores */
+
+    char db_path[512];
+    snprintf(db_path, sizeof(db_path), "%s/fetch_par.db", tmp);
+    cbm_pipeline_t *p = cbm_pipeline_new(tmp, db_path, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+    const char *project = cbm_pipeline_project_name(p);
+
+    cbm_store_t *s = cbm_store_open_path(db_path);
+    ASSERT_NOT_NULL(s);
+
+    ASSERT_GTE(cbm_store_count_edges_by_type(s, project, "HTTP_CALLS"), 1);
+
+    cbm_store_close(s);
+    cbm_pipeline_free(p);
+    if (saved) {
+        cbm_setenv("CBM_WORKERS", saved, 1);
+        free(saved);
+    } else {
+        cbm_unsetenv("CBM_WORKERS");
+    }
+    th_rmtree(tmp);
+    PASS();
+}
+
+/* Native `fetch()` (#856): a LOCAL `fetch` definition must win over the
+ * global-API guess. Registry resolution finds this project's own top-level
+ * `fetch` function, so the call is a plain CALLS edge to it — never
+ * HTTP_CALLS. Isolated in its own project: the registry's project-wide
+ * unique-name fallback means a local `fetch` anywhere in a project can
+ * legitimately capture bare `fetch()` calls project-wide, so this must not
+ * share a project with the genuine-native-fetch test above. */
+TEST(pipeline_local_fetch_shadow_not_classified_as_http) {
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "/tmp/cbm_fetch_shadow_XXXXXX");
+    if (!cbm_mkdtemp(tmp)) {
+        FAIL("tmpdir");
+    }
+
+    write_temp_file(tmp, "src/local_fetch.ts",
+                    "function fetch(url: string): string {\n"
+                    "  return 'mock:' + url;\n"
+                    "}\n"
+                    "export function useLocalFetch(): string {\n"
+                    "  return fetch('/api/data');\n"
+                    "}\n");
+
+    char db_path[512];
+    snprintf(db_path, sizeof(db_path), "%s/fetch_shadow.db", tmp);
+    cbm_pipeline_t *p = cbm_pipeline_new(tmp, db_path, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+    const char *project = cbm_pipeline_project_name(p);
+
+    cbm_store_t *s = cbm_store_open_path(db_path);
+    ASSERT_NOT_NULL(s);
+
+    ASSERT_EQ(cbm_store_count_edges_by_type(s, project, "HTTP_CALLS"), 0);
+    ASSERT_TRUE(cross_file_call_exists(s, project, "useLocalFetch", "fetch"));
+
+    cbm_store_close(s);
+    cbm_pipeline_free(p);
+    th_rmtree(tmp);
+    PASS();
+}
+
 /* ── Git history pass tests ─────────────────────────────────────── */
 
 TEST(githistory_is_trackable) {
@@ -6734,6 +6874,9 @@ SUITE(pipeline) {
     RUN_TEST(pipeline_incremental_preserves_cross_file_calls);
     RUN_TEST(pipeline_tsjs_receiver_suppresses_weak_method_edge);
     RUN_TEST(pipeline_tsjs_receiver_parallel_keeps_service_edges);
+    RUN_TEST(pipeline_native_fetch_classified_as_http_calls);
+    RUN_TEST(pipeline_native_fetch_parallel_classified_as_http_calls);
+    RUN_TEST(pipeline_local_fetch_shadow_not_classified_as_http);
     /* Git history pass */
     RUN_TEST(githistory_is_trackable);
     RUN_TEST(githistory_compute_coupling);

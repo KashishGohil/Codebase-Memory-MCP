@@ -506,8 +506,15 @@ static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
          * HTTP_CALLS/ASYNC_CALLS edge directly (target is a synthesized route
          * node, not the absent library). Without this the call is dropped and
          * cross-repo matching finds no edge to match (#523). The parallel path
-         * has the equivalent empty-resolution fallback in resolve_file_calls. */
+         * has the equivalent empty-resolution fallback in resolve_file_calls.
+         *
+         * Native `fetch()` (#856) belongs here too, not in the substring
+         * tables above: it only counts as the global API once resolution has
+         * already failed to find a local/imported `fetch` definition. */
         cbm_svc_kind_t esvc = cbm_service_pattern_match(call->callee_name);
+        if (esvc == CBM_SVC_NONE && cbm_service_pattern_is_global_fetch(call->callee_name)) {
+            esvc = CBM_SVC_HTTP;
+        }
         if (esvc == CBM_SVC_HTTP || esvc == CBM_SVC_ASYNC) {
             const char *u = call->first_string_arg;
             bool has_url_or_topic = u && u[0] != '\0' &&
