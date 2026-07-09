@@ -1868,10 +1868,10 @@ static void emit_vector_results(yyjson_mut_doc *doc, yyjson_mut_val *root, const
     yyjson_mut_val *results = yyjson_mut_arr(doc);
     for (int v = start; v < start + vcount; v++) {
         yyjson_mut_val *vitem = yyjson_mut_obj(doc);
-        yyjson_mut_obj_add_str(doc, vitem, "name", vresults[v].name);
-        yyjson_mut_obj_add_str(doc, vitem, "qualified_name", vresults[v].qualified_name);
-        yyjson_mut_obj_add_str(doc, vitem, "label", vresults[v].label);
-        yyjson_mut_obj_add_str(doc, vitem, "file_path", vresults[v].file_path);
+        yyjson_mut_obj_add_strcpy(doc, vitem, "name", vresults[v].name);
+        yyjson_mut_obj_add_strcpy(doc, vitem, "qualified_name", vresults[v].qualified_name);
+        yyjson_mut_obj_add_strcpy(doc, vitem, "label", vresults[v].label);
+        yyjson_mut_obj_add_strcpy(doc, vitem, "file_path", vresults[v].file_path);
         yyjson_mut_obj_add_real(doc, vitem, "score", vresults[v].score);
         yyjson_mut_arr_add_val(results, vitem);
     }
