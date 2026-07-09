@@ -4,7 +4,7 @@
 
 codebase-memory-mcp interacts deeply with your filesystem. It reads source files across your entire codebase, writes to agent configuration files, and spawns background processes. This is inherent to what it does — not a bug.
 
-**If you are uncomfortable with these access patterns**, please audit the source code before running. The full source is available in this repository. Every release binary is reproducibly built from this source and can be independently verified via SLSA provenance, Sigstore signatures, and SHA-256 checksums (see [Verification](#verification) below).
+**If you are uncomfortable with these access patterns**, please audit the source code before running. The full source is available in this repository. Release binaries produced by the current release pipeline are verifiably built from this source and can be independently verified via SLSA Build Level 3 provenance, Sigstore signatures, and SHA-256 checksums (see [Verification](#verification) below).
 
 We are humans and can make mistakes. We take security seriously — it is Priority #1 for this project — but we cannot guarantee perfection. By using this software you accept responsibility for evaluating whether it meets your own security requirements.
 
@@ -122,12 +122,20 @@ This project implements multiple layers of security verification. Every release 
 
 Releases are created as **drafts** (invisible to users) and only published after all verification passes:
 
-1. **SLSA build provenance** — cryptographic attestation proving each binary was built by GitHub Actions from this repository
+1. **SLSA Build Level 3 provenance for release binaries** — cryptographic attestation generated inside the trusted GitHub Actions build workflow immediately after each release archive is produced
 2. **Sigstore cosign signing** — keyless digital signatures verifiable by anyone
-3. **SBOM** — Software Bill of Materials (CycloneDX) listing all vendored dependencies
+3. **SBOM** — Software Bill of Materials (SPDX) listing all vendored dependencies
 4. **SHA-256 checksums** — published with every release
 5. **VirusTotal scanning** — all binaries scanned by 70+ antivirus engines (zero-tolerance: any detection blocks the release)
 6. **OpenSSF Scorecard** — repository security health score
+
+Scope of the SLSA claim: this is a build provenance claim for release
+artifacts. It proves the attested archive was produced by the repository's
+trusted GitHub-hosted build workflow from repository source. It is not
+third-party certification, it is not retroactive to older releases, and it does
+not mean the source code is vulnerability-free or that maintainers cannot change
+source. Consumers should verify the signer workflow, not only repository
+ownership.
 
 If ANY antivirus engine flags ANY binary, the release stays as a draft and is not published until the issue is investigated and resolved.
 
@@ -145,8 +153,10 @@ If ANY antivirus engine flags ANY binary, the release stays as a draft and is no
 Users can independently verify any release binary:
 
 ```bash
-# SLSA provenance (proves binary came from this repo's CI)
-gh attestation verify <downloaded-file> --repo DeusData/codebase-memory-mcp
+# SLSA Build Level 3 provenance for release binaries
+gh attestation verify <downloaded-file> \
+  --repo DeusData/codebase-memory-mcp \
+  --signer-workflow DeusData/codebase-memory-mcp/.github/workflows/_build.yml
 
 # Sigstore cosign (keyless signature)
 cosign verify-blob --bundle <file>.bundle <file>

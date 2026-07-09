@@ -92,6 +92,14 @@ struct cbm_pipeline {
     char **excluded_dirs;
     int excluded_count;
 
+    /* Individual files dropped by ignore rules during discovery (#963
+     * "purposely not indexed" — by design, not failures). Stored entries are
+     * capped in discovery; ignored_total keeps the uncapped count so
+     * truncation stays explicit. Owned by the pipeline. */
+    cbm_ignored_file_t *ignored_files;
+    int ignored_count;
+    int ignored_total;
+
     /* Per-file indexing failures (skipped files) surfaced via MCP/CLI/logfile
      * (Stage 2 / Track B). A skip is the expected handled outcome of a bad or
      * oversized file — the run still succeeds ("indexed"). Owned by the
@@ -215,6 +223,10 @@ void cbm_pipeline_free(cbm_pipeline_t *p) {
     cbm_discover_free_excluded(p->excluded_dirs, p->excluded_count);
     p->excluded_dirs = NULL;
     p->excluded_count = 0;
+    cbm_discover_free_ignored(p->ignored_files, p->ignored_count);
+    p->ignored_files = NULL;
+    p->ignored_count = 0;
+    p->ignored_total = 0;
     for (int i = 0; i < p->file_errors_count; i++) {
         free(p->file_errors[i].path);
         free(p->file_errors[i].reason);
@@ -312,6 +324,19 @@ void cbm_pipeline_get_file_errors(const cbm_pipeline_t *p, cbm_file_error_t **ou
     }
     if (count) {
         *count = p ? p->file_errors_count : 0;
+    }
+}
+
+void cbm_pipeline_get_ignored(const cbm_pipeline_t *p, cbm_ignored_file_t **out, int *count,
+                              int *total) {
+    if (out) {
+        *out = p ? p->ignored_files : NULL;
+    }
+    if (count) {
+        *count = p ? p->ignored_count : 0;
+    }
+    if (total) {
+        *total = p ? p->ignored_total : 0;
     }
 }
 
@@ -1114,6 +1139,50 @@ static int dump_and_persist_hashes(cbm_pipeline_t *p, const cbm_file_info_t *fil
         }
         CBM_PROF_END_N("persist", "4_file_hashes", t_fh, file_count);
 
+        /* Coverage rows (#963): a full run's file_errors plus the by-design
+         * discovery exclusions are the complete coverage truth for the
+         * project. The dump recreated the DB file, so the separate
+         * index_coverage table starts empty — write only when there is
+         * something to record (AFTER hashes, so the deleted-file prune inside
+         * replace sees the live file set; not_indexed_* kinds are exempt from
+         * that prune — deliberately-unindexed paths have no hash rows). */
+        int cov_total = p->file_errors_count + p->excluded_count + p->ignored_count;
+        if (cov_total > 0) {
+            cbm_coverage_row_t *cov =
+                (cbm_coverage_row_t *)malloc((size_t)cov_total * sizeof(*cov));
+            if (cov) {
+                int cn = 0;
+                for (int i = 0; i < p->file_errors_count; i++) {
+                    cov[cn].rel_path = p->file_errors[i].path;
+                    cov[cn].kind = p->file_errors[i].phase;
+                    cov[cn].detail = p->file_errors[i].reason;
+                    cn++;
+                }
+                for (int i = 0; i < p->excluded_count; i++) {
+                    cov[cn].rel_path = p->excluded_dirs[i];
+                    cov[cn].kind = "not_indexed_dir";
+                    cov[cn].detail = "excluded subtree";
+                    cn++;
+                }
+                for (int i = 0; i < p->ignored_count; i++) {
+                    cov[cn].rel_path = p->ignored_files[i].rel_path;
+                    cov[cn].kind = "not_indexed_file";
+                    cov[cn].detail = p->ignored_files[i].reason;
+                    cn++;
+                }
+                if (cbm_store_coverage_replace(hash_store, p->project_name, cov, cn) !=
+                    CBM_STORE_OK) {
+                    cbm_log_error("pipeline.err", "phase", "persist_coverage", "project",
+                                  p->project_name);
+                }
+                free(cov);
+            }
+        }
+        if (p->ignored_total > p->ignored_count) {
+            cbm_log_warn("index.ignored_capped", "stored", itoa_buf(p->ignored_count), "total",
+                         itoa_buf(p->ignored_total));
+        }
+
         /* FTS5 backfill: populate nodes_fts with camelCase-split names.
          * Contentless FTS5 requires the special 'delete-all' command instead of
          * DELETE FROM to wipe prior rows (there's no underlying content table).
@@ -1296,13 +1365,19 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
     cbm_file_info_t *files = NULL;
     int file_count = 0;
     /* Capture skipped subtrees on the pipeline so the MCP layer can report
-     * which directories were excluded (#411). Replace any prior list (e.g. a
-     * re-run on the same pipeline) to avoid leaking the previous one. */
+     * which directories were excluded (#411), plus the individually-ignored
+     * files (#963 "purposely not indexed"). Replace any prior lists (e.g. a
+     * re-run on the same pipeline) to avoid leaking the previous ones. */
     cbm_discover_free_excluded(p->excluded_dirs, p->excluded_count);
     p->excluded_dirs = NULL;
     p->excluded_count = 0;
-    int rc = cbm_discover_ex(p->repo_path, &opts, &files, &file_count, &p->excluded_dirs,
-                             &p->excluded_count);
+    cbm_discover_free_ignored(p->ignored_files, p->ignored_count);
+    p->ignored_files = NULL;
+    p->ignored_count = 0;
+    p->ignored_total = 0;
+    int rc = cbm_discover_ex2(p->repo_path, &opts, &files, &file_count, &p->excluded_dirs,
+                              &p->excluded_count, &p->ignored_files, &p->ignored_count,
+                              &p->ignored_total);
     if (rc != 0) {
         cbm_log_error("pipeline.err", "phase", "discover", "rc", itoa_buf(rc));
     }

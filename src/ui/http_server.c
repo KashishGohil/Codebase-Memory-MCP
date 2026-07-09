@@ -42,6 +42,7 @@
 #include <errno.h>
 #include <math.h>
 #include <stdatomic.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -115,7 +116,13 @@ static void handle_ui_config(cbm_http_conn_t *c, const cbm_http_req_t *req) {
     if (cfg) {
         cbm_config_close(cfg);
     }
-    cbm_http_replyf(c, 200, g_cors_json, "{\"lang\":\"%s\"}", lang_buf);
+    /* upstream_issues_url: where the missed-coverage callout (#963) sends
+     * edge-case reports. Served from the backend on purpose — the UI security
+     * audit forbids hardcoded external URLs in graph-ui source (external
+     * targets must come from an auditable backend response, same pattern as
+     * the /api/repo-info deep-links). */
+    cbm_http_replyf(c, 200, g_cors_json, "{\"lang\":\"%s\",\"upstream_issues_url\":\"%s\"}",
+                    lang_buf, "https://github.com/DeusData/codebase-memory-mcp/issues/new");
 }
 
 /* ── Server state ─────────────────────────────────────────────── */
@@ -147,16 +154,29 @@ static index_job_t g_index_jobs[MAX_INDEX_JOBS];
 
 /* ── Serve embedded asset ─────────────────────────────────────── */
 
+/* Content-Security-Policy for the served UI. No external host appears in any
+ * directive, so the browser cannot load or connect to anything off-origin —
+ * this ENFORCES the airgap (the code makes no external calls; this stops a
+ * future dependency or injected content from doing so). connect-src 'self'
+ * confines fetch/XHR/WebSocket to the local server. The 'self'/data:/blob:/
+ * 'unsafe-inline'-style/'wasm-unsafe-eval' allowances cover the bundled app's
+ * own needs (React inline styles, three.js textures/workers/WASM). */
+#define CBM_UI_CSP                                                       \
+    "Content-Security-Policy: default-src 'self'; connect-src 'self'; "  \
+    "img-src 'self' data: blob:; script-src 'self' 'wasm-unsafe-eval'; " \
+    "style-src 'self' 'unsafe-inline'; font-src 'self' data:; "          \
+    "worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'\r\n"
+
 static bool serve_embedded(cbm_http_conn_t *c, const char *path) {
     const cbm_embedded_file_t *f = cbm_embedded_lookup(path);
     if (!f)
         return false;
 
     /* Build headers with correct Content-Type for this asset */
-    char hdrs[512];
+    char hdrs[1024];
     snprintf(hdrs, sizeof(hdrs),
              "%sContent-Type: %s\r\n"
-             "Cache-Control: public, max-age=31536000, immutable\r\n",
+             "Cache-Control: public, max-age=31536000, immutable\r\n" CBM_UI_CSP,
              g_cors, f->content_type);
 
     cbm_http_reply_buf(c, 200, hdrs, f->data, (size_t)f->size);
@@ -389,6 +409,35 @@ void cbm_ui_log_append(const char *line) {
     cbm_mutex_unlock(&g_log_mutex);
 }
 
+/* Append a printf-formatted fragment at *pos within a bufsz buffer, never
+ * advancing *pos past bufsz. snprintf returns the length it WOULD have written,
+ * so `pos += snprintf(...)` runs pos past the end on truncation and the next
+ * call computes a wrapped (huge) remaining size and writes out of bounds. This
+ * clamps: on truncation *pos is pinned at bufsz and further appends are no-ops. */
+static void http_appendf(char *buf, size_t bufsz, int *pos, const char *fmt, ...)
+    __attribute__((format(printf, 4, 5)));
+static void http_appendf(char *buf, size_t bufsz, int *pos, const char *fmt, ...) {
+    if (*pos < 0) {
+        return;
+    }
+    if ((size_t)*pos >= bufsz) {
+        *pos = (int)bufsz;
+        return;
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf + *pos, bufsz - (size_t)*pos, fmt, ap);
+    va_end(ap);
+    if (n < 0) {
+        return;
+    }
+    if ((size_t)n >= bufsz - (size_t)*pos) {
+        *pos = (int)bufsz;
+    } else {
+        *pos += n;
+    }
+}
+
 /* GET /api/logs?lines=N — returns last N log lines */
 static void handle_logs(cbm_http_conn_t *c, const cbm_http_req_t *req) {
     char lines_str[16] = {0};
@@ -414,7 +463,7 @@ static void handle_logs(cbm_http_conn_t *c, const cbm_http_req_t *req) {
     }
 
     int pos = 0;
-    pos += snprintf(buf + pos, buf_size - (size_t)pos, "{\"lines\":[");
+    http_appendf(buf, buf_size, &pos, "{\"lines\":[");
     for (int i = 0; i < count; i++) {
         int idx = (start + i) % LOG_RING_SIZE;
         if (i > 0)
@@ -439,7 +488,7 @@ static void handle_logs(cbm_http_conn_t *c, const cbm_http_req_t *req) {
         buf[pos++] = '"';
     }
     cbm_mutex_unlock(&g_log_mutex);
-    pos += snprintf(buf + pos, buf_size - (size_t)pos, "],\"total\":%d}", total);
+    http_appendf(buf, buf_size, &pos, "],\"total\":%d}", total);
 
     cbm_http_replyf(c, 200, g_cors_json, "%s", buf);
     free(buf);
@@ -474,10 +523,10 @@ static void handle_processes(cbm_http_conn_t *c) {
         user_s = (double)u.QuadPart / 1e7;
         sys_s = (double)k.QuadPart / 1e7;
     }
-    pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
-                    "{\"self_pid\":%d,\"self_rss_mb\":%.1f,"
-                    "\"self_user_cpu_s\":%.1f,\"self_sys_cpu_s\":%.1f,\"processes\":[]}",
-                    (int)_getpid(), (double)rss_bytes / (1024.0 * 1024.0), user_s, sys_s);
+    http_appendf(buf, sizeof(buf), &pos,
+                 "{\"self_pid\":%d,\"self_rss_mb\":%.1f,"
+                 "\"self_user_cpu_s\":%.1f,\"self_sys_cpu_s\":%.1f,\"processes\":[]}",
+                 (int)_getpid(), (double)rss_bytes / (1024.0 * 1024.0), user_s, sys_s);
 #else
     struct rusage ru;
     getrusage(RUSAGE_SELF, &ru);
@@ -485,12 +534,12 @@ static void handle_processes(cbm_http_conn_t *c) {
 #ifdef __APPLE__
     rss_kb /= 1024;
 #endif
-    pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
-                    "{\"self_pid\":%d,\"self_rss_mb\":%.1f,"
-                    "\"self_user_cpu_s\":%.1f,\"self_sys_cpu_s\":%.1f,\"processes\":[",
-                    (int)getpid(), (double)rss_kb / 1024.0,
-                    (double)ru.ru_utime.tv_sec + (double)ru.ru_utime.tv_usec / 1e6,
-                    (double)ru.ru_stime.tv_sec + (double)ru.ru_stime.tv_usec / 1e6);
+    http_appendf(buf, sizeof(buf), &pos,
+                 "{\"self_pid\":%d,\"self_rss_mb\":%.1f,"
+                 "\"self_user_cpu_s\":%.1f,\"self_sys_cpu_s\":%.1f,\"processes\":[",
+                 (int)getpid(), (double)rss_kb / 1024.0,
+                 (double)ru.ru_utime.tv_sec + (double)ru.ru_utime.tv_usec / 1e6,
+                 (double)ru.ru_stime.tv_sec + (double)ru.ru_stime.tv_usec / 1e6);
 
     FILE *fp = popen("LC_ALL=C ps -eo pid,pcpu,rss,etime,comm 2>/dev/null"
                      " | grep '[c]odebase-memory-mcp'",
@@ -508,11 +557,11 @@ static void handle_processes(cbm_http_conn_t *c) {
             if (sscanf(line, "%d %f %ld %63s %255s", &pid, &cpu, &rss, elapsed, comm) >= 4) {
                 if (proc_count > 0)
                     buf[pos++] = ',';
-                pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
-                                "{\"pid\":%d,\"cpu\":%.1f,\"rss_mb\":%.1f,"
-                                "\"elapsed\":\"%s\",\"command\":\"%s\",\"is_self\":%s}",
-                                pid, (double)cpu, (double)rss / 1024.0, elapsed, comm,
-                                pid == (int)getpid() ? "true" : "false");
+                http_appendf(buf, sizeof(buf), &pos,
+                             "{\"pid\":%d,\"cpu\":%.1f,\"rss_mb\":%.1f,"
+                             "\"elapsed\":\"%s\",\"command\":\"%s\",\"is_self\":%s}",
+                             pid, (double)cpu, (double)rss / 1024.0, elapsed, comm,
+                             pid == (int)getpid() ? "true" : "false");
                 if (pos >= (int)sizeof(buf)) {
                     pos = (int)sizeof(buf) - 1;
                 }
@@ -521,7 +570,7 @@ static void handle_processes(cbm_http_conn_t *c) {
         }
         pclose(fp);
     }
-    pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "]}");
+    http_appendf(buf, sizeof(buf), &pos, "]}");
 #endif
 
     cbm_http_replyf(c, 200, g_cors_json, "%s", buf);
@@ -602,7 +651,7 @@ static void handle_process_kill(cbm_http_conn_t *c, const cbm_http_req_t *req) {
 #include <dirent.h>
 
 static void append_roots_json(char *buf, size_t bufsz, int *pos) {
-    *pos += snprintf(buf + *pos, bufsz - (size_t)*pos, ",\"roots\":[");
+    http_appendf(buf, bufsz, pos, ",\"roots\":[");
 #ifdef _WIN32
     DWORD drives = GetLogicalDrives();
     int count = 0;
@@ -613,12 +662,12 @@ static void append_roots_json(char *buf, size_t bufsz, int *pos) {
         if (count++ > 0) {
             buf[(*pos)++] = ',';
         }
-        *pos += snprintf(buf + *pos, bufsz - (size_t)*pos, "\"%c:/\"", 'A' + i);
+        http_appendf(buf, bufsz, pos, "\"%c:/\"", 'A' + i);
     }
 #else
-    *pos += snprintf(buf + *pos, bufsz - (size_t)*pos, "\"/\"");
+    http_appendf(buf, bufsz, pos, "\"/\"");
 #endif
-    *pos += snprintf(buf + *pos, bufsz - (size_t)*pos, "]");
+    http_appendf(buf, bufsz, pos, "]");
 }
 
 /* GET /api/browse?path=/some/dir — list subdirectories for file picker */
@@ -653,7 +702,7 @@ static void handle_browse(cbm_http_conn_t *c, const cbm_http_req_t *req) {
     /* Build JSON response */
     char buf[32768];
     int pos = 0;
-    pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "{\"path\":\"%s\",\"dirs\":[", path);
+    http_appendf(buf, sizeof(buf), &pos, "{\"path\":\"%s\",\"dirs\":[", path);
 
     struct dirent *ent;
     int count = 0;
@@ -674,7 +723,7 @@ static void handle_browse(cbm_http_conn_t *c, const cbm_http_req_t *req) {
         {
             char esc[512];
             cbm_json_escape(esc, (int)sizeof(esc), ent->d_name);
-            pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "\"%s\"", esc);
+            http_appendf(buf, sizeof(buf), &pos, "\"%s\"", esc);
         }
         if (pos >= (int)sizeof(buf)) {
             pos = (int)sizeof(buf) - 1;
@@ -706,9 +755,9 @@ static void handle_browse(cbm_http_conn_t *c, const cbm_http_req_t *req) {
     {
         char esc_parent[2048];
         cbm_json_escape(esc_parent, (int)sizeof(esc_parent), parent);
-        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "],\"parent\":\"%s\"", esc_parent);
+        http_appendf(buf, sizeof(buf), &pos, "],\"parent\":\"%s\"", esc_parent);
         append_roots_json(buf, sizeof(buf), &pos);
-        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos, "}");
+        http_appendf(buf, sizeof(buf), &pos, "}");
     }
     cbm_http_replyf(c, 200, g_cors_json, "%s", buf);
 }
@@ -760,8 +809,8 @@ static void handle_adr_get(cbm_http_conn_t *c, const cbm_http_req_t *req) {
                     buf[pos++] = ch;
                 }
             }
-            pos += snprintf(buf + pos, buf_size - (size_t)pos, "\",\"updated_at\":\"%s\"}",
-                            adr.updated_at ? adr.updated_at : "");
+            http_appendf(buf, buf_size, &pos, "\",\"updated_at\":\"%s\"}",
+                         adr.updated_at ? adr.updated_at : "");
             cbm_http_replyf(c, 200, g_cors_json, "%s", buf);
             free(buf);
         } else {
@@ -1178,9 +1227,9 @@ static void handle_index_status(cbm_http_conn_t *c) {
         if (pos > 1)
             buf[pos++] = ',';
         const char *ss = st == 1 ? "indexing" : st == 2 ? "done" : "error";
-        pos += snprintf(buf + pos, sizeof(buf) - (size_t)pos,
-                        "{\"slot\":%d,\"status\":\"%s\",\"path\":\"%s\",\"error\":\"%s\"}", i, ss,
-                        g_index_jobs[i].root_path, st == 3 ? g_index_jobs[i].error_msg : "");
+        http_appendf(buf, sizeof(buf), &pos,
+                     "{\"slot\":%d,\"status\":\"%s\",\"path\":\"%s\",\"error\":\"%s\"}", i, ss,
+                     g_index_jobs[i].root_path, st == 3 ? g_index_jobs[i].error_msg : "");
     }
     buf[pos++] = ']';
     buf[pos] = '\0';
@@ -1323,9 +1372,67 @@ static double layout_radius(const cbm_layout_result_t *r) {
     return sqrt(max_r2);
 }
 
+/* Attach the missed-graph skeleton (#963) to the primary layout doc as
+ *   "missed_graph": {"nodes":[...], "edges":[...], "offset":{x,y,z}}
+ * — the file structure of files the indexer could not fully cover, laid out
+ * as a satellite cluster beside the code galaxy (the UI renders it as a white
+ * skeleton; clicking it re-centers the camera there). The offset sits on the
+ * -Y side: linked-project satellites spread counter-clockwise from +X, so
+ * this slot collides last. Returns true when a non-empty skeleton was
+ * attached; no-op when the project has no missed files. */
+static bool attach_missed_graph(yyjson_mut_doc *mdoc, yyjson_mut_val *mroot, cbm_store_t *store,
+                                const char *project, double primary_radius) {
+    char covproj[512];
+    cbm_store_coverage_shadow_project(covproj, sizeof(covproj), project);
+    cbm_layout_result_t *ml = cbm_layout_compute(store, covproj, CBM_LAYOUT_OVERVIEW, NULL, 0, 0);
+    if (!ml) {
+        return false;
+    }
+    if (ml->node_count == 0) {
+        cbm_layout_free(ml);
+        return false;
+    }
+    double miss_radius = layout_radius(ml);
+    char *mjson = cbm_layout_to_json(ml);
+    cbm_layout_free(ml);
+    if (!mjson) {
+        return false;
+    }
+    yyjson_doc *mldoc = yyjson_read(mjson, strlen(mjson), 0);
+    free(mjson);
+    if (!mldoc) {
+        return false;
+    }
+    yyjson_mut_val *entry = yyjson_mut_obj(mdoc);
+    yyjson_val *mlroot = yyjson_doc_get_root(mldoc);
+    yyjson_val *mn = yyjson_obj_get(mlroot, "nodes");
+    yyjson_val *me = yyjson_obj_get(mlroot, "edges");
+    if (mn) {
+        yyjson_mut_obj_add_val(mdoc, entry, "nodes", yyjson_val_mut_copy(mdoc, mn));
+    }
+    if (me) {
+        yyjson_mut_obj_add_val(mdoc, entry, "edges", yyjson_val_mut_copy(mdoc, me));
+    }
+    yyjson_doc_free(mldoc);
+
+    double dist = primary_radius + miss_radius + LAYOUT_GALAXY_PAD;
+    if (dist < LAYOUT_GALAXY_SPACING) {
+        dist = LAYOUT_GALAXY_SPACING;
+    }
+    yyjson_mut_val *offset = yyjson_mut_obj(mdoc);
+    yyjson_mut_obj_add_real(mdoc, offset, "x", 0.0);
+    yyjson_mut_obj_add_real(mdoc, offset, "y", -dist);
+    yyjson_mut_obj_add_real(mdoc, offset, "z", 0.0);
+    yyjson_mut_obj_add_val(mdoc, entry, "offset", offset);
+
+    yyjson_mut_obj_add_val(mdoc, mroot, "missed_graph", entry);
+    return true;
+}
+
 static void handle_layout(cbm_http_conn_t *c, const cbm_http_req_t *req) {
     char project[256] = {0};
     char max_str[32] = {0};
+    char graph_str[32] = {0};
 
     if (!cbm_http_query_param(req->query, "project", project, (int)sizeof(project)) ||
         project[0] == '\0') {
@@ -1333,11 +1440,26 @@ static void handle_layout(cbm_http_conn_t *c, const cbm_http_req_t *req) {
         return;
     }
 
-    int max_nodes = 50000;
+    int max_nodes = 0; /* 0 → layout default budget */
     if (cbm_http_query_param(req->query, "max_nodes", max_str, (int)sizeof(max_str))) {
         int v = atoi(max_str);
         if (v > 0)
             max_nodes = v;
+    }
+
+    /* graph=missed (#963): lay out the derived miss graph (shadow project
+     * "<name>::missed" inside the SAME db file) instead of the code graph —
+     * only files the indexer could not fully cover, as their file structure.
+     * The db file still resolves from the validated base project name. */
+    bool missed_graph = false;
+    if (cbm_http_query_param(req->query, "graph", graph_str, (int)sizeof(graph_str))) {
+        missed_graph = strcmp(graph_str, "missed") == 0;
+    }
+    char scoped_project[320];
+    if (missed_graph) {
+        cbm_store_coverage_shadow_project(scoped_project, sizeof(scoped_project), project);
+    } else {
+        snprintf(scoped_project, sizeof(scoped_project), "%s", project);
     }
 
     char db_path[1024];
@@ -1355,7 +1477,7 @@ static void handle_layout(cbm_http_conn_t *c, const cbm_http_req_t *req) {
     }
 
     cbm_layout_result_t *layout =
-        cbm_layout_compute(store, project, CBM_LAYOUT_OVERVIEW, NULL, 0, max_nodes);
+        cbm_layout_compute(store, scoped_project, CBM_LAYOUT_OVERVIEW, NULL, 0, max_nodes);
 
     /* Find linked projects from CROSS_* edges. Keep `store` open through the
      * linked-projects loop below so we can resolve target Route QNs against
@@ -1381,14 +1503,16 @@ static void handle_layout(cbm_http_conn_t *c, const cbm_http_req_t *req) {
         return;
     }
 
-    if (linked_count == 0) {
+    /* Fast path: no satellites to attach. The missed skeleton only decorates
+     * the CODE graph — a graph=missed request already IS the miss graph. */
+    if (linked_count == 0 && missed_graph) {
         cbm_store_close(store);
         cbm_http_replyf(c, 200, g_cors_json, "%s", primary_json);
         free(primary_json);
         return;
     }
 
-    /* Parse primary JSON and append linked_projects array */
+    /* Parse primary JSON and append missed_graph + linked_projects */
     yyjson_doc *pdoc = yyjson_read(primary_json, strlen(primary_json), 0);
     free(primary_json);
     if (!pdoc) {
@@ -1400,6 +1524,10 @@ static void handle_layout(cbm_http_conn_t *c, const cbm_http_req_t *req) {
     yyjson_mut_doc *mdoc = yyjson_doc_mut_copy(pdoc, NULL);
     yyjson_doc_free(pdoc);
     yyjson_mut_val *mroot = yyjson_mut_doc_get_root(mdoc);
+
+    if (!missed_graph) {
+        (void)attach_missed_graph(mdoc, mroot, store, project, primary_radius);
+    }
 
     yyjson_mut_val *lp_arr = yyjson_mut_arr(mdoc);
 
@@ -1577,10 +1705,31 @@ static void handle_rpc(cbm_http_conn_t *c, const cbm_http_req_t *req, cbm_mcp_se
 
 /* ── Request dispatch ─────────────────────────────────────────── */
 
+/* True when the Host header names the loopback interface the server binds to
+ * (with or without a port). Anything else means the request reached us under a
+ * name that is not loopback — a rebinding DNS host or a proxy pointed at the
+ * local port — which is the DNS-rebinding / cross-site vector against a
+ * localhost-only service. */
+static bool host_is_loopback(const char *host) {
+    return cbm_http_path_match(host, "localhost") || cbm_http_path_match(host, "localhost:*") ||
+           cbm_http_path_match(host, "127.0.0.1") || cbm_http_path_match(host, "127.0.0.1:*") ||
+           cbm_http_path_match(host, "[::1]") || cbm_http_path_match(host, "[::1]:*");
+}
+
 static void dispatch_request(cbm_http_server_t *srv, cbm_http_conn_t *c,
                              const cbm_http_req_t *req) {
     /* Build per-request CORS headers (only reflects localhost origins) */
     update_cors(req);
+
+    /* DNS-rebinding / cross-site guard: the server binds to loopback only, so a
+     * request carrying any non-loopback Host was routed here under a foreign
+     * name (a rebinding DNS record, a proxy) and must be refused before it can
+     * reach a state-changing endpoint. A bare request with no Host header
+     * (HTTP/1.0 local tooling) is still allowed. */
+    if (req->host[0] != '\0' && !host_is_loopback(req->host)) {
+        cbm_http_replyf(c, 403, g_cors, "%s", "{\"error\":\"forbidden host\"}");
+        return;
+    }
 
     bool is_get = strcmp(req->method, "GET") == 0;
     bool is_post = strcmp(req->method, "POST") == 0;
@@ -1680,9 +1829,9 @@ static void dispatch_request(cbm_http_server_t *srv, cbm_http_conn_t *c,
     if (cbm_http_path_match(req->path, "/")) {
         const cbm_embedded_file_t *f = cbm_embedded_lookup("/index.html");
         if (f) {
-            char html_hdrs[512];
+            char html_hdrs[1024];
             snprintf(html_hdrs, sizeof(html_hdrs),
-                     "%sContent-Type: text/html\r\nCache-Control: no-cache\r\n", g_cors);
+                     "%sContent-Type: text/html\r\nCache-Control: no-cache\r\n" CBM_UI_CSP, g_cors);
             cbm_http_reply_buf(c, 200, html_hdrs, f->data, (size_t)f->size);
             return;
         }

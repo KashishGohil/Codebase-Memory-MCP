@@ -56,9 +56,14 @@ jobs:
   # ── 3. Build all platforms ──────────────────────────────────────
   build:
     needs: [test]
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/_build.yml
     with:
       version: ${{ inputs.version }}
+      attest: true
 
   # ── 4. Smoke test every binary ──────────────────────────────────
   smoke:
@@ -99,10 +104,10 @@ jobs:
       - name: Generate checksums
         run: sha256sum *.tar.gz *.zip > checksums.txt
 
-      - name: Attest build provenance
+      - name: Attest checksum provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-path: '*.tar.gz,*.zip,checksums.txt'
+          subject-path: checksums.txt
 
       - name: Generate SBOM
         run: |

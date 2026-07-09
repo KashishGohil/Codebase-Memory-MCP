@@ -1991,6 +1991,80 @@ TEST(search_code_scoped_path_with_spaces_issue687) {
     PASS();
 }
 
+#ifdef _WIN32
+/* Issue #903 follow-up: scoped search_code on Windows writes a UTF-8 filelist
+ * containing absolute source paths, then reads it back through PowerShell.
+ * Windows PowerShell 5.1 treats UTF-8 without BOM as ANSI unless told
+ * otherwise, so a non-ASCII project root can be mojibaked before
+ * Select-String sees the LiteralPath. */
+TEST(search_code_scoped_path_with_cjk_root_issue903) {
+    char tmp[512];
+    snprintf(tmp, sizeof(tmp), "%s/cbm_srch_cjk_XXXXXX", cbm_tmpdir());
+    if (!cbm_mkdtemp(tmp)) {
+        FAIL("cbm_mkdtemp failed");
+    }
+
+    char proj_dir[640];
+    snprintf(proj_dir, sizeof(proj_dir), "%s/%s", tmp,
+             "\xE4\xB8\xAD\xE6\x96\x87\xE9\xA1\xB9\xE7\x9B\xAE");
+    if (!cbm_mkdir_p(proj_dir, 0755)) {
+        cbm_rmdir(tmp);
+        FAIL("cannot create CJK project dir");
+    }
+
+    char src_path[768];
+    snprintf(src_path, sizeof(src_path), "%s/main.go", proj_dir);
+    FILE *fp = cbm_fopen(src_path, "wb");
+    if (!fp) {
+        cbm_rmdir(proj_dir);
+        cbm_rmdir(tmp);
+        FAIL("cannot write source file under CJK path");
+    }
+    fprintf(fp, "package main\n\nfunc HandleRequest() error {\n\treturn nil\n}\n");
+    fclose(fp);
+
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    ASSERT_NOT_NULL(srv);
+    cbm_store_t *st = cbm_mcp_server_store(srv);
+    ASSERT_NOT_NULL(st);
+    const char *proj = "cjk-search";
+    cbm_mcp_server_set_project(srv, proj);
+    cbm_store_upsert_project(st, proj, proj_dir);
+
+    cbm_node_t n = {.project = proj,
+                    .label = "Function",
+                    .name = "HandleRequest",
+                    .qualified_name = "cjk-search.main.HandleRequest",
+                    .file_path = "main.go",
+                    .start_line = 3,
+                    .end_line = 5};
+    ASSERT_GT(cbm_store_upsert_node(st, &n), 0);
+
+    char *resp = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":903,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"search_code\","
+             "\"arguments\":{\"pattern\":\"HandleRequest\",\"project\":\"cjk-search\"}}}");
+    ASSERT_NOT_NULL(resp);
+    char *inner = extract_text_content(resp);
+    ASSERT_NOT_NULL(inner);
+
+    int grep_matches = -1;
+    const char *g = strstr(inner, "\"total_grep_matches\":");
+    if (g) {
+        sscanf(g, "\"total_grep_matches\":%d", &grep_matches);
+    }
+    ASSERT_TRUE(grep_matches > 0);
+
+    free(inner);
+    free(resp);
+    cbm_mcp_server_free(srv);
+    cbm_unlink(src_path);
+    cbm_rmdir(proj_dir);
+    cbm_rmdir(tmp);
+    PASS();
+}
+#endif
+
 /* Shared fixture for the path_filter prefilter tests (PR #756 distilled):
  * a project with two indexed files that both contain the search pattern —
  * src/handler.go (inside the filter) and vendor/other.go (outside it). */
@@ -4362,6 +4436,144 @@ TEST(readonly_query_succeeds_on_readonly_fs) {
 #undef ROQ_PROJECT
 
 /* ══════════════════════════════════════════════════════════════════
+ *  #823 — CLI/supervised index_repository must preserve name override
+ * ══════════════════════════════════════════════════════════════════ */
+
+enum {
+    IDX823_OK = 0,
+    IDX823_NO_SERVER = 61,
+    IDX823_NO_RESULT = 62,
+    IDX823_NOT_INDEXED = 63,
+    IDX823_RESPONSE_NAME_MISSING = 64,
+    IDX823_LIST_NAME_MISSING = 65,
+    IDX823_SEARCH_FAILED = 66,
+};
+
+#ifndef _WIN32 /* helper used only by the POSIX fork harness below */
+static int idx823_supervised_name_override_check(const char *repo_dir, const char *custom_name) {
+    /* Match the real CLI/MCP server state: a marked host with the supervisor
+     * enabled. The worker receives the same args JSON the CLI forwards. */
+    cbm_index_supervisor_mark_host();
+    cbm_unsetenv("CBM_INDEX_SUPERVISOR");
+    cbm_setenv("CBM_INDEX_MAX_RESTARTS", "1", 1);
+    cbm_setenv("CBM_INDEX_WORKER_TIMEOUT_S", "30", 1);
+
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    if (!srv) {
+        return IDX823_NO_SERVER;
+    }
+
+    char args[1024];
+    snprintf(args, sizeof(args), "{\"repo_path\":\"%s\",\"mode\":\"fast\",\"name\":\"%s\"}",
+             repo_dir, custom_name);
+    char *resp = cbm_mcp_handle_tool(srv, "index_repository", args);
+    int code = IDX823_OK;
+    if (!resp) {
+        code = IDX823_NO_RESULT;
+    } else if (!response_contains_json_fragment(resp, "\"status\":\"indexed\"")) {
+        code = IDX823_NOT_INDEXED;
+    } else {
+        char expected[256];
+        snprintf(expected, sizeof(expected), "\"project\":\"%s\"", custom_name);
+        if (!response_contains_json_fragment(resp, expected)) {
+            code = IDX823_RESPONSE_NAME_MISSING;
+        }
+    }
+    free(resp);
+
+    if (code == IDX823_OK) {
+        char *projects = cbm_mcp_handle_tool(srv, "list_projects", "{}");
+        char expected[256];
+        snprintf(expected, sizeof(expected), "\"name\":\"%s\"", custom_name);
+        if (!projects || !response_contains_json_fragment(projects, expected)) {
+            code = IDX823_LIST_NAME_MISSING;
+        }
+        free(projects);
+    }
+
+    if (code == IDX823_OK) {
+        char q[512];
+        snprintf(q, sizeof(q),
+                 "{\"project\":\"%s\",\"name_pattern\":\"idx823_fn\",\"label\":\"Function\"}",
+                 custom_name);
+        char *sr = cbm_mcp_handle_tool(srv, "search_graph", q);
+        if (!sr || !strstr(sr, "idx823_fn")) {
+            code = IDX823_SEARCH_FAILED;
+        }
+        free(sr);
+    }
+
+    cbm_mcp_server_free(srv);
+    return code;
+}
+#endif
+
+TEST(index_repository_cli_name_override_issue823) {
+#ifdef _WIN32
+    SKIP_PLATFORM("POSIX fork harness required to isolate supervisor host mark");
+#else
+    char tmp_dir[256];
+    snprintf(tmp_dir, sizeof(tmp_dir), "/tmp/cbm-idx823-repo-XXXXXX");
+    if (!cbm_mkdtemp(tmp_dir)) {
+        FAIL("cbm_mkdtemp repo failed");
+    }
+    char cache[256];
+    snprintf(cache, sizeof(cache), "/tmp/cbm-idx823-cache-XXXXXX");
+    if (!cbm_mkdtemp(cache)) {
+        th_rmtree(tmp_dir);
+        FAIL("cbm_mkdtemp cache failed");
+    }
+
+    const char *saved_cache = getenv("CBM_CACHE_DIR");
+    char *saved_cache_copy = saved_cache ? strdup(saved_cache) : NULL;
+    cbm_setenv("CBM_CACHE_DIR", cache, 1);
+
+    char src_path[512];
+    snprintf(src_path, sizeof(src_path), "%s/main.py", tmp_dir);
+    ASSERT_EQ(th_write_file(src_path, "def idx823_fn():\n    return 823\n"), 0);
+
+    const char *custom_name = "issue823-custom-project";
+    int code = -1;
+    bool signalled = false;
+    int sig = 0;
+
+    fflush(NULL);
+    pid_t pid = fork();
+    if (pid == 0) {
+        alarm(60);
+        _exit(idx823_supervised_name_override_check(tmp_dir, custom_name));
+    }
+    ASSERT_TRUE(pid > 0);
+    int status = 0;
+    (void)waitpid(pid, &status, 0);
+    if (WIFEXITED(status)) {
+        code = WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+        signalled = true;
+        sig = WTERMSIG(status);
+    }
+
+    char *path_project = cbm_project_name_from_path(tmp_dir);
+    cleanup_project_db(cache, custom_name);
+    cleanup_project_db(cache, path_project);
+    free(path_project);
+    restore_cache_dir(saved_cache_copy);
+    free(saved_cache_copy);
+    th_rmtree(cache);
+    th_rmtree(tmp_dir);
+
+    if (signalled) {
+        printf("    child killed by signal %d (alarm => worker hang)\n", sig);
+    } else if (code != IDX823_OK) {
+        printf("    child exit code %d (64=response name, 65=list name, 66=search)\n", code);
+    }
+    ASSERT_FALSE(signalled);
+    ASSERT_EQ(code, IDX823_OK);
+    PASS();
+#endif
+}
+
+/* ══════════════════════════════════════════════════════════════════
  *  #845 — supervisor gate must not wrap embedders of cbm_mcp_handle_tool
  * ══════════════════════════════════════════════════════════════════ */
 
@@ -5110,11 +5322,98 @@ TEST(mcp_auto_watch_false_skips_supervised_autoindex_issue853) {
 #endif
 }
 
+/* The containment guard both MCP file-read sinks route through
+ * (resolve_snippet_source for get_code_snippet, attach_result_source for
+ * search_code). A result path that resolves outside the indexed project root
+ * — via a `..` segment or a followed symlink/junction — must be rejected so
+ * its contents never reach a tool response. */
+extern bool cbm_path_within_root(const char *root_path, const char *abs_path);
+
+TEST(mcp_path_within_root_rejects_escape) {
+#ifdef _WIN32
+    SKIP_PLATFORM("POSIX realpath repro; the Windows _fullpath branch is the same guard");
+#else
+    char root[512];
+    snprintf(root, sizeof(root), "%s/cbm_pwr_XXXXXX", cbm_tmpdir());
+    if (!cbm_mkdtemp(root)) {
+        FAIL("cbm_mkdtemp failed");
+    }
+    char inside[700];
+    snprintf(inside, sizeof(inside), "%s/inside.c", root);
+    FILE *fp = fopen(inside, "w");
+    ASSERT_NOT_NULL(fp);
+    fputs("int x;\n", fp);
+    fclose(fp);
+
+    /* The abs_path a sink builds for an in-root result stays contained; a `..`
+     * escape to an existing outside file (/etc/hosts) resolves out and must be
+     * rejected. */
+    char escape[900];
+    snprintf(escape, sizeof(escape), "%s/../../../../etc/hosts", root);
+    ASSERT_TRUE(cbm_path_within_root(root, inside));
+    ASSERT_FALSE(cbm_path_within_root(root, escape));
+    ASSERT_FALSE(cbm_path_within_root(root, "/etc/hosts"));
+
+    remove(inside);
+    cbm_rmdir(root);
+    PASS();
+#endif
+}
+
+/* base_branch is spliced into a `git diff --name-only "<base>"...HEAD` command;
+ * a value starting with '-' would be taken by git as an option (e.g.
+ * --output=<path> writes the diff to an arbitrary file) rather than a ref. It
+ * must be rejected up front, alongside the shell-metacharacter check. */
+TEST(detect_changes_rejects_option_like_base_branch) {
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    char *resp = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":77,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"detect_changes\","
+             "\"arguments\":{\"project\":\"p\",\"base_branch\":\"--output=/tmp/cbm_pwn\"}}}");
+    ASSERT_NOT_NULL(resp);
+    ASSERT_NOT_NULL(strstr(resp, "invalid characters"));
+    free(resp);
+    cbm_mcp_server_free(srv);
+    PASS();
+}
+
+/* Opt-in workspace boundary: when CBM_ALLOWED_ROOT is set, index_repository
+ * must refuse a repo_path that resolves outside it. Unset (the default) imposes
+ * no restriction. */
+TEST(index_repository_honors_allowed_root) {
+    char allowed[512];
+    snprintf(allowed, sizeof(allowed), "%s/cbm_allowed_XXXXXX", cbm_tmpdir());
+    if (!cbm_mkdtemp(allowed)) {
+        FAIL("cbm_mkdtemp failed");
+    }
+    cbm_setenv("CBM_ALLOWED_ROOT", allowed, 1);
+
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    char args[1024];
+    snprintf(args, sizeof(args),
+             "{\"jsonrpc\":\"2.0\",\"id\":88,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"index_repository\","
+             "\"arguments\":{\"repo_path\":\"%s/../..\"}}}",
+             allowed); /* resolves to a parent, outside the allowed root */
+    char *resp = cbm_mcp_server_handle(srv, args);
+    ASSERT_NOT_NULL(resp);
+    ASSERT_NOT_NULL(strstr(resp, "outside the allowed root"));
+    free(resp);
+
+    cbm_unsetenv("CBM_ALLOWED_ROOT");
+    cbm_mcp_server_free(srv);
+    cbm_rmdir(allowed);
+    PASS();
+}
+
 /* ══════════════════════════════════════════════════════════════════
  *  SUITE
  * ══════════════════════════════════════════════════════════════════ */
 
 SUITE(mcp) {
+    RUN_TEST(mcp_path_within_root_rejects_escape);
+    RUN_TEST(detect_changes_rejects_option_like_base_branch);
+    RUN_TEST(index_repository_honors_allowed_root);
     /* JSON-RPC parsing */
     RUN_TEST(jsonrpc_parse_request);
     RUN_TEST(jsonrpc_parse_notification);
@@ -5222,6 +5521,9 @@ SUITE(mcp) {
     RUN_TEST(tool_search_code_no_project);
     RUN_TEST(search_code_multi_word);
     RUN_TEST(search_code_scoped_path_with_spaces_issue687);
+#ifdef _WIN32
+    RUN_TEST(search_code_scoped_path_with_cjk_root_issue903);
+#endif
     RUN_TEST(search_code_path_filter_prefilter_keeps_matches);
     RUN_TEST(search_code_path_filter_matches_nothing);
     RUN_TEST(search_code_invalid_regex_errors_issue283);
@@ -5233,6 +5535,7 @@ SUITE(mcp) {
     RUN_TEST(tool_manage_adr_unified_backend_issue256);
     RUN_TEST(tool_index_repository_reports_store_backed_adr);
     RUN_TEST(tool_index_repository_dot_uses_absolute_project_key_and_preserves_adr);
+    RUN_TEST(index_repository_cli_name_override_issue823);
     RUN_TEST(index_supervisor_gate_requires_marked_host_issue845);
     RUN_TEST(index_bg_paths_route_through_supervisor_issue832);
     RUN_TEST(index_recovery_parallel_quarantines_crasher);

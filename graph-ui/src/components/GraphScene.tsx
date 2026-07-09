@@ -9,6 +9,14 @@ import { EdgeLines } from "./EdgeLines";
 import { NodeLabels } from "./NodeLabels";
 import { NodeTooltip } from "./NodeTooltip";
 import type { GraphData, GraphNode, LinkedProject } from "../lib/types";
+import {
+  DEFAULT_DISPLAY_SETTINGS,
+  bloomIntensityScale,
+  nodeBoostScale,
+  type DisplaySettings,
+} from "../lib/density";
+
+const BASE_BLOOM_INTENSITY = 1.45;
 
 /* ── Camera fly-to animation ────────────────────────────── */
 
@@ -104,23 +112,43 @@ function IdleAutoRotate({
 
 interface GraphSceneProps {
   data: GraphData;
+  /* Missed skeleton (#963): pre-offset, pre-painted white nodes + edges of
+   * the not-fully-indexed files, rendered as a ghost cluster beside the
+   * galaxy. null hides it. */
+  missed?: { nodes: GraphNode[]; edges: GraphData["edges"] } | null;
   highlightedIds: Set<number> | null;
   cameraTarget: CameraTarget | null;
   showLabels: boolean;
+  display?: DisplaySettings;
   onNodeClick: (node: GraphNode) => void;
+  /* Fired when a click hits empty space (no node). Used to fly back to the
+   * overview after focusing the missed skeleton. */
+  onBackgroundClick?: () => void;
 }
 
 export type { CameraTarget };
 
 export function GraphScene({
   data,
+  missed = null,
   highlightedIds,
   cameraTarget,
   showLabels,
+  display = DEFAULT_DISPLAY_SETTINGS,
   onNodeClick,
+  onBackgroundClick,
 }: GraphSceneProps) {
   const [hovered, setHovered] = useState<GraphNode | null>(null);
   const controlsRef = useRef<OrbitControlsImpl | null>(null);
+
+  /* Adaptive density defaults × user multipliers. The automatic scale keeps
+   * contrast roughly constant as the graph grows; the sliders nudge it.
+   * NodeCloud applies `nodeBoost` directly (no internal density scaling),
+   * whereas EdgeLines scales by edge density itself — so it receives only the
+   * user edge-brightness multiplier to avoid double-applying. */
+  const nodeBoost = nodeBoostScale(data.nodes.length) * display.nodeGlow;
+  const bloomIntensity =
+    BASE_BLOOM_INTENSITY * bloomIntensityScale(data.nodes.length) * display.bloom;
 
   return (
     <Canvas
@@ -132,6 +160,7 @@ export function GraphScene({
         alpha: false,
         powerPreference: "high-performance",
       }}
+      onPointerMissed={onBackgroundClick}
     >
       <color attach="background" args={["#06090f"]} />
       <ambientLight intensity={0.5} />
@@ -146,14 +175,40 @@ export function GraphScene({
         nodes={data.nodes}
         edges={data.edges}
         highlightedIds={highlightedIds}
+        brightness={display.edgeBrightness}
       />
       <NodeCloud
         nodes={data.nodes}
         highlightedIds={highlightedIds}
         onHover={setHovered}
         onClick={onNodeClick}
+        boost={nodeBoost}
       />
       {showLabels && <NodeLabels nodes={data.nodes} highlightedIds={highlightedIds} />}
+
+      {/* Missed skeleton (#963): white ghost of the not-fully-indexed files.
+       * Clicks route through the same handler — GraphTab re-centers the
+       * camera on the whole skeleton cluster. */}
+      {missed && missed.nodes.length > 0 && (
+        <group>
+          <EdgeLines
+            nodes={missed.nodes}
+            edges={missed.edges}
+            highlightedIds={null}
+            opacity={0.28}
+            brightness={display.edgeBrightness}
+          />
+          <NodeCloud
+            nodes={missed.nodes}
+            highlightedIds={null}
+            onHover={setHovered}
+            onClick={onNodeClick}
+            opacity={0.6}
+            boost={nodeBoost * 0.75}
+          />
+          {showLabels && <NodeLabels nodes={missed.nodes} highlightedIds={null} />}
+        </group>
+      )}
 
       {/* Satellite galaxies for cross-repo linked projects */}
       {data.linked_projects?.map((lp: LinkedProject) => {
@@ -170,6 +225,7 @@ export function GraphScene({
               edges={lp.edges}
               highlightedIds={null}
               opacity={0.3}
+              brightness={display.edgeBrightness}
             />
             <NodeCloud
               nodes={offsetNodes}
@@ -177,6 +233,7 @@ export function GraphScene({
               onHover={setHovered}
               onClick={onNodeClick}
               opacity={0.5}
+              boost={nodeBoost}
             />
             {/* Inter-galaxy CROSS_* edges: source is in primary, target in
              * this linked project's offset nodes. */}
@@ -187,6 +244,7 @@ export function GraphScene({
                 edges={lp.cross_edges}
                 highlightedIds={highlightedIds}
                 opacity={0.85}
+                brightness={display.edgeBrightness}
               />
             )}
           </group>
@@ -202,7 +260,7 @@ export function GraphScene({
         <Bloom
           luminanceThreshold={0.3}
           luminanceSmoothing={0.7}
-          intensity={1.2}
+          intensity={bloomIntensity}
           mipmapBlur
           radius={0.6}
         />

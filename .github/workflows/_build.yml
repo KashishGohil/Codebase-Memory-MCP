@@ -8,9 +8,15 @@ on:
         description: 'Version string (e.g. v0.8.0)'
         type: string
         default: ''
+      attest:
+        description: 'Generate build provenance attestations for release artifacts'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+  id-token: write
+  attestations: write
 
 jobs:
   build-unix:
@@ -83,6 +89,12 @@ jobs:
           tar -czf "codebase-memory-mcp-${GOOS}-${GOARCH}.tar.gz" \
             -C build/c codebase-memory-mcp LICENSE install.sh THIRD_PARTY_NOTICES.md
 
+      - name: Attest standard binary provenance
+        if: ${{ inputs.attest }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: codebase-memory-mcp-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+
       - name: Build UI binary
         env:
           VERSION: ${{ inputs.version }}
@@ -112,6 +124,12 @@ jobs:
           scripts/gen-third-party-notices.sh build/c/THIRD_PARTY_NOTICES.md
           tar -czf "codebase-memory-mcp-ui-${GOOS}-${GOARCH}.tar.gz" \
             -C build/c codebase-memory-mcp LICENSE install.sh THIRD_PARTY_NOTICES.md
+
+      - name: Attest UI binary provenance
+        if: ${{ inputs.attest }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: codebase-memory-mcp-ui-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -158,6 +176,12 @@ jobs:
           scripts/gen-third-party-notices.sh THIRD_PARTY_NOTICES.md
           zip codebase-memory-mcp-windows-amd64.zip codebase-memory-mcp.exe LICENSE install.ps1 THIRD_PARTY_NOTICES.md
 
+      - name: Attest standard binary provenance
+        if: ${{ inputs.attest }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: codebase-memory-mcp-windows-amd64.zip
+
       - name: Build UI binary
         shell: msys2 {0}
         env:
@@ -177,6 +201,12 @@ jobs:
           cp "$BIN" codebase-memory-mcp.exe
           scripts/gen-third-party-notices.sh THIRD_PARTY_NOTICES.md
           zip codebase-memory-mcp-ui-windows-amd64.zip codebase-memory-mcp.exe LICENSE install.ps1 THIRD_PARTY_NOTICES.md
+
+      - name: Attest UI binary provenance
+        if: ${{ inputs.attest }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: codebase-memory-mcp-ui-windows-amd64.zip
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -227,6 +257,12 @@ jobs:
           scripts/gen-third-party-notices.sh THIRD_PARTY_NOTICES.md
           zip codebase-memory-mcp-windows-arm64.zip codebase-memory-mcp.exe LICENSE install.ps1 THIRD_PARTY_NOTICES.md
 
+      - name: Attest standard binary provenance
+        if: ${{ inputs.attest }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: codebase-memory-mcp-windows-arm64.zip
+
       - name: Build UI binary
         shell: msys2 {0}
         env:
@@ -246,6 +282,12 @@ jobs:
           cp "$BIN" codebase-memory-mcp.exe
           scripts/gen-third-party-notices.sh THIRD_PARTY_NOTICES.md
           zip codebase-memory-mcp-ui-windows-arm64.zip codebase-memory-mcp.exe LICENSE install.ps1 THIRD_PARTY_NOTICES.md
+
+      - name: Attest UI binary provenance
+        if: ${{ inputs.attest }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: codebase-memory-mcp-ui-windows-arm64.zip
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -299,6 +341,12 @@ jobs:
           tar -czf "codebase-memory-mcp-linux-${ARCH}-portable.tar.gz" \
             -C build/c codebase-memory-mcp LICENSE install.sh THIRD_PARTY_NOTICES.md
 
+      - name: Attest standard binary provenance
+        if: ${{ inputs.attest }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: codebase-memory-mcp-linux-${{ matrix.arch }}-portable.tar.gz
+
       - name: Build UI binary (static)
         env:
           VERSION: ${{ inputs.version }}
@@ -317,6 +365,12 @@ jobs:
           scripts/gen-third-party-notices.sh build/c/THIRD_PARTY_NOTICES.md
           tar -czf "codebase-memory-mcp-ui-linux-${ARCH}-portable.tar.gz" \
             -C build/c codebase-memory-mcp LICENSE install.sh THIRD_PARTY_NOTICES.md
+
+      - name: Attest UI binary provenance
+        if: ${{ inputs.attest }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: codebase-memory-mcp-ui-linux-${{ matrix.arch }}-portable.tar.gz
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

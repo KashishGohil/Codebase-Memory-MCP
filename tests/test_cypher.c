@@ -10,6 +10,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#ifndef _WIN32
+#include <sys/wait.h> /* fork/waitpid crash-isolation for the projection-width guard */
+#include <unistd.h>
+#endif
 
 /* ══════════════════════════════════════════════════════════════════
  *  LEXER TESTS
@@ -2524,6 +2528,52 @@ TEST(cypher_issue237_distinct_order_limit) {
     PASS();
 }
 
+/* #873: duplicate projected rows must be deduped before ORDER BY + LIMIT */
+TEST(cypher_issue873_distinct_order_limit_dedupes_before_limit) {
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(
+        s, "MATCH (n) RETURN DISTINCT n.label AS label ORDER BY label LIMIT 2", "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_NULL(r.error);
+    ASSERT_EQ(r.row_count, 2);
+    ASSERT_STR_EQ(r.rows[0][0], "Function");
+    ASSERT_STR_EQ(r.rows[1][0], "Module");
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
+/* #873: early LIMIT must not truncate rows before DISTINCT for simple RETURN */
+TEST(cypher_issue873_distinct_limit_dedupes_before_limit) {
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(
+        s, "MATCH (n) RETURN DISTINCT n.label AS label LIMIT 2", "test", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_NULL(r.error);
+    ASSERT_EQ(r.row_count, 2);
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
+/* #873: SKIP is applied after DISTINCT and ORDER BY, not before dedupe */
+TEST(cypher_issue873_distinct_order_skip_limit_dedupes_before_skip) {
+    cbm_store_t *s = setup_cypher_store();
+    cbm_cypher_result_t r = {0};
+    int rc = cbm_cypher_execute(
+        s, "MATCH (n) RETURN DISTINCT n.label AS label ORDER BY label SKIP 1 LIMIT 1", "test",
+        0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_NULL(r.error);
+    ASSERT_EQ(r.row_count, 1);
+    ASSERT_STR_EQ(r.rows[0][0], "Module");
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
 /* #252: toInteger() */
 TEST(cypher_issue252_tointeger) {
     cbm_store_t *s = setup_cypher_store();
@@ -2578,15 +2628,56 @@ TEST(cypher_multi_prop_projection_no_alias) {
     ASSERT_EQ(rc, 0);
     ASSERT_EQ(r.row_count, 1);
     ASSERT_EQ(r.col_count, 6);
-    ASSERT_STR_EQ(r.rows[0][0], "1"); /* loop_depth — NOT the suffix transitive_loop_depth */
-    ASSERT_STR_EQ(r.rows[0][1], "5"); /* transitive_loop_depth */
-    ASSERT_STR_EQ(r.rows[0][2], "7"); /* cognitive */
-    ASSERT_STR_EQ(r.rows[0][3], "3"); /* complexity */
+    ASSERT_STR_EQ(r.rows[0][0], "1");  /* loop_depth — NOT the suffix transitive_loop_depth */
+    ASSERT_STR_EQ(r.rows[0][1], "5");  /* transitive_loop_depth */
+    ASSERT_STR_EQ(r.rows[0][2], "7");  /* cognitive */
+    ASSERT_STR_EQ(r.rows[0][3], "3");  /* complexity */
     ASSERT_STR_EQ(r.rows[0][4], "10"); /* start_line (computed) */
     ASSERT_STR_EQ(r.rows[0][5], "42"); /* end_line (computed) — distinct from start_line */
     cbm_cypher_result_free(&r);
     cbm_store_close(s);
     PASS();
+}
+
+/* Result projection writes into fixed-width per-row stack arrays
+ * (vals[CBM_SZ_32] / func_bufs[CBM_SZ_32][…] in execute_return_simple and its
+ * siblings), indexed by the parsed RETURN item count. The parser must bound
+ * that count to the array width; an over-wide RETURN has to be rejected, not
+ * allowed to run and write past the arrays. Drive a >32-column RETURN in a
+ * forked child so a stack overwrite (ASan abort, or a raw segfault) shows up
+ * as a killing signal instead of taking down the whole runner; the bounded
+ * path returns an ordinary error and the child exits cleanly. */
+TEST(cypher_wide_return_projection_bounded) {
+#ifdef _WIN32
+    SKIP_PLATFORM("fork crash-isolation is POSIX-only; the parse-time bound is platform-agnostic");
+#else
+    char query[4096];
+    int off = snprintf(query, sizeof(query), "MATCH (f:Function) RETURN ");
+    for (int i = 0; i < 48; i++) { /* 48 > CBM_SZ_32 (32) fixed columns */
+        off += snprintf(query + off, sizeof(query) - (size_t)off, "%sf.p%d", i ? ", " : "", i);
+    }
+    fflush(NULL);
+    pid_t pid = fork();
+    if (pid == 0) {
+        cbm_store_t *s = setup_cypher_store();
+        cbm_cypher_result_t r = {0};
+        (void)cbm_cypher_execute(s, query, "test", 0, &r);
+        cbm_cypher_result_free(&r);
+        cbm_store_close(s);
+        _exit(0); /* reached only when execution did NOT overflow */
+    }
+    ASSERT_TRUE(pid > 0);
+    int status = 0;
+    (void)waitpid(pid, &status, 0);
+    if (WIFSIGNALED(status)) {
+        char msg[96];
+        snprintf(msg, sizeof(msg), "wide RETURN killed by signal %d — projection stack overflow",
+                 WTERMSIG(status));
+        FAIL(msg);
+    }
+    ASSERT_TRUE(WIFEXITED(status));
+    PASS();
+#endif
 }
 
 /* ══════════════════════════════════════════════════════════════════ */
@@ -2624,6 +2715,9 @@ SUITE(cypher) {
     RUN_TEST(cypher_exec_match_all_functions);
     RUN_TEST(cypher_issue240_labels_function);
     RUN_TEST(cypher_issue237_distinct_order_limit);
+    RUN_TEST(cypher_issue873_distinct_order_limit_dedupes_before_limit);
+    RUN_TEST(cypher_issue873_distinct_limit_dedupes_before_limit);
+    RUN_TEST(cypher_issue873_distinct_order_skip_limit_dedupes_before_skip);
     RUN_TEST(cypher_issue252_tointeger);
     RUN_TEST(cypher_issue305_count_star_alias);
     RUN_TEST(cypher_exec_where_eq);
@@ -2750,4 +2844,5 @@ SUITE(cypher) {
     /* Phase 9: UNWIND */
     RUN_TEST(cypher_parse_unwind);
     RUN_TEST(cypher_parse_unwind_var);
+    RUN_TEST(cypher_wide_return_projection_bounded);
 }

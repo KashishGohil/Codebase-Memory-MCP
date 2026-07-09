@@ -18,6 +18,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "discover/discover.h" /* cbm_ignored_file_t (#963) */
+
 /* Forward declarations */
 typedef struct cbm_store cbm_store_t;
 typedef struct cbm_gbuf cbm_gbuf_t;
@@ -89,11 +91,19 @@ void cbm_pipeline_get_committed_counts(const cbm_pipeline_t *p, int *nodes, int 
 typedef struct {
     char *path;   /* repo-relative path of the skipped file */
     char *reason; /* human-readable cause (e.g. "oversized (712 MB > 512 MB)",
-                   * "parse timeout", "read failed") */
-    char *phase;  /* "read" | "extract" | "oversized". "cross_lsp" is a RESERVED
-                   * phase string for Track C's crash-attribution signal and is
-                   * intentionally NOT emitted today (the cross-LSP passes are
-                   * best-effort/void with no genuine per-file failure). */
+                   * "parse timeout", "read failed"). For phase "parse_partial"
+                   * this carries the 1-based line-range list ("12-40,88-90")
+                   * of the unparseable regions. */
+    char *phase;  /* "read" | "extract" | "oversized" | "parse_partial".
+                   * "parse_partial" (#963) is NOT a skip: the file WAS indexed
+                   * but contains tree-sitter ERROR/MISSING regions whose
+                   * constructs are absent from the graph (best-effort signal —
+                   * absence of the flag is NOT a completeness guarantee). The
+                   * MCP layer reports it separately from skipped[]. "cross_lsp"
+                   * is a RESERVED phase string for Track C's crash-attribution
+                   * signal and is intentionally NOT emitted today (the
+                   * cross-LSP passes are best-effort/void with no genuine
+                   * per-file failure). */
 } cbm_file_error_t;
 
 /* Record a skipped file. path/reason/phase are copied. NULL-safe on p.
@@ -108,6 +118,13 @@ void cbm_pipeline_add_file_error(cbm_pipeline_t *p, const char *path, const char
  * cbm_pipeline_free()). out and count are set to NULL and 0 when p is NULL or
  * nothing was skipped. Do not free. */
 void cbm_pipeline_get_file_errors(const cbm_pipeline_t *p, cbm_file_error_t **out, int *count);
+
+/* Borrowed accessor for the individually-ignored files captured during
+ * discovery (#963 "purposely not indexed" — by design, not failures). count
+ * is the stored (capped) length, total the uncapped number seen. Do not
+ * free. */
+void cbm_pipeline_get_ignored(const cbm_pipeline_t *p, cbm_ignored_file_t **out, int *count,
+                              int *total);
 
 /* ── Index lock (prevents concurrent pipeline runs on same DB) ──── */
 

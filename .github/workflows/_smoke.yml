@@ -248,9 +248,20 @@ jobs:
         run: |
           & "C:\Program Files\Windows Defender\MpCmdRun.exe" -SignatureUpdate 2>$null
           $result = & "C:\Program Files\Windows Defender\MpCmdRun.exe" -Scan -ScanType 3 -File "$PWD\codebase-memory-mcp.exe" -DisableRemediation
+          $code = $LASTEXITCODE
           Write-Host $result
-          if ($LASTEXITCODE -ne 0) { Write-Host "BLOCKED: Windows Defender flagged binary!"; exit 1 }
-          Write-Host "=== Windows Defender: clean ==="
+          # MpCmdRun -Scan exit codes: 0 = clean, 2 = threat found. Any OTHER non-zero
+          # means the scan engine could not run at all (e.g. hr=0x800106ba: the Defender
+          # antimalware service is unavailable on the runner) — that is NOT a detection.
+          # Fail soft on an engine failure so a transient runner-side AV outage can't
+          # false-fail a release; only a real detection (exit 2) hard-blocks.
+          if ($code -eq 2) {
+            Write-Host "BLOCKED: Windows Defender flagged binary!"; exit 1
+          } elseif ($code -ne 0) {
+            Write-Host "::warning::Windows Defender scan could not run (exit $code) - skipping AV gate on this runner"
+          } else {
+            Write-Host "=== Windows Defender: clean ==="
+          }
 
   smoke-linux-portable:
     needs: setup-matrix
