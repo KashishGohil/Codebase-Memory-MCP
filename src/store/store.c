@@ -6597,11 +6597,33 @@ static cbm_vector_result_t *vs_append_result(cbm_vector_result_t *results, int *
     return results;
 }
 
+static int vs_count_candidates(cbm_store_t *s, const char *project) {
+    const char *sql = "SELECT count(*)"
+                      " FROM node_vectors v"
+                      " INNER JOIN nodes n ON n.id = v.node_id"
+                      " WHERE v.project = ?1"
+                      " AND n.label IN ('Function','Method','Class')";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(s->db, sql, SQLITE_AUTO_LEN, &stmt, NULL) != SQLITE_OK) {
+        return 0;
+    }
+    sqlite3_bind_text(stmt, SKIP_ONE, project, SQLITE_AUTO_LEN, SQLITE_STATIC);
+    int total = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        total = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    return total;
+}
+
 int cbm_store_vector_search(cbm_store_t *s, const char *project, const char **keywords,
-                            int keyword_count, int limit, cbm_vector_result_t **out,
-                            int *out_count) {
+                            int keyword_count, int limit, cbm_vector_result_t **out, int *out_count,
+                            int *total_count) {
     *out = NULL;
     *out_count = 0;
+    if (total_count) {
+        *total_count = 0;
+    }
     if (!s || !project || !keywords || keyword_count <= 0) {
         return CBM_STORE_ERR;
     }
@@ -6610,6 +6632,9 @@ int cbm_store_vector_search(cbm_store_t *s, const char *project, const char **ke
     int actual_kw = vs_build_keyword_vectors(s, project, keywords, keyword_count, kw_vecs);
     if (actual_kw == 0) {
         return CBM_STORE_OK;
+    }
+    if (total_count) {
+        *total_count = vs_count_candidates(s, project);
     }
 
     /* Scan all node vectors, compute per-keyword cosine, take min.
