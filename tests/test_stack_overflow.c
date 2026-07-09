@@ -1,5 +1,5 @@
 /*
- * test_stack_overflow.c — Regression tests for GitHub issue #199.
+ * test_stack_overflow.c — Regression tests for issue #199.
  *
  * Verifies that extraction functions do NOT silently drop AST nodes
  * when files exceed the fixed traversal stack capacity (512 for calls,

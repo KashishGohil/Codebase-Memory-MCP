@@ -39,8 +39,9 @@ function encodePath(p: string): string {
   return p.split("/").map(encodeURIComponent).join("/");
 }
 
-/* GitHub (or GitLab) deep-link, or null when we lack remote/path/line info. */
-function githubUrl(node: GraphNode, repoInfo: RepoInfo | null): string | null {
+/* Repository web deep-link (any git host), or null when we lack
+ * remote/path/line info. */
+function repoUrl(node: GraphNode, repoInfo: RepoInfo | null): string | null {
   if (!repoInfo?.blob_base || !node.file_path) return null;
   return `${repoInfo.blob_base}/${encodePath(node.file_path)}${lineSuffix(node)}`;
 }
@@ -66,7 +67,7 @@ export function NodeDetailPanel({
   }, [node.id]);
 
   const canFetchCode = Boolean(project && node.qualified_name);
-  const ghUrl = githubUrl(node, repoInfo);
+  const ghUrl = repoUrl(node, repoInfo);
 
   const loadCode = async () => {
     if (!project || !node.qualified_name) return;
@@ -161,7 +162,7 @@ export function NodeDetailPanel({
               rel="noopener noreferrer"
               className="px-2.5 py-1 rounded-md bg-white/[0.05] text-foreground/60 text-[11px] font-medium hover:bg-white/[0.09] hover:text-foreground/90 transition-colors"
             >
-              Open on GitHub ↗
+              Open in repository ↗
             </a>
           )}
         </div>

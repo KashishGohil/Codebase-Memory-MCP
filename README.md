@@ -1,26 +1,12 @@
 # codebase-memory-mcp
 
-[![GitHub Release](https://img.shields.io/github/v/release/DeusData/codebase-memory-mcp?style=flat&color=blue)](https://github.com/DeusData/codebase-memory-mcp/releases/latest)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![CI](https://img.shields.io/github/actions/workflow/status/DeusData/codebase-memory-mcp/dry-run.yml?label=CI)](https://github.com/DeusData/codebase-memory-mcp/actions/workflows/dry-run.yml)
-[![Tests](https://img.shields.io/badge/tests-5604_passing-brightgreen)](https://github.com/DeusData/codebase-memory-mcp)
-[![Languages](https://img.shields.io/badge/languages-158-orange)](https://github.com/DeusData/codebase-memory-mcp)
-[![Hybrid LSP](https://img.shields.io/badge/Hybrid_LSP-9_languages-blue)](#hybrid-lsp)
-[![Agents](https://img.shields.io/badge/agents-11-purple)](https://github.com/DeusData/codebase-memory-mcp)
-[![Pure C](https://img.shields.io/badge/pure_C-zero_dependencies-blue)](https://github.com/DeusData/codebase-memory-mcp)
-[![Platform](https://img.shields.io/badge/macOS_%7C_Linux_%7C_Windows-supported-lightgrey)](https://github.com/DeusData/codebase-memory-mcp/releases/latest)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/DeusData/codebase-memory-mcp/badge)](https://scorecard.dev/viewer/?uri=github.com/DeusData/codebase-memory-mcp)
-[![SLSA 3](https://slsa.dev/images/gh-badge-level3.svg)](https://slsa.dev)
-[![VirusTotal](https://img.shields.io/badge/VirusTotal-scanned_every_release-brightgreen?logo=virustotal)](https://github.com/DeusData/codebase-memory-mcp/releases/latest)
-[![arXiv](https://img.shields.io/badge/arXiv-2603.27277-b31b1b?logo=arxiv)](https://arxiv.org/abs/2603.27277)
+**Internal source-built fork.** Based on the codebase-memory-mcp project (MIT license — see [LICENSE](LICENSE) and [THIRD_PARTY.md](THIRD_PARTY.md)). This fork is adapted for restricted corporate environments: the binary makes **zero outbound network connections** (the upstream update check and self-update download were removed), and the installers build from this repository's sources instead of downloading release binaries.
 
-**The fastest and most efficient code intelligence engine for AI coding agents.** Full-indexes an average repository in milliseconds, the Linux kernel (28M LOC, 75K files) in 3 minutes. Answers structural queries in under 1ms. Ships as a single static binary for macOS, Linux, and Windows — download, run `install`, done.
+**A fast code intelligence engine for AI coding agents.** Full-indexes an average repository in milliseconds, the Linux kernel (28M LOC, 75K files) in 3 minutes. Answers structural queries in under 1ms. Ships as a single static binary for macOS, Linux, and Windows.
 
-High-quality parsing through [tree-sitter](https://tree-sitter.github.io/tree-sitter/) AST analysis across all 158 languages, enhanced with [**Hybrid LSP** semantic type resolution](#hybrid-lsp) for Python, TypeScript / JavaScript / JSX / TSX, PHP, C#, Go, C, C++, Java, Kotlin, and Rust — producing a persistent knowledge graph of functions, classes, call chains, HTTP routes, and cross-service links. 14 MCP tools. Zero dependencies. Plug and play across 11 coding agents.
+High-quality parsing through tree-sitter AST analysis across all 158 languages, enhanced with [**Hybrid LSP** semantic type resolution](#hybrid-lsp) for Python, TypeScript / JavaScript / JSX / TSX, PHP, C#, Go, C, C++, Java, Kotlin, and Rust — producing a persistent knowledge graph of functions, classes, call chains, HTTP routes, and cross-service links. 14 MCP tools. Zero dependencies. Plug and play across 11 coding agents.
 
-> **Research** — The design and benchmarks behind this project are described in the preprint [*Codebase-Memory: Tree-Sitter-Based Knowledge Graphs for LLM Code Exploration via MCP*](https://arxiv.org/abs/2603.27277) (arXiv:2603.27277). Evaluated across 31 real-world repositories: 83% answer quality, 10× fewer tokens, 2.1× fewer tool calls vs. file-by-file exploration.
-
-> **Security & Trust** — This tool reads your codebase and writes to your agent configuration files. That is what it is designed to do. If you prefer to audit before running, the [full source is here](https://github.com/DeusData/codebase-memory-mcp) — every release binary is signed, checksummed, and scanned by 70+ antivirus engines. All processing happens 100% locally; your code never leaves your machine. Found a security issue? We want to know — see [SECURITY.md](SECURITY.md). Security is Priority #1 for us.
+> **Security & Trust** — This tool reads your codebase and writes to your agent configuration files. That is what it is designed to do. All processing happens 100% locally; your code never leaves your machine. In this source-built fork the binary performs no outbound network connections at all (verify with `scripts/security-network.sh`).
 
 <p align="center">
   <img src="docs/graph-ui-screenshot.png" alt="Graph visualization UI showing the codebase-memory-mcp knowledge graph" width="800">
@@ -31,7 +17,7 @@ High-quality parsing through [tree-sitter](https://tree-sitter.github.io/tree-si
 ## Why codebase-memory-mcp
 
 - **Extreme indexing speed** — Linux kernel (28M LOC, 75K files) in 3 minutes. RAM-first pipeline: LZ4 compression, in-memory SQLite, fused Aho-Corasick pattern matching. Memory released after indexing.
-- **Plug and play** — single static binary for macOS (arm64/amd64), Linux (arm64/amd64), and Windows (amd64). No Docker, no runtime dependencies, no API keys. Download → `install` → restart agent → done.
+- **Plug and play** — single static binary for macOS (arm64/amd64), Linux (arm64/amd64), and Windows (amd64). No Docker, no runtime dependencies, no API keys. Build → `install` → restart agent → done.
 - **158 languages** — vendored tree-sitter grammars compiled into the binary. Nothing to install, nothing that breaks.
 - **120x fewer tokens** — 5 structural queries: ~3,400 tokens vs ~412,000 via file-by-file search. One graph query replaces dozens of grep/read cycles.
 - **11 agents, one command** — `install` auto-detects Claude Code, Codex CLI, Gemini CLI, Zed, OpenCode, Antigravity, Aider, KiloCode, VS Code, OpenClaw, and Kiro — configures MCP entries, instruction files, and pre-tool hooks for each.
@@ -41,75 +27,35 @@ High-quality parsing through [tree-sitter](https://tree-sitter.github.io/tree-si
 
 ## Quick Start
 
-**One-line install** (macOS / Linux):
+Clone this repository from your internal git server, then build and install
+from source. The standard build needs only gcc/g++ (or clang) and GNU make —
+all C dependencies are vendored in the repo, so the build runs fully offline.
+
+**macOS / Linux / WSL:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash
+git clone <internal-git-url>/codebase-memory-mcp.git
+cd codebase-memory-mcp
+./install.sh
 ```
 
-With graph visualization UI:
-```bash
-curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash -s -- --ui
-```
-
-**Windows** (PowerShell):
+**Windows** (PowerShell; requires the MSYS2 MinGW toolchain — gcc + make):
 ```powershell
-# 1. Download the installer
-Invoke-WebRequest -Uri https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.ps1 -OutFile install.ps1
-
-# 2. (Optional but recommended) Inspect the script
-notepad install.ps1
-
-# 3. Unblock the downloaded file (removes Mark-of-the-Web restriction added by browsers/Invoke-WebRequest)
-Unblock-File .\install.ps1
-
-# 4. Run it
-.\install.ps1
-
+git clone <internal-git-url>/codebase-memory-mcp.git
+cd codebase-memory-mcp
+powershell -ExecutionPolicy ByPass -File install.ps1
 ```
 
 > **Note:** If you see a script execution policy error, run `Set-ExecutionPolicy -Scope Process Bypass` first, or invoke with `PowerShell -ExecutionPolicy Bypass -File .\install.ps1`.
 
-Options: `--ui` (graph visualization), `--skip-config` (binary only, no agent setup), `--dir=<path>` (custom location).
+Options: `--ui` (graph visualization; the UI bundle build additionally needs node + npm), `--skip-config` (binary only, no agent setup), `--dir=<path>` (custom location).
 
 Restart your coding agent. Say **"Index this project"** — done.
 
-<details>
-<summary>Manual install</summary>
-
-1. **Download** the archive for your platform from the [latest release](https://github.com/DeusData/codebase-memory-mcp/releases/latest):
-   - `codebase-memory-mcp-<os>-<arch>.tar.gz` (macOS/Linux) or `.zip` (Windows) — standard
-   - `codebase-memory-mcp-ui-<os>-<arch>.tar.gz` / `.zip` — with graph visualization
-
-2. **Extract and install** (each archive includes `install.sh` or `install.ps1`):
-
-   macOS / Linux:
-   ```bash
-   tar xzf codebase-memory-mcp-*.tar.gz
-   ./install.sh
-   ```
-
-   Windows (PowerShell):
-   ```powershell
-   Expand-Archive codebase-memory-mcp-windows-amd64.zip -DestinationPath .
-   Unblock-File .\install.ps1
-   .\install.ps1
-   ```
-
-3. **Restart** your coding agent.
-
-The `install` command automatically strips macOS quarantine attributes and ad-hoc signs the binary — no manual `xattr`/`codesign` needed.
-</details>
-
-The `install` command auto-detects all installed coding agents and configures MCP server entries, instruction files, skills, and pre-tool hooks for each.
+The `install` command auto-detects all installed coding agents and configures MCP server entries, instruction files, skills, and pre-tool hooks for each. It also strips macOS quarantine attributes and ad-hoc signs the binary — no manual `xattr`/`codesign` needed.
 
 ### Graph Visualization UI
 
-The UI ships as a separate `ui` build (it embeds the frontend). The default install on every channel is the lean, headless server; opt into the UI build with:
-
-- **install.sh:** add `--ui` (see [Quick Start](#quick-start))
-- **npm:** `CBM_VARIANT=ui npm install -g codebase-memory-mcp`
-- **PyPI:** `CBM_VARIANT=ui pip install codebase-memory-mcp`
-- **Manual:** download the `codebase-memory-mcp-ui-<os>-<arch>` archive
+The UI ships as a separate `ui` build (it embeds the frontend). The default install is the lean, headless server; opt into the UI build with `./install.sh --ui` (see [Quick Start](#quick-start)). Building the UI bundle requires node + npm with access to an npm registry (use your internal npm mirror if the public registry is blocked).
 
 Then run it:
 
@@ -133,11 +79,13 @@ Watcher registration is controlled separately by `auto_watch` (default `true`). 
 
 ### Keeping Up to Date
 
-```bash
-codebase-memory-mcp update
-```
+Self-update is disabled in this source-built fork (the binary never reaches
+out to the network). To update, pull the latest sources and rebuild:
 
-The MCP server also checks for updates on startup and notifies on the first tool call if a newer release is available.
+```bash
+git pull
+./install.sh
+```
 
 ### Uninstall
 
@@ -269,80 +217,35 @@ Set the variable in the `env` block of your agent's MCP server config, or export
 
 ### What to share
 
-When you open a memory/performance issue, **attach the `.ndjson` trajectory** — it contains no source code or query text, only resource counters. If you'd rather not attach a file, paste it (or an agent's summary of it) into the issue: your assistant can read the NDJSON directly and report whether `rss`/`committed` grow monotonically, how fast, and relative to query count — which is exactly what we need to find the cause.
+When you report a memory/performance problem to the maintainers of this fork, **attach the `.ndjson` trajectory** — it contains no source code or query text, only resource counters. If you'd rather not attach a file, paste it (or an agent's summary of it) into the report: your assistant can read the NDJSON directly and report whether `rss`/`committed` grow monotonically, how fast, and relative to query count — which is exactly what is needed to find the cause.
 
 ## Installation
 
-### Pre-built Binaries
+Installation always builds from this repository's sources — there are no
+pre-built downloads. The recommended path is `./install.sh` / `install.ps1`
+(see [Quick Start](#quick-start)); the sections below cover building the
+binary without installing it.
 
-| Platform | Standard | With Graph UI |
-|----------|----------|---------------|
-| macOS (Apple Silicon) | `codebase-memory-mcp-darwin-arm64.tar.gz` | `codebase-memory-mcp-ui-darwin-arm64.tar.gz` |
-| macOS (Intel) | `codebase-memory-mcp-darwin-amd64.tar.gz` | `codebase-memory-mcp-ui-darwin-amd64.tar.gz` |
-| Linux (x86_64) | `codebase-memory-mcp-linux-amd64.tar.gz` | `codebase-memory-mcp-ui-linux-amd64.tar.gz` |
-| Linux (ARM64) | `codebase-memory-mcp-linux-arm64.tar.gz` | `codebase-memory-mcp-ui-linux-arm64.tar.gz` |
-| Windows (x86_64) | `codebase-memory-mcp-windows-amd64.zip` | `codebase-memory-mcp-ui-windows-amd64.zip` |
-
-Every release includes `checksums.txt` with SHA-256 hashes. All binaries are statically linked — no shared library dependencies.
-
-> **Windows note**: SmartScreen may show a warning for unsigned software. Click **"More info"** → **"Run anyway"**. Verify integrity with `checksums.txt`.
-
-### Setup Scripts
-
-<details>
-<summary>Automated download + install</summary>
-
-**macOS / Linux:**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/scripts/setup.sh | bash
-```
-
-**Windows (PowerShell):**
-
-```powershell
-irm https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/scripts/setup-windows.ps1 | iex
-```
-
-</details>
-
-### AUR (Arch Linux)
-
-```bash
-yay -S codebase-memory-mcp-bin
-```
-
-```bash
-paru -S codebase-memory-mcp-bin
-```
-
-The `codebase-memory-mcp-bin` package is available at: https://aur.archlinux.org/packages/codebase-memory-mcp-bin
-
-### Install via Claude Code
-
-```
-You: "Install this MCP server: https://github.com/DeusData/codebase-memory-mcp"
-```
+> **Windows note**: SmartScreen may show a warning for unsigned software. Click **"More info"** → **"Run anyway"**.
 
 ### Build from Source
 
 <details>
-<summary>Prerequisites: C compiler + zlib</summary>
+<summary>Prerequisites: C compiler + GNU make + zlib</summary>
 
 | Requirement | Check | Install |
 |-------------|-------|---------|
-| **C compiler** (gcc or clang) | `gcc --version` or `clang --version` | macOS: `xcode-select --install`, Linux: `apt install build-essential` |
+| **C compiler** (gcc or clang) | `gcc --version` or `clang --version` | macOS: `xcode-select --install`, Linux: `apt install build-essential`, Windows: MSYS2 `pacman -S mingw-w64-x86_64-gcc` |
 | **C++ compiler** | `g++ --version` or `clang++ --version` | Same as above |
+| **GNU make** | `make --version` | Included in build-essential / Xcode CLT; Windows: MSYS2 `pacman -S make` |
 | **zlib** | — | macOS: included, Linux: `apt install zlib1g-dev` |
-| **Git** | `git --version` | Pre-installed on most systems |
 
 </details>
 
 ```bash
-git clone https://github.com/DeusData/codebase-memory-mcp.git
 cd codebase-memory-mcp
 scripts/build.sh                    # standard binary
-scripts/build.sh --with-ui          # with graph visualization
+scripts/build.sh --with-ui          # with graph visualization (needs node + npm)
 # Binary at: build/c/codebase-memory-mcp
 ```
 
@@ -486,7 +389,6 @@ codebase-memory-mcp config reset auto_index              # reset to default
 | `CBM_ALLOWED_ROOT` | *(unset)* | Restrict `index_repository` to paths within this directory. When set, a `repo_path` that resolves (after symlink / `..` resolution) outside this root is refused; unset imposes no restriction. Useful when the server may be driven by an untrusted caller, e.g. agentic or multi-tenant deployments. |
 | `CBM_CACHE_DIR` | `~/.cache/codebase-memory-mcp` | Override the database storage directory. All project indexes and config are stored here. |
 | `CBM_DIAGNOSTICS` | `false` | Set to `1` or `true` to enable periodic diagnostics output to `/tmp/cbm-diagnostics-<pid>.json`. |
-| `CBM_DOWNLOAD_URL` | *(GitHub releases)* | Override the download URL for updates. Used for testing or self-hosted deployments. |
 | `CBM_LOG_LEVEL` | `info` | Set the minimum log level. Accepted values (case-insensitive): `debug`, `info`, `warn`, `error`, `none` — or their numeric equivalents `0`–`4` matching the internal enum. Logs go to stderr; stdout is reserved for MCP JSON-RPC. |
 | `CBM_WORKERS` | *(detected)* | Override the parallel-indexing worker count returned by `cbm_default_worker_count`. Useful inside containers where `sysconf(_SC_NPROCESSORS_ONLN)` reports host CPUs rather than the cgroup's effective quota. Range 1–256; invalid values are ignored with a warning. |
 | `CBM_DUMP_VERIFY_MIN_RATIO` | `0.5` | After indexing, compare persisted SQLite node count to the in-memory dump count. When persisted nodes fall below this fraction of committed nodes (and committed > 50), `index_repository` returns `status:"degraded"` instead of silent `indexed`. Range 0–1; set `0` to disable. Invalid values are ignored with a warning. |
@@ -596,27 +498,24 @@ internal/cbm/         Vendored tree-sitter grammars (158 languages) + AST extrac
 
 ## Security
 
-Every release binary is verified through a multi-layer pipeline before publication:
+This fork is built from source on your own machine — the binary you run is
+the code you can read in this repository:
 
-- **VirusTotal** — all binaries scanned by 70+ antivirus engines (zero detections required to publish)
-- **SLSA Level 3** — cryptographic build provenance generated by GitHub Actions; verify with `gh attestation verify <file> --repo DeusData/codebase-memory-mcp`
-- **Sigstore cosign** — keyless signatures on all artifacts; bundles included in every release
-- **SHA-256 checksums** — `checksums.txt` published with every release; verified by both install scripts before extraction
-- **CodeQL SAST** — blocks release pipeline if any open alerts remain
-- **Zero runtime dependencies** — no transitive supply chain; all libraries vendored at compile time
-
-### v0.7.0 VirusTotal scans
-
-| Binary | SHA-256 | VirusTotal |
-|--------|---------|-----------|
-| `linux-amd64` | `8e12bb2d6ead7f20a6d3...` | [0/72 ✅](https://www.virustotal.com/gui/file/8e12bb2d6ead7f20a6d3bf2be1e51f978c38acce810f0734f510d134b039d152/detection) |
-| `linux-arm64` | `10f7136bfbf3950c6b2a...` | [0/72 ✅](https://www.virustotal.com/gui/file/10f7136bfbf3950c6b2a1a950bbf85e88b97ee55ab00b4dfbc2a5e9c2ede8672/detection) |
-| `darwin-arm64` | `7062a7408906344bf4f8...` | [0/72 ✅](https://www.virustotal.com/gui/file/7062a7408906344bf4f835e9580048af85d12dd2b7cec0edf869df93ad9a0592/detection) |
-| `darwin-amd64` | `28c6d640e1a0ac7bfcab...` | [0/72 ✅](https://www.virustotal.com/gui/file/28c6d640e1a0ac7bfcab5094c2186eced5264a20dcdffcb4455a1b28c5df2171/detection) |
-| `windows-amd64` | `9c3ddcf78368fd4fa891...` | [0/72 ✅](https://www.virustotal.com/gui/file/9c3ddcf78368fd4fa89156a553641bf1e03640b4fb6dd29a12c84aa5bc98cd86/detection) |
-
-Scan links for every release are also included in the GitHub Release notes automatically.
+- **Zero outbound network connections** — the upstream update check and
+  self-update download were removed; verify with `scripts/security-network.sh`
+  (strace-based egress test) and `scripts/security-strings.sh` (binary string
+  audit — no non-localhost URLs beyond vendored/toolchain attribution)
+- **Zero runtime dependencies** — no transitive supply chain; all libraries
+  vendored at compile time
+- **Local processing only** — indexes and the SQLite databases stay under
+  `~/.cache/codebase-memory-mcp` (or `CBM_CACHE_DIR`); your code never leaves
+  your machine
+- **Auditable install** — `install.sh` / `install.ps1` only compile the
+  vendored sources and copy one binary; `scripts/security-audit.sh` checks
+  the source for dangerous calls against `scripts/security-allowlist.txt`
 
 ## License
 
-MIT
+MIT — this fork is based on the codebase-memory-mcp project,
+Copyright (c) 2025 DeusData. See [LICENSE](LICENSE) for the full text and
+[THIRD_PARTY.md](THIRD_PARTY.md) for bundled third-party components.

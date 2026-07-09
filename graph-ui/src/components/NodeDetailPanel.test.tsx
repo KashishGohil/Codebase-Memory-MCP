@@ -70,7 +70,7 @@ describe("NodeDetailPanel code preview + deep-link", () => {
     expect((window as unknown as { __pwned?: boolean }).__pwned).toBeUndefined();
   });
 
-  it("builds an https GitHub deep-link with URL-encoded path segments", () => {
+  it("builds an https repository deep-link with URL-encoded path segments", () => {
     render(
       <NodeDetailPanel
         node={NODE}
@@ -83,7 +83,7 @@ describe("NodeDetailPanel code preview + deep-link", () => {
       />,
     );
 
-    const link = screen.getByRole("link", { name: /Open on GitHub/ });
+    const link = screen.getByRole("link", { name: /Open in repository/ });
     const href = link.getAttribute("href") ?? "";
     expect(href.startsWith(`${HTTPS}github.com/org/repo/blob/main/`)).toBe(true);
     /* Path segments are percent-encoded; the slashes between them are kept. */

@@ -2,7 +2,7 @@
 //
 // Issue: #581 -- "Memory leak: process grows to 50+ GB virtual memory over
 //               hours/days, crashes Windows"
-//   https://github.com/DeusData/codebase-memory-mcp/issues/581
+//   (upstream issue #581)
 //
 // OBSERVED BEHAVIOUR:
 //   codebase-memory-mcp in stdio MCP server mode grows from ~12 MB working

@@ -2,7 +2,7 @@
  * extract_node_stack.h — Growable TSNode stack for AST traversal.
  *
  * Replaces fixed-size TSNode stack[] arrays that silently drop AST subtrees
- * when the stack overflows (GitHub issue #199).
+ * when the stack overflows (issue #199).
  *
  * Uses the arena allocator for zero-fragmentation growth: old blocks are
  * abandoned (freed when the arena is destroyed at end of file extraction).

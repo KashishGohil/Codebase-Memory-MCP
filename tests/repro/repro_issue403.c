@@ -2,7 +2,7 @@
  * repro_issue403.c -- Reproduce-first case for OPEN bug #403.
  *
  * Issue: #403 -- "The IDE's installation directory is unnecessarily indexed"
- * https://github.com/DeusData/codebase-memory-mcp/issues/403
+ * (upstream issue #403)
  *
  * Wrongly-indexed directory: AppData/Local/Programs/Antigravity
  *   (the Antigravity IDE install tree; reported name confirmed in issue comments)

@@ -65,7 +65,7 @@ green=$(grep -oE '[0-9]+ passed' "$OUT" | head -1 | grep -oE '[0-9]+' || echo 0)
     echo ""
     echo "- **${reproduced}** open bug(s) still reproduced (RED — expected)"
     echo "- **${green}** case(s) PASSING — candidate-fixed → verify + close the issue + promote the guard to the gating suite"
-} >> "${GITHUB_STEP_SUMMARY:-/dev/stderr}"
+} >> "${STEP_SUMMARY_FILE:-/dev/stderr}"
 
 echo "=== bug-repro board: ${reproduced} reproduced (RED), ${green} passing (candidate-fixed) ==="
 # Green board: the suite ran. Redness is the data, not a job failure.

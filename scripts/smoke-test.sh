@@ -1351,7 +1351,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
     # no longer match the modified code -- while the untampered binary verifies cleanly (10a above).
     # This is a pure userspace hash check (no tampered code is ever executed). Done on a SEPARATE copy
     # so the original $SECURITY_BIN stays intact for the 10e re-sign test.
-    # Refs: github.com/garrytan/gstack#997, github.com/nodejs/node#40827.
+    # Refs: upstream reports garrytan/gstack#997 and nodejs/node#40827.
     TAMPER_BIN="${SECURITY_BIN}.tampered"
     cp "$SECURITY_BIN" "$TAMPER_BIN"
     # Tamper signed code: zero the entry-point instructions (LC_MAIN entryoff = start of __text) plus

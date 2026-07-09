@@ -282,7 +282,7 @@ TEST(mcp_index_repository_declares_name_override_issue571) {
 
 TEST(mcp_tools_array_schemas_have_items) {
     /* VS Code 1.112+ rejects array schemas without "items" (see
-     * https://github.com/microsoft/vscode/issues/248810).
+     * microsoft/vscode issue 248810).
      * Walk every tool's inputSchema and verify that every "type":"array"
      * property also contains "items". */
     char *json = cbm_mcp_tools_list();

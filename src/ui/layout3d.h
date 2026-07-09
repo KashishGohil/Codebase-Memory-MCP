@@ -22,7 +22,7 @@ typedef struct {
     const char *name;  /* display name */
     const char *qualified_name;
     const char *file_path; /* relative file path for tree reconstruction */
-    int start_line;        /* 1-based source range (for code snippet / GitHub link) */
+    int start_line;        /* 1-based source range (for code snippet / repo link) */
     int end_line;
     float size;     /* visual size */
     uint32_t color; /* 0xRRGGBB */

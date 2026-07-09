@@ -27,13 +27,13 @@ export type NodeStatus =
   | "normal"
   | "structural";
 
-/* Git remote metadata for building GitHub deep-links (/api/repo-info). */
+/* Git remote metadata for building repository deep-links (/api/repo-info). */
 export interface RepoInfo {
   root_path: string;
   branch: string;
   remote_url: string;
-  web_base: string; /* e.g. github.com/<org>/<repo> */
-  blob_base: string; /* e.g. github.com/<org>/<repo>/blob/<branch> */
+  web_base: string; /* e.g. git.example.com/<org>/<repo> */
+  blob_base: string; /* e.g. git.example.com/<org>/<repo>/blob/<branch> */
 }
 
 export interface GraphEdge {

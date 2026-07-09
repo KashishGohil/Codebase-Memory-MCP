@@ -1199,7 +1199,7 @@ static char *append_path_segments(char *out, const char *rel_path, size_t plen, 
             bool is_last = (part_end == end_ptr);
             if (!should_skip_fqn_part(start, part_len, is_last, has_name)) {
                 /* Drop a leading '.' from a dotfile / hidden-dir segment
-                 * (".env" -> "env", ".github" -> "github"). Otherwise the QN
+                 * (".env" -> "env", ".config" -> "config"). Otherwise the QN
                  * separator '.' plus the segment's own leading '.' produce a
                  * malformed "proj..env" double-dot, and a root dotfile's empty
                  * stem collides with the project QN. */

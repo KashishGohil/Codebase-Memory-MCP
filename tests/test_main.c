@@ -399,7 +399,7 @@ int main(int argc, char **argv) {
     RUN_SELECTED_SUITE(ast_profile);
     RUN_SELECTED_SUITE(simhash);
 
-    /* Stack overflow regression (GitHub #199) */
+    /* Stack overflow regression (#199) */
     RUN_SELECTED_SUITE(stack_overflow);
 
     /* Integration (end-to-end) */

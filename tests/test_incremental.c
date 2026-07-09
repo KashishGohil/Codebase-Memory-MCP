@@ -8,7 +8,10 @@
  * Includes performance metrics: wall-clock time and peak RSS on every index,
  * edge-type-specific assertions, and regression guards.
  *
- * Requires network access for initial clone. Skips gracefully if offline.
+ * Network is strictly opt-in: the suite runs ONLY when CBM_INCR_REPO_URL is
+ * set (e.g. to an internal git mirror of fastapi/fastapi at tag 0.99.1) and
+ * skips gracefully otherwise — the test binary must never reach out to the
+ * network on its own.
  */
 #include "../src/foundation/compat.h"
 #include "test_framework.h"
@@ -196,6 +199,16 @@ static int count_by_label(const char *label) {
 /* ── Setup / Teardown ─────────────────────────────────────────────── */
 
 static int incremental_setup(void) {
+    /* Never touch the network unless explicitly requested: corporate
+     * environments treat unexpected outbound connections as incidents.
+     * Point CBM_INCR_REPO_URL at a clone of fastapi/fastapi (tag 0.99.1),
+     * e.g. an internal git mirror. */
+    const char *repo_url = getenv("CBM_INCR_REPO_URL");
+    if (!repo_url || !repo_url[0]) {
+        printf("  CBM_INCR_REPO_URL not set — skipping network-based incremental tests\n");
+        return -1;
+    }
+
     snprintf(g_tmpdir, sizeof(g_tmpdir), "/tmp/cbm_incr_XXXXXX");
     if (!cbm_mkdtemp(g_tmpdir))
         return -1;
@@ -208,14 +221,14 @@ static int incremental_setup(void) {
     if (getenv("CI")) {
         snprintf(cmd, sizeof(cmd),
                  "git clone --depth=1 --branch 0.99.1 --quiet --filter=blob:none "
-                 "--sparse https://github.com/fastapi/fastapi.git '%s' 2>&1 && "
+                 "--sparse '%s' '%s' 2>&1 && "
                  "cd '%s' && git sparse-checkout set --no-cone '/*' '!/docs' '!/tests' 2>&1",
-                 g_repodir, g_repodir);
+                 repo_url, g_repodir, g_repodir);
     } else {
         snprintf(cmd, sizeof(cmd),
                  "git clone --depth=1 --branch 0.99.1 --quiet "
-                 "https://github.com/fastapi/fastapi.git '%s' 2>&1",
-                 g_repodir);
+                 "'%s' '%s' 2>&1",
+                 repo_url, g_repodir);
     }
     int rc = system(cmd);
     if (rc != 0) {

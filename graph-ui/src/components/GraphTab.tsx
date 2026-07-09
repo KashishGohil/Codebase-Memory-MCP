@@ -239,7 +239,7 @@ export function GraphTab({ project }: GraphTabProps) {
     }
   }, [selectedNode, missedSkeleton, overviewTarget]);
 
-  /* Fetch git remote metadata for GitHub deep-links */
+  /* Fetch git remote metadata for repository deep-links */
   useEffect(() => {
     if (!project) {
       setRepoInfo(null);

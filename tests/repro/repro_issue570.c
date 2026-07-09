@@ -2,7 +2,7 @@
  * repro_issue570.c -- Reproduce-first case for OPEN bug #570.
  *
  * BUG #570: "Installer adds hooks to both hooks.json and config.toml"
- *   https://github.com/DeusData/codebase-memory-mcp/issues/570
+ *   (upstream issue #570)
  *
  * TWO FILES WRONGLY WRITTEN (Codex SessionStart hook):
  *   ~/.codex/config.toml   -- always written by cbm_upsert_codex_hooks()

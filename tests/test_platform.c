@@ -86,7 +86,7 @@ TEST(platform_mmap_nonexistent) {
  *
  * Containers running cbm on a host with more CPUs than the cgroup's
  * effective quota currently see ~host_cpu workers spawned because
- * sysconf(_SC_NPROCESSORS_ONLN) is not cgroup-aware (see GitHub
+ * sysconf(_SC_NPROCESSORS_ONLN) is not cgroup-aware (see upstream
  * issue for the cgroup-detection ask). CBM_WORKERS is the smaller,
  * explicit-override path that ships independently.
  */

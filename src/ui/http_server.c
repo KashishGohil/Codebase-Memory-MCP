@@ -195,7 +195,7 @@ static void db_path_for_project(const char *project, char *buf, size_t bufsz) {
     snprintf(buf, bufsz, "%s/%s.db", dir, project);
 }
 
-/* ── Git remote → GitHub deep-link base (/api/repo-info) ───────── */
+/* ── Git remote → repo web deep-link base (/api/repo-info) ───────── */
 
 /* Return a copy of `url` with any "user[:password]@" userinfo removed from the
  * scheme://authority form, so credentials are never echoed back to the client.
@@ -257,7 +257,7 @@ char *cbm_ui_git_web_base(const char *url) {
     char *out = malloc(out_sz);
     if (!out)
         return NULL;
-    /* Legitimate GitHub blob-URL construction, not a network call — the scheme
+    /* Legitimate repo blob-URL construction, not a network call — the scheme
      * is https-forced here so the frontend deep-link can never be downgraded.
      * Allow-listed in scripts/security-allowlist.txt (URL:https://%s). */
     snprintf(out, out_sz, "https://%s", host_path);
@@ -1752,7 +1752,7 @@ static void dispatch_request(cbm_http_server_t *srv, cbm_http_conn_t *c,
         return;
     }
 
-    /* GET /api/repo-info → git remote / branch for GitHub deep-links */
+    /* GET /api/repo-info → git remote / branch for repository deep-links */
     if (is_get && cbm_http_path_match(req->path, "/api/repo-info*")) {
         handle_repo_info(c, req);
         return;
