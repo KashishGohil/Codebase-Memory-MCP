@@ -396,7 +396,9 @@ injects a one-line code-discovery reminder as session context (Gemini CLI also
 keeps its `BeforeTool` reminder).
 The installed Claude shim file is named `cbm-code-discovery-gate` for
 backward compatibility with existing installs; despite the legacy name it
-never gates and never blocks.
+never gates and never blocks. On Windows the shim is written as
+`cbm-code-discovery-gate.cmd` so Cursor/Claude Code can execute it without
+the "Open with" dialog (extensionless bash scripts are not runnable on Windows).
 
 ## CLI Mode
 

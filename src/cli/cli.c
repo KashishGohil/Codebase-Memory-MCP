@@ -1149,20 +1149,46 @@ static void cbm_claude_user_root(const char *home_dir, char *out, size_t out_sz)
     }
 }
 
+#ifdef _WIN32
+#define CMM_HOOK_SCRIPT_EXT ".cmd"
+#else
+#define CMM_HOOK_SCRIPT_EXT ""
+#endif
+
+/* Append the platform hook script extension (e.g. ".cmd" on Windows). */
+static void cbm_hook_script_filename(const char *script_name, char *out, size_t out_sz) {
+    if (out_sz == 0) {
+        return;
+    }
+    snprintf(out, out_sz, "%s%s", script_name, CMM_HOOK_SCRIPT_EXT);
+}
+
 /* Build the hook command string written into Claude Code's settings.json.
- * Honors $CLAUDE_CONFIG_DIR. When CLAUDE_CONFIG_DIR is unset, preserves the
- * legacy tilde-expanded form so settings.json stays portable across HOME values. */
+ * Honors $CLAUDE_CONFIG_DIR. On Unix, when CLAUDE_CONFIG_DIR is unset, preserves
+ * the legacy tilde-expanded form so settings.json stays portable across HOME values.
+ * On Windows, writes an absolute path to a .cmd wrapper — extensionless bash shims
+ * trigger the "Open with" dialog when Cursor/Claude Code spawn hook commands. */
 static void cbm_resolve_hook_command(const char *script_name, char *out, size_t out_sz) {
     if (out_sz == 0) {
         return;
     }
     out[0] = '\0';
     char env_buf[CLI_BUF_1K];
+    char filename[CLI_BUF_256];
+    cbm_hook_script_filename(script_name, filename, sizeof(filename));
     const char *env = cbm_safe_getenv("CLAUDE_CONFIG_DIR", env_buf, sizeof(env_buf), NULL);
     if (env && env[0]) {
-        snprintf(out, out_sz, "%s/hooks/%s", env, script_name);
+        snprintf(out, out_sz, "%s/hooks/%s", env, filename);
     } else {
-        snprintf(out, out_sz, "~/.claude/hooks/%s", script_name);
+#ifdef _WIN32
+        const char *home = cbm_get_home_dir();
+        if (!home || !home[0]) {
+            return;
+        }
+        snprintf(out, out_sz, "%s/.claude/hooks/%s", home, filename);
+#else
+        snprintf(out, out_sz, "~/.claude/hooks/%s", filename);
+#endif
     }
 }
 
@@ -2051,12 +2077,17 @@ void cbm_install_hook_gate_script(const char *home, const char *binary_path) {
         return;
     }
     /* Defensive: refuse to embed a binary path containing a double-quote, which
-     * would break the BIN="..." shell quoting in the generated shim. In normal
-     * installs this is unreachable (paths come from cbm_detect_self_path), but
-     * fail-loud here beats silently emitting a malformed script. */
+     * would break the BIN="..." shell quoting in the generated shim. On Windows,
+     * also reject '%' — cmd.exe expands %VAR% even inside double-quoted strings.
+     * In normal installs this is unreachable (paths come from cbm_detect_self_path). */
     if (strchr(binary_path, '"') != NULL) {
         return;
     }
+#ifdef _WIN32
+    if (strchr(binary_path, '%') != NULL) {
+        return;
+    }
+#endif
     char config_dir[CLI_BUF_1K];
     cbm_claude_config_dir(home, config_dir, sizeof(config_dir));
     if (!config_dir[0]) {
@@ -2067,12 +2098,25 @@ void cbm_install_hook_gate_script(const char *home, const char *binary_path) {
     cbm_mkdir_p(hooks_dir, CLI_OCTAL_PERM);
 
     char script_path[CLI_BUF_1K];
-    snprintf(script_path, sizeof(script_path), "%s/" CMM_HOOK_GATE_SCRIPT, hooks_dir);
+    char script_name[CLI_BUF_256];
+    cbm_hook_script_filename(CMM_HOOK_GATE_SCRIPT, script_name, sizeof(script_name));
+    snprintf(script_path, sizeof(script_path), "%s/%s", hooks_dir, script_name);
 
     FILE *f = fopen(script_path, "w");
     if (!f) {
         return;
     }
+#ifdef _WIN32
+    (void)fprintf(f,
+                  "@echo off\r\n"
+                  "REM codebase-memory-mcp search augmenter (Claude Code PreToolUse).\r\n"
+                  "REM NOTE: the legacy basename is kept for zero-migration upgrades.\r\n"
+                  "REM Despite the name this NEVER blocks a tool call - it only adds\r\n"
+                  "REM graph context. Any failure is silent (exit 0, no output).\r\n"
+                  "\"%s\" hook-augment 2>nul\r\n"
+                  "exit /b 0\r\n",
+                  binary_path);
+#else
     (void)fprintf(f,
                   "#!/usr/bin/env bash\n"
                   "# codebase-memory-mcp search augmenter (Claude Code PreToolUse).\n"
@@ -2084,6 +2128,7 @@ void cbm_install_hook_gate_script(const char *home, const char *binary_path) {
                   "\"$BIN\" hook-augment 2>/dev/null\n"
                   "exit 0\n",
                   binary_path);
+#endif
     /* fchmod before close to avoid TOCTOU race (CodeQL cpp/toctou-race-condition) */
 #ifndef _WIN32
     fchmod(fileno(f), CLI_OCTAL_PERM);
@@ -2111,12 +2156,34 @@ static void cbm_install_session_reminder_script(const char *home) {
     cbm_mkdir_p(hooks_dir, CLI_OCTAL_PERM);
 
     char script_path[CLI_BUF_1K];
-    snprintf(script_path, sizeof(script_path), "%s/" CMM_SESSION_REMINDER_SCRIPT, hooks_dir);
+    char script_name[CLI_BUF_256];
+    cbm_hook_script_filename(CMM_SESSION_REMINDER_SCRIPT, script_name, sizeof(script_name));
+    snprintf(script_path, sizeof(script_path), "%s/%s", hooks_dir, script_name);
 
     FILE *f = fopen(script_path, "w");
     if (!f) {
         return;
     }
+#ifdef _WIN32
+    (void)fprintf(f,
+                  "@echo off\r\n"
+                  "REM SessionStart hook: remind agent to use codebase-memory-mcp tools.\r\n"
+                  "echo CRITICAL - Code Discovery Protocol:\r\n"
+                  "echo 1. ALWAYS use codebase-memory-mcp tools FIRST for ANY code exploration:\r\n"
+                  "echo    - search_graph(name_pattern/label/qn_pattern) to find "
+                  "functions/classes/routes\r\n"
+                  "echo    - trace_path(function_name, mode=calls^|data_flow^|cross_service) for "
+                  "call chains\r\n"
+                  "echo    - get_code_snippet(qualified_name) for exact symbol source (precise "
+                  "ranges)\r\n"
+                  "echo    - query_graph(query) for complex Cypher patterns\r\n"
+                  "echo    - get_architecture(aspects) for project structure\r\n"
+                  "echo    - search_code(pattern) for text search (graph-augmented grep)\r\n"
+                  "echo 2. Use Grep/Glob/Read freely for text, configs, non-code files, and\r\n"
+                  "echo    always Read a file before editing it.\r\n"
+                  "echo 3. If a project is not indexed yet, run index_repository FIRST.\r\n"
+                  "exit /b 0\r\n");
+#else
     (void)fprintf(
         f, "#!/usr/bin/env bash\n"
            "# SessionStart hook: remind agent to use codebase-memory-mcp tools.\n"
@@ -2134,6 +2201,7 @@ static void cbm_install_session_reminder_script(const char *home) {
            "   always Read a file before editing it.\n"
            "3. If a project is not indexed yet, run index_repository FIRST.\n"
            "REMINDER\n");
+#endif
 #ifndef _WIN32
     fchmod(fileno(f), CLI_OCTAL_PERM);
 #endif
@@ -2196,15 +2264,24 @@ static void cbm_install_subagent_reminder_script(const char *home) {
     cbm_mkdir_p(hooks_dir, CLI_OCTAL_PERM);
 
     char script_path[CLI_BUF_1K];
-    snprintf(script_path, sizeof(script_path), "%s/" CMM_SUBAGENT_REMINDER_SCRIPT, hooks_dir);
+    char script_name[CLI_BUF_256];
+    cbm_hook_script_filename(CMM_SUBAGENT_REMINDER_SCRIPT, script_name, sizeof(script_name));
+    snprintf(script_path, sizeof(script_path), "%s/%s", hooks_dir, script_name);
 
     FILE *f = fopen(script_path, "w");
     if (!f) {
         return;
     }
-    /* The additionalContext value is a single line with no embedded quotes,
-     * backslashes, or newlines, so the JSON below is valid as written — no
-     * runtime escaping (and no python3/jq dependency) is required. */
+#ifdef _WIN32
+    (void)fprintf(f, "@echo off\r\n"
+                     "REM SubagentStart hook: tell subagents to use codebase-memory-mcp tools.\r\n"
+                     "echo {\"hookSpecificOutput\":{\"hookEventName\":\"SubagentStart\","
+                     "\"additionalContext\":\"Code discovery: prefer codebase-memory-mcp tools "
+                     "(search_graph, trace_path, get_code_snippet, query_graph, get_architecture, "
+                     "search_code) over grep/file-read for navigating code. Use Grep/Glob/Read for "
+                     "text, configs, and non-code files.\"}}\r\n"
+                     "exit /b 0\r\n");
+#else
     (void)fprintf(f,
                   "#!/usr/bin/env bash\n"
                   "# SubagentStart hook: tell subagents to use codebase-memory-mcp tools.\n"
@@ -2217,6 +2294,7 @@ static void cbm_install_subagent_reminder_script(const char *home) {
                   "search_code) over grep/file-read for navigating code. Use Grep/Glob/Read for "
                   "text, configs, and non-code files.\"}}\n"
                   "REMINDER\n");
+#endif
 #ifndef _WIN32
     fchmod(fileno(f), CLI_OCTAL_PERM);
 #endif
