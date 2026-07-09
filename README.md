@@ -1,5 +1,7 @@
 # codebase-memory-mcp
 
+> 🇷🇺 Инструкция на русском для этого доработанного варианта: [README.ru.md](README.ru.md)
+
 **Internal source-built fork.** Based on the codebase-memory-mcp project (MIT license — see [LICENSE](LICENSE) and [THIRD_PARTY.md](THIRD_PARTY.md)). This fork is adapted for restricted corporate environments: the binary makes **zero outbound network connections** (the upstream update check and self-update download were removed), and the installers build from this repository's sources instead of downloading release binaries.
 
 **A fast code intelligence engine for AI coding agents.** Full-indexes an average repository in milliseconds, the Linux kernel (28M LOC, 75K files) in 3 minutes. Answers structural queries in under 1ms. Ships as a single static binary for macOS, Linux, and Windows.
