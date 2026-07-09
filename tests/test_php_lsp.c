@@ -58,10 +58,14 @@ static const CBMResolvedCall *find_resolved_with_strategy(const CBMFileResult *r
                                                           const char *strategy) {
     for (int i = 0; i < r->resolved_calls.count; i++) {
         const CBMResolvedCall *rc = &r->resolved_calls.items[i];
-        if (!rc->caller_qn || !rc->callee_qn) continue;
-        if (!strstr(rc->caller_qn, callerSub)) continue;
-        if (!strstr(rc->callee_qn, calleeSub)) continue;
-        if (strategy && (!rc->strategy || strcmp(rc->strategy, strategy) != 0)) continue;
+        if (!rc->caller_qn || !rc->callee_qn)
+            continue;
+        if (!strstr(rc->caller_qn, callerSub))
+            continue;
+        if (!strstr(rc->callee_qn, calleeSub))
+            continue;
+        if (strategy && (!rc->strategy || strcmp(rc->strategy, strategy) != 0))
+            continue;
         return rc;
     }
     return NULL;
@@ -70,17 +74,16 @@ static const CBMResolvedCall *find_resolved_with_strategy(const CBMFileResult *r
 /* ── 1. Local class, method dispatch via $x = new C() ──────────── */
 
 TEST(phplsp_local_method_via_new_assignment) {
-    const char *src =
-        "<?php\n"
-        "class Greeter {\n"
-        "    public function hello(): string { return 'hi'; }\n"
-        "}\n"
-        "class Caller {\n"
-        "    public function go(): void {\n"
-        "        $g = new Greeter();\n"
-        "        $g->hello();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Greeter {\n"
+                      "    public function hello(): string { return 'hi'; }\n"
+                      "}\n"
+                      "class Caller {\n"
+                      "    public function go(): void {\n"
+                      "        $g = new Greeter();\n"
+                      "        $g->hello();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     int idx = require_resolved(r, "Caller.go", "Greeter.hello");
@@ -92,12 +95,11 @@ TEST(phplsp_local_method_via_new_assignment) {
 /* ── 2. Local class, method dispatch via typed parameter ───────── */
 
 TEST(phplsp_local_method_via_typed_param) {
-    const char *src =
-        "<?php\n"
-        "class P { public function value(): string { return 'x'; } }\n"
-        "class C {\n"
-        "    public function run(P $p): void { $p->value(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class P { public function value(): string { return 'x'; } }\n"
+                      "class C {\n"
+                      "    public function run(P $p): void { $p->value(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     int idx = require_resolved(r, "C.run", "P.value");
@@ -109,14 +111,13 @@ TEST(phplsp_local_method_via_typed_param) {
 /* ── 3. Arrow function with typed parameter ───────────────────── */
 
 TEST(phplsp_arrow_function_typed_param) {
-    const char *src =
-        "<?php\n"
-        "class P { public function value(): string { return 'x'; } }\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        $f = fn (P $p) => $p->value();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class P { public function value(): string { return 'x'; } }\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        $f = fn (P $p) => $p->value();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     int idx = require_resolved(r, "C.run", "P.value");
@@ -145,16 +146,15 @@ TEST(phplsp_static_call_resolved) {
 /* ── 5. self:: and parent:: dispatch ──────────────────────────── */
 
 TEST(phplsp_self_and_parent) {
-    const char *src =
-        "<?php\n"
-        "class Base { public function tag(): string { return 'b'; } }\n"
-        "class Child extends Base {\n"
-        "    public function alt(): string { return 'c'; }\n"
-        "    public function go(): void {\n"
-        "        self::alt();\n"
-        "        parent::tag();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Base { public function tag(): string { return 'b'; } }\n"
+                      "class Child extends Base {\n"
+                      "    public function alt(): string { return 'c'; }\n"
+                      "    public function go(): void {\n"
+                      "        self::alt();\n"
+                      "        parent::tag();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "Child.go", "Child.alt") >= 0);
@@ -169,11 +169,10 @@ TEST(phplsp_use_function_clause) {
     /* The aliased function isn't defined in this file; we just verify we
      * don't crash and don't misroute. Resolved-call set is allowed to be
      * empty for this case. */
-    const char *src =
-        "<?php\n"
-        "namespace A;\n"
-        "use function B\\helper;\n"
-        "function caller(): void { helper(); }\n";
+    const char *src = "<?php\n"
+                      "namespace A;\n"
+                      "use function B\\helper;\n"
+                      "function caller(): void { helper(); }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -183,15 +182,14 @@ TEST(phplsp_use_function_clause) {
 /* ── 7. PHPDoc @var binding ───────────────────────────────────── */
 
 TEST(phplsp_phpdoc_var) {
-    const char *src =
-        "<?php\n"
-        "class Q { public function tap(): string { return 'q'; } }\n"
-        "class C {\n"
-        "    public function run($x): void {\n"
-        "        /** @var Q $x */\n"
-        "        $x->tap();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Q { public function tap(): string { return 'q'; } }\n"
+                      "class C {\n"
+                      "    public function run($x): void {\n"
+                      "        /** @var Q $x */\n"
+                      "        $x->tap();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     int idx = require_resolved(r, "C.run", "Q.tap");
@@ -203,14 +201,13 @@ TEST(phplsp_phpdoc_var) {
 /* ── 8. Catch-clause typed binding ────────────────────────────── */
 
 TEST(phplsp_catch_binding) {
-    const char *src =
-        "<?php\n"
-        "class MyExc { public function name(): string { return 'x'; } }\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        try { /* nop */ } catch (MyExc $e) { $e->name(); }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class MyExc { public function name(): string { return 'x'; } }\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        try { /* nop */ } catch (MyExc $e) { $e->name(); }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     int idx = require_resolved(r, "C.run", "MyExc.name");
@@ -222,12 +219,11 @@ TEST(phplsp_catch_binding) {
 /* ── 9. $this-bound method dispatch ───────────────────────────── */
 
 TEST(phplsp_this_method) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function helper(): string { return 'h'; }\n"
-        "    public function go(): void { $this->helper(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function helper(): string { return 'h'; }\n"
+                      "    public function go(): void { $this->helper(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     int idx = require_resolved(r, "C.go", "C.helper");
@@ -248,13 +244,12 @@ TEST(phplsp_this_method) {
  * helper edge, which is the value-correctness goal.
  */
 TEST(phplsp_method_inherited_via_parent) {
-    const char *src =
-        "<?php\n"
-        "class Base { public function tag(): string { return 'b'; } }\n"
-        "class Mid extends Base {}\n"
-        "class C {\n"
-        "    public function run(Mid $m): void { $m->tag(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Base { public function tag(): string { return 'b'; } }\n"
+                      "class Mid extends Base {}\n"
+                      "class C {\n"
+                      "    public function run(Mid $m): void { $m->tag(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* Either resolved Base.tag OR emitted unindexed Mid.tag is acceptable —
@@ -269,13 +264,12 @@ TEST(phplsp_method_inherited_via_parent) {
 /* ── 11. Vendor / unindexed receiver — emit unindexed strategy ── */
 
 TEST(phplsp_unindexed_receiver_emits_block) {
-    const char *src =
-        "<?php\n"
-        "namespace App;\n"
-        "use Vendor\\NotIndexed\\Foo;\n"
-        "class C {\n"
-        "    public function run(Foo $x): void { $x->value(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App;\n"
+                      "use Vendor\\NotIndexed\\Foo;\n"
+                      "class C {\n"
+                      "    public function run(Foo $x): void { $x->value(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* The synthetic entry must exist so the pipeline bridge can suppress
@@ -308,21 +302,20 @@ TEST(phplsp_regression_prompt_value_not_routed_to_helper) {
      * same project, the unified extractor misroutes $prompt->value() to
      * the global helper. The LSP's php_method_typed_unindexed strategy
      * exists to block this misroute downstream. */
-    const char *src =
-        "<?php\n"
-        "namespace App;\n"
-        "use Vendor\\Prompt;\n"
-        "class C {\n"
-        "    public function configure(): void {\n"
-        "        Bus::run(fn (Prompt $prompt) => $prompt->value());\n"
-        "    }\n"
-        "}\n"
-        "class Bus { public static function run(callable $f): void {} }\n"
-        "function value($x) { return $x; }\n";
+    const char *src = "<?php\n"
+                      "namespace App;\n"
+                      "use Vendor\\Prompt;\n"
+                      "class C {\n"
+                      "    public function configure(): void {\n"
+                      "        Bus::run(fn (Prompt $prompt) => $prompt->value());\n"
+                      "    }\n"
+                      "}\n"
+                      "class Bus { public static function run(callable $f): void {} }\n"
+                      "function value($x) { return $x; }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
-    const CBMResolvedCall *rc = find_resolved_with_strategy(r, "C.configure", "Prompt.value",
-                                                            "php_method_typed_unindexed");
+    const CBMResolvedCall *rc =
+        find_resolved_with_strategy(r, "C.configure", "Prompt.value", "php_method_typed_unindexed");
     if (!rc) {
         printf("  expected unindexed Prompt.value for ConfiguresPrompts pattern, got %d\n",
                r->resolved_calls.count);
@@ -341,13 +334,12 @@ TEST(phplsp_regression_prompt_value_not_routed_to_helper) {
 /* ── 13. Method chaining — type from earlier method's return ──── */
 
 TEST(phplsp_method_chain_return_type) {
-    const char *src =
-        "<?php\n"
-        "class B { public function tap(): string { return 'b'; } }\n"
-        "class A { public function next(): B { return new B(); } }\n"
-        "class C {\n"
-        "    public function run(A $a): void { $a->next()->tap(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class B { public function tap(): string { return 'b'; } }\n"
+                      "class A { public function next(): B { return new B(); } }\n"
+                      "class C {\n"
+                      "    public function run(A $a): void { $a->next()->tap(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* First link: A.next */
@@ -361,10 +353,9 @@ TEST(phplsp_method_chain_return_type) {
 /* ── 14. Function global fallback (bare value() in same file) ─── */
 
 TEST(phplsp_function_global_fallback) {
-    const char *src =
-        "<?php\n"
-        "function doit($x) { return $x; }\n"
-        "class C { public function go(): void { doit(1); } }\n";
+    const char *src = "<?php\n"
+                      "function doit($x) { return $x; }\n"
+                      "class C { public function go(): void { doit(1); } }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* Either php_function_namespaced or php_function_global_fallback. */
@@ -381,13 +372,12 @@ TEST(phplsp_use_alias_resolves_for_new) {
      * confirmation is only that we don't crash. The Laravel benchmark
      * exercises the same path with typed parameters (Test #12), which
      * is the production-load-bearing case. */
-    const char *src =
-        "<?php\n"
-        "namespace App;\n"
-        "use Vendor\\Real as R;\n"
-        "class C {\n"
-        "    public function run(): void { $r = new R(); $r->go(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App;\n"
+                      "use Vendor\\Real as R;\n"
+                      "class C {\n"
+                      "    public function run(): void { $r = new R(); $r->go(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -397,13 +387,12 @@ TEST(phplsp_use_alias_resolves_for_new) {
 /* ── 16. Constructor property promotion (Phase 4b) ─────────────── */
 
 TEST(phplsp_constructor_property_promotion) {
-    const char *src =
-        "<?php\n"
-        "class P { public function value(): string { return 'p'; } }\n"
-        "class C {\n"
-        "    public function __construct(public P $p) {}\n"
-        "    public function run(): void { $this->p->value(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class P { public function value(): string { return 'p'; } }\n"
+                      "class C {\n"
+                      "    public function __construct(public P $p) {}\n"
+                      "    public function run(): void { $this->p->value(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     int idx = require_resolved(r, "C.run", "P.value");
@@ -415,14 +404,13 @@ TEST(phplsp_constructor_property_promotion) {
 /* ── 17. Typed property declaration ────────────────────────────── */
 
 TEST(phplsp_typed_property_declaration) {
-    const char *src =
-        "<?php\n"
-        "class B { public function tap(): string { return 'b'; } }\n"
-        "class C {\n"
-        "    private B $bar;\n"
-        "    public function __construct(B $b) { $this->bar = $b; }\n"
-        "    public function run(): void { $this->bar->tap(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class B { public function tap(): string { return 'b'; } }\n"
+                      "class C {\n"
+                      "    private B $bar;\n"
+                      "    public function __construct(B $b) { $this->bar = $b; }\n"
+                      "    public function run(): void { $this->bar->tap(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "B.tap") >= 0);
@@ -433,14 +421,13 @@ TEST(phplsp_typed_property_declaration) {
 /* ── 18. Constructor-body inference (no typed declaration) ─────── */
 
 TEST(phplsp_constructor_body_inference) {
-    const char *src =
-        "<?php\n"
-        "class W { public function ping(): string { return 'w'; } }\n"
-        "class C {\n"
-        "    private $w;\n"
-        "    public function __construct(W $w) { $this->w = $w; }\n"
-        "    public function run(): void { $this->w->ping(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class W { public function ping(): string { return 'w'; } }\n"
+                      "class C {\n"
+                      "    private $w;\n"
+                      "    public function __construct(W $w) { $this->w = $w; }\n"
+                      "    public function run(): void { $this->w->ping(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "W.ping") >= 0);
@@ -451,14 +438,13 @@ TEST(phplsp_constructor_body_inference) {
 /* ── 19. Type narrowing — instanceof ───────────────────────────── */
 
 TEST(phplsp_narrow_instanceof) {
-    const char *src =
-        "<?php\n"
-        "class Foo { public function bar(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run($x): void {\n"
-        "        if ($x instanceof Foo) { $x->bar(); }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Foo { public function bar(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run($x): void {\n"
+                      "        if ($x instanceof Foo) { $x->bar(); }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "Foo.bar") >= 0);
@@ -469,15 +455,14 @@ TEST(phplsp_narrow_instanceof) {
 /* ── 20. Type narrowing — assert(instanceof) ───────────────────── */
 
 TEST(phplsp_narrow_assert_instanceof) {
-    const char *src =
-        "<?php\n"
-        "class Foo { public function bar(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run($x): void {\n"
-        "        assert($x instanceof Foo);\n"
-        "        $x->bar();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Foo { public function bar(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run($x): void {\n"
+                      "        assert($x instanceof Foo);\n"
+                      "        $x->bar();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "Foo.bar") >= 0);
@@ -488,15 +473,14 @@ TEST(phplsp_narrow_assert_instanceof) {
 /* ── 21. PHPDoc @property tag binds field ──────────────────────── */
 
 TEST(phplsp_phpdoc_property_class_tag) {
-    const char *src =
-        "<?php\n"
-        "class Q { public function tap(): string { return 'q'; } }\n"
-        "/**\n"
-        " * @property Q $q\n"
-        " */\n"
-        "class Model {\n"
-        "    public function go(): void { $this->q->tap(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Q { public function tap(): string { return 'q'; } }\n"
+                      "/**\n"
+                      " * @property Q $q\n"
+                      " */\n"
+                      "class Model {\n"
+                      "    public function go(): void { $this->q->tap(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "Model.go", "Q.tap") >= 0);
@@ -507,15 +491,14 @@ TEST(phplsp_phpdoc_property_class_tag) {
 /* ── 22. PHPDoc @method tag registers virtual method ───────────── */
 
 TEST(phplsp_phpdoc_method_class_tag) {
-    const char *src =
-        "<?php\n"
-        "class Z { public function tap(): string { return 'z'; } }\n"
-        "/**\n"
-        " * @method Z fooBar()\n"
-        " */\n"
-        "class Model {\n"
-        "    public function go(): void { $this->fooBar()->tap(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Z { public function tap(): string { return 'z'; } }\n"
+                      "/**\n"
+                      " * @method Z fooBar()\n"
+                      " */\n"
+                      "class Model {\n"
+                      "    public function go(): void { $this->fooBar()->tap(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* fooBar resolves on Model (the @method virtual), and chains to Z.tap. */
@@ -528,13 +511,12 @@ TEST(phplsp_phpdoc_method_class_tag) {
 /* ── 23. Trait flattening — methods from used trait ────────────── */
 
 TEST(phplsp_trait_method_flattened) {
-    const char *src =
-        "<?php\n"
-        "trait T { public function shared(): string { return 't'; } }\n"
-        "class C {\n"
-        "    use T;\n"
-        "    public function run(): void { $this->shared(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "trait T { public function shared(): string { return 't'; } }\n"
+                      "class C {\n"
+                      "    use T;\n"
+                      "    public function run(): void { $this->shared(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "C.shared") >= 0 ||
@@ -555,13 +537,68 @@ TEST(phplsp_trait_method_flattened) {
  * completed, and under the ASan test build a regression would surface as
  * an OOM/abort here rather than a silent hang. */
 TEST(phplsp_trait_self_use_terminates) {
-    const char *src =
-        "<?php\n"
-        "namespace App;\n"
-        "trait EnumTrait {\n"
-        "    use EnumTrait;\n"
-        "    public function getRandom(): int { return 1; }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App;\n"
+                      "trait EnumTrait {\n"
+                      "    use EnumTrait;\n"
+                      "    public function getRandom(): int { return 1; }\n"
+                      "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 23c. Regression #765: trait name collides with an aliased import ──
+ *
+ * `use Vendor\Pkg\Auditable as AuditableBase;` + `trait Auditable { use
+ * AuditableBase; ... }` — the composed alias canonicalizes (via short-name
+ * fallback) onto the ENCLOSING trait itself, which is the same
+ * self-flattening loop as 23b arriving through the import alias: each
+ * copied method re-matched the flatten filter while the registry grew,
+ * OOM-ing the indexer (reported at 40+ GB). Guarded by the #920 pair
+ * (self-flatten short-circuit + snapshotted loop bound); this fixture is
+ * the exact reproducer from issue #765 and hung/OOM'd before those. */
+TEST(phplsp_trait_aliased_import_name_collision_terminates) {
+    const char *src = "<?php\n"
+                      "namespace App\\Demo;\n"
+                      "\n"
+                      "use Vendor\\Pkg\\Auditable as AuditableBase;\n"
+                      "\n"
+                      "trait Auditable {\n"
+                      "    use AuditableBase;\n"
+                      "\n"
+                      "    function f() { $x = 1; return $x; }\n"
+                      "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 23d. Regression #951: class shares its short name with an aliased
+ * trait import ──
+ *
+ * `use App\Functions\Delivery as Delivery_Trait;` + `class Delivery { use
+ * Delivery_Trait; ... }` — resolving the composed alias falls back to the
+ * short name and lands on the LOCAL CLASS `Delivery`, so the class is
+ * flattened into itself (class_qn == canonical target QN): the same loop
+ * as 23b/23c reached through a class/trait short-name collision. Reported
+ * as an indexer OOM kill (exit 137) in issue #951. The two-file original
+ * reduces to this single-file form because the trait's definition being
+ * unavailable is exactly what forces the short-name fallback. */
+TEST(phplsp_class_aliased_trait_name_collision_terminates) {
+    const char *src = "<?php\n"
+                      "namespace App\\Modules\\Foo;\n"
+                      "\n"
+                      "use App\\Functions\\Delivery as Delivery_Trait;\n"
+                      "\n"
+                      "class Delivery {\n"
+                      "    use Delivery_Trait;\n"
+                      "\n"
+                      "    public function run(): void {\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -571,15 +608,14 @@ TEST(phplsp_trait_self_use_terminates) {
 /* ── 24. Match expression result type ──────────────────────────── */
 
 TEST(phplsp_match_result_type) {
-    const char *src =
-        "<?php\n"
-        "class A { public function go(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run(int $i): void {\n"
-        "        $a = match($i) { 1 => new A(), default => new A() };\n"
-        "        $a->go();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function go(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run(int $i): void {\n"
+                      "        $a = match($i) { 1 => new A(), default => new A() };\n"
+                      "        $a->go();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "A.go") >= 0);
@@ -590,15 +626,14 @@ TEST(phplsp_match_result_type) {
 /* ── 25. Ternary result type ───────────────────────────────────── */
 
 TEST(phplsp_ternary_result_type) {
-    const char *src =
-        "<?php\n"
-        "class A { public function go(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run(bool $b): void {\n"
-        "        $a = $b ? new A() : new A();\n"
-        "        $a->go();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function go(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run(bool $b): void {\n"
+                      "        $a = $b ? new A() : new A();\n"
+                      "        $a->go();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "A.go") >= 0);
@@ -609,14 +644,13 @@ TEST(phplsp_ternary_result_type) {
 /* ── 26. Method chain depth 3 ──────────────────────────────────── */
 
 TEST(phplsp_method_chain_depth_three) {
-    const char *src =
-        "<?php\n"
-        "class C3 { public function tap(): string { return 'c3'; } }\n"
-        "class C2 { public function next(): C3 { return new C3(); } }\n"
-        "class C1 { public function next(): C2 { return new C2(); } }\n"
-        "class Caller {\n"
-        "    public function run(C1 $c): void { $c->next()->next()->tap(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C3 { public function tap(): string { return 'c3'; } }\n"
+                      "class C2 { public function next(): C3 { return new C3(); } }\n"
+                      "class C1 { public function next(): C2 { return new C2(); } }\n"
+                      "class Caller {\n"
+                      "    public function run(C1 $c): void { $c->next()->next()->tap(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "Caller.run", "C1.next") >= 0);
@@ -629,14 +663,13 @@ TEST(phplsp_method_chain_depth_three) {
 /* ── 27. Late static binding through 2-deep parent chain ───────── */
 
 TEST(phplsp_lsb_two_deep_chain) {
-    const char *src =
-        "<?php\n"
-        "class GrandParent_ { public function tag(): string { return 'g'; } }\n"
-        "class Parent_ extends GrandParent_ {}\n"
-        "class Child extends Parent_ {}\n"
-        "class C {\n"
-        "    public function run(Child $c): void { $c->tag(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class GrandParent_ { public function tag(): string { return 'g'; } }\n"
+                      "class Parent_ extends GrandParent_ {}\n"
+                      "class Child extends Parent_ {}\n"
+                      "class C {\n"
+                      "    public function run(Child $c): void { $c->tag(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* Either resolves directly to GrandParent_.tag or emits unindexed for
@@ -649,12 +682,11 @@ TEST(phplsp_lsb_two_deep_chain) {
 /* ── 28. Nullsafe operator ─────────────────────────────────────── */
 
 TEST(phplsp_nullsafe_operator) {
-    const char *src =
-        "<?php\n"
-        "class Foo { public function bar(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run(?Foo $f): void { $f?->bar(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Foo { public function bar(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run(?Foo $f): void { $f?->bar(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "Foo.bar") >= 0);
@@ -665,12 +697,11 @@ TEST(phplsp_nullsafe_operator) {
 /* ── 29. Static method through `static::` ─────────────────────── */
 
 TEST(phplsp_static_keyword_dispatch) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public static function make(): self { return new self(); }\n"
-        "    public function go(): void { static::make(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public static function make(): self { return new self(); }\n"
+                      "    public function go(): void { static::make(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.go", "C.make") >= 0);
@@ -681,12 +712,11 @@ TEST(phplsp_static_keyword_dispatch) {
 /* ── 30. self:: from inside a method ──────────────────────────── */
 
 TEST(phplsp_self_in_method_body) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function helper(): int { return 1; }\n"
-        "    public function go(): void { self::helper(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function helper(): int { return 1; }\n"
+                      "    public function go(): void { self::helper(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.go", "C.helper") >= 0);
@@ -697,11 +727,10 @@ TEST(phplsp_self_in_method_body) {
 /* ── 31. Variadic parameter doesn't crash binding ──────────────── */
 
 TEST(phplsp_variadic_parameter) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(string ...$args): void {}\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(string ...$args): void {}\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -711,14 +740,13 @@ TEST(phplsp_variadic_parameter) {
 /* ── 32. Closure with use() clause ─────────────────────────────── */
 
 TEST(phplsp_closure_with_use) {
-    const char *src =
-        "<?php\n"
-        "class P { public function value(): string { return 'p'; } }\n"
-        "class C {\n"
-        "    public function run(P $p): void {\n"
-        "        $f = function () use ($p) { return $p->value(); };\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class P { public function value(): string { return 'p'; } }\n"
+                      "class C {\n"
+                      "    public function run(P $p): void {\n"
+                      "        $f = function () use ($p) { return $p->value(); };\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* Closure use-imports aren't tracked in Phase 1; allow either resolve
@@ -730,14 +758,13 @@ TEST(phplsp_closure_with_use) {
 /* ── 33. Anonymous function as argument ────────────────────────── */
 
 TEST(phplsp_anonymous_function_arg) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        Bus::run(function () { return 1; });\n"
-        "    }\n"
-        "}\n"
-        "class Bus { public static function run(callable $f): void {} }\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        Bus::run(function () { return 1; });\n"
+                      "    }\n"
+                      "}\n"
+                      "class Bus { public static function run(callable $f): void {} }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "Bus.run") >= 0);
@@ -748,14 +775,13 @@ TEST(phplsp_anonymous_function_arg) {
 /* ── 34. Arrow function inside arrow function ──────────────────── */
 
 TEST(phplsp_nested_arrow_functions) {
-    const char *src =
-        "<?php\n"
-        "class A { public function go(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        $f = fn () => fn (A $a) => $a->go();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function go(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        $f = fn () => fn (A $a) => $a->go();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "A.go") >= 0);
@@ -766,13 +792,12 @@ TEST(phplsp_nested_arrow_functions) {
 /* ── 35. is_string narrowing ───────────────────────────────────── */
 
 TEST(phplsp_narrow_is_string) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run($x): void {\n"
-        "        if (is_string($x)) {}\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run($x): void {\n"
+                      "        if (is_string($x)) {}\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -782,13 +807,12 @@ TEST(phplsp_narrow_is_string) {
 /* ── 36. is_array narrowing ───────────────────────────────────── */
 
 TEST(phplsp_narrow_is_array) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run($x): void {\n"
-        "        if (is_array($x)) { count($x); }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run($x): void {\n"
+                      "        if (is_array($x)) { count($x); }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -798,17 +822,16 @@ TEST(phplsp_narrow_is_array) {
 /* ── 37. Multiple use clauses, multiple classes used ───────────── */
 
 TEST(phplsp_multiple_use_clauses) {
-    const char *src =
-        "<?php\n"
-        "namespace App;\n"
-        "use Vendor\\Foo;\n"
-        "use Vendor\\Bar;\n"
-        "class C {\n"
-        "    public function run(Foo $f, Bar $b): void {\n"
-        "        $f->go();\n"
-        "        $b->stop();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App;\n"
+                      "use Vendor\\Foo;\n"
+                      "use Vendor\\Bar;\n"
+                      "class C {\n"
+                      "    public function run(Foo $f, Bar $b): void {\n"
+                      "        $f->go();\n"
+                      "        $b->stop();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* Both should emit unindexed override entries. */
@@ -821,13 +844,12 @@ TEST(phplsp_multiple_use_clauses) {
 /* ── 38. Group use clause ──────────────────────────────────────── */
 
 TEST(phplsp_group_use_clause) {
-    const char *src =
-        "<?php\n"
-        "namespace App;\n"
-        "use Vendor\\{ Foo, Bar };\n"
-        "class C {\n"
-        "    public function run(Foo $f): void { $f->go(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App;\n"
+                      "use Vendor\\{ Foo, Bar };\n"
+                      "class C {\n"
+                      "    public function run(Foo $f): void { $f->go(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* Group form may or may not be parsed by tree-sitter-php — accept. */
@@ -838,14 +860,13 @@ TEST(phplsp_group_use_clause) {
 /* ── 39. Fully-qualified class name in `new \\Vendor\\Foo()` ───── */
 
 TEST(phplsp_fqn_new_expression) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        $f = new \\Vendor\\Foo();\n"
-        "        $f->go();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        $f = new \\Vendor\\Foo();\n"
+                      "        $f->go();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Vendor.Foo.go") >= 0);
@@ -856,13 +877,12 @@ TEST(phplsp_fqn_new_expression) {
 /* ── 40. Foreach loop variable not crashed ─────────────────────── */
 
 TEST(phplsp_foreach_iteration) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(array $xs): void {\n"
-        "        foreach ($xs as $x) { /* nop */ }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(array $xs): void {\n"
+                      "        foreach ($xs as $x) { /* nop */ }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -872,15 +892,14 @@ TEST(phplsp_foreach_iteration) {
 /* ── 41. Try / catch with multiple exception types ─────────────── */
 
 TEST(phplsp_catch_multi_type) {
-    const char *src =
-        "<?php\n"
-        "class A { public function go(): int { return 1; } }\n"
-        "class B { public function go(): int { return 2; } }\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        try { /* nop */ } catch (A | B $e) { $e->go(); }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function go(): int { return 1; } }\n"
+                      "class B { public function go(): int { return 2; } }\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        try { /* nop */ } catch (A | B $e) { $e->go(); }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* Phase 1 takes leftmost — A.go is the expected resolution. */
@@ -892,15 +911,14 @@ TEST(phplsp_catch_multi_type) {
 /* ── 42. Exception in catch with PHP namespace ─────────────────── */
 
 TEST(phplsp_namespaced_catch) {
-    const char *src =
-        "<?php\n"
-        "namespace App\\Errors;\n"
-        "class MyExc { public function reason(): string { return 'r'; } }\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        try { /* nop */ } catch (MyExc $e) { $e->reason(); }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App\\Errors;\n"
+                      "class MyExc { public function reason(): string { return 'r'; } }\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        try { /* nop */ } catch (MyExc $e) { $e->reason(); }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "MyExc.reason") >= 0);
@@ -911,15 +929,14 @@ TEST(phplsp_namespaced_catch) {
 /* ── 43. Multiple interfaces implemented ──────────────────────── */
 
 TEST(phplsp_implements_multiple_interfaces) {
-    const char *src =
-        "<?php\n"
-        "interface A { public function aa(): int; }\n"
-        "interface B { public function bb(): int; }\n"
-        "class C implements A, B {\n"
-        "    public function aa(): int { return 1; }\n"
-        "    public function bb(): int { return 2; }\n"
-        "    public function go(): void { $this->aa(); $this->bb(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "interface A { public function aa(): int; }\n"
+                      "interface B { public function bb(): int; }\n"
+                      "class C implements A, B {\n"
+                      "    public function aa(): int { return 1; }\n"
+                      "    public function bb(): int { return 2; }\n"
+                      "    public function go(): void { $this->aa(); $this->bb(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.go", "C.aa") >= 0);
@@ -931,14 +948,13 @@ TEST(phplsp_implements_multiple_interfaces) {
 /* ── 44. Method on field access ($this->x->method()) ───────────── */
 
 TEST(phplsp_method_on_typed_field) {
-    const char *src =
-        "<?php\n"
-        "class Inner { public function go(): int { return 1; } }\n"
-        "class C {\n"
-        "    private Inner $i;\n"
-        "    public function __construct(Inner $i) { $this->i = $i; }\n"
-        "    public function run(): void { $this->i->go(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Inner { public function go(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    private Inner $i;\n"
+                      "    public function __construct(Inner $i) { $this->i = $i; }\n"
+                      "    public function run(): void { $this->i->go(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "Inner.go") >= 0);
@@ -949,15 +965,14 @@ TEST(phplsp_method_on_typed_field) {
 /* ── 45. Inheritance: child overrides parent method ─────────────── */
 
 TEST(phplsp_child_overrides_parent_method) {
-    const char *src =
-        "<?php\n"
-        "class Base { public function speak(): string { return 'b'; } }\n"
-        "class Kid extends Base {\n"
-        "    public function speak(): string { return 'k'; }\n"
-        "}\n"
-        "class C {\n"
-        "    public function run(Kid $k): void { $k->speak(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Base { public function speak(): string { return 'b'; } }\n"
+                      "class Kid extends Base {\n"
+                      "    public function speak(): string { return 'k'; }\n"
+                      "}\n"
+                      "class C {\n"
+                      "    public function run(Kid $k): void { $k->speak(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* Child override is preferred over parent. */
@@ -969,15 +984,14 @@ TEST(phplsp_child_overrides_parent_method) {
 /* ── 46. PHPDoc on method body — @param type override ─────────── */
 
 TEST(phplsp_phpdoc_param_method) {
-    const char *src =
-        "<?php\n"
-        "class T { public function tap(): string { return 't'; } }\n"
-        "class C {\n"
-        "    /**\n"
-        "     * @param T $arg\n"
-        "     */\n"
-        "    public function run($arg): void { $arg->tap(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class T { public function tap(): string { return 't'; } }\n"
+                      "class C {\n"
+                      "    /**\n"
+                      "     * @param T $arg\n"
+                      "     */\n"
+                      "    public function run($arg): void { $arg->tap(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "T.tap") >= 0);
@@ -988,12 +1002,11 @@ TEST(phplsp_phpdoc_param_method) {
 /* ── 47. Static field access not crashed ─────────────────────── */
 
 TEST(phplsp_static_field_access) {
-    const char *src =
-        "<?php\n"
-        "class Cfg { public static $value = 1; }\n"
-        "class C {\n"
-        "    public function run(): void { $x = Cfg::$value; }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Cfg { public static $value = 1; }\n"
+                      "class C {\n"
+                      "    public function run(): void { $x = Cfg::$value; }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -1003,12 +1016,11 @@ TEST(phplsp_static_field_access) {
 /* ── 48. Class constant access ────────────────────────────────── */
 
 TEST(phplsp_class_constant_access) {
-    const char *src =
-        "<?php\n"
-        "class Cfg { const KEY = 'k'; }\n"
-        "class C {\n"
-        "    public function run(): void { $x = Cfg::KEY; }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Cfg { const KEY = 'k'; }\n"
+                      "class C {\n"
+                      "    public function run(): void { $x = Cfg::KEY; }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -1018,13 +1030,12 @@ TEST(phplsp_class_constant_access) {
 /* ── 49. Anonymous class doesn't crash ───────────────────────── */
 
 TEST(phplsp_anonymous_class) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(): object {\n"
-        "        return new class { public function go(): int { return 1; } };\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(): object {\n"
+                      "        return new class { public function go(): int { return 1; } };\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -1034,16 +1045,15 @@ TEST(phplsp_anonymous_class) {
 /* ── 50. Enum with methods ────────────────────────────────────── */
 
 TEST(phplsp_enum_method_dispatch) {
-    const char *src =
-        "<?php\n"
-        "enum Suit: string {\n"
-        "    case Hearts = 'h';\n"
-        "    case Spades = 's';\n"
-        "    public function label(): string { return 'x'; }\n"
-        "}\n"
-        "class C {\n"
-        "    public function run(Suit $s): void { $s->label(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "enum Suit: string {\n"
+                      "    case Hearts = 'h';\n"
+                      "    case Spades = 's';\n"
+                      "    public function label(): string { return 'x'; }\n"
+                      "}\n"
+                      "class C {\n"
+                      "    public function run(Suit $s): void { $s->label(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "Suit.label") >= 0);
@@ -1054,14 +1064,13 @@ TEST(phplsp_enum_method_dispatch) {
 /* ── 51. Readonly property ───────────────────────────────────── */
 
 TEST(phplsp_readonly_property) {
-    const char *src =
-        "<?php\n"
-        "class V { public function get(): int { return 1; } }\n"
-        "class C {\n"
-        "    public readonly V $v;\n"
-        "    public function __construct(V $v) { $this->v = $v; }\n"
-        "    public function run(): void { $this->v->get(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class V { public function get(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public readonly V $v;\n"
+                      "    public function __construct(V $v) { $this->v = $v; }\n"
+                      "    public function run(): void { $this->v->get(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "V.get") >= 0);
@@ -1072,16 +1081,15 @@ TEST(phplsp_readonly_property) {
 /* ── 52. Static factory + chained methods ─────────────────────── */
 
 TEST(phplsp_static_factory_chain) {
-    const char *src =
-        "<?php\n"
-        "class B { public function tap(): int { return 1; } }\n"
-        "class A {\n"
-        "    public static function make(): A { return new self(); }\n"
-        "    public function next(): B { return new B(); }\n"
-        "}\n"
-        "class C {\n"
-        "    public function run(): void { A::make()->next()->tap(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class B { public function tap(): int { return 1; } }\n"
+                      "class A {\n"
+                      "    public static function make(): A { return new self(); }\n"
+                      "    public function next(): B { return new B(); }\n"
+                      "}\n"
+                      "class C {\n"
+                      "    public function run(): void { A::make()->next()->tap(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "A.make") >= 0);
@@ -1129,11 +1137,10 @@ TEST(phplsp_stdlib_throwable_chain) {
 /* ── 55. Iterator stdlib method dispatch ─────────────────────── */
 
 TEST(phplsp_stdlib_iterator) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(\\Iterator $it): void { $it->current(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(\\Iterator $it): void { $it->current(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "Iterator.current") >= 0);
@@ -1144,13 +1151,13 @@ TEST(phplsp_stdlib_iterator) {
 /* ── 56. Abstract class method ─────────────────────────────── */
 
 TEST(phplsp_abstract_class_method) {
-    const char *src =
-        "<?php\n"
-        "abstract class Base { abstract public function go(): int; public function tap(): int { return 1; } }\n"
-        "class Kid extends Base { public function go(): int { return 2; } }\n"
-        "class C {\n"
-        "    public function run(Kid $k): void { $k->tap(); $k->go(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "abstract class Base { abstract public function go(): int; public function "
+                      "tap(): int { return 1; } }\n"
+                      "class Kid extends Base { public function go(): int { return 2; } }\n"
+                      "class C {\n"
+                      "    public function run(Kid $k): void { $k->tap(); $k->go(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", ".tap") >= 0);
@@ -1162,13 +1169,12 @@ TEST(phplsp_abstract_class_method) {
 /* ── 57. Static call via aliased namespace ─────────────────── */
 
 TEST(phplsp_static_call_via_alias) {
-    const char *src =
-        "<?php\n"
-        "namespace App;\n"
-        "use Vendor\\Helper as H;\n"
-        "class C {\n"
-        "    public function run(): void { H::go(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App;\n"
+                      "use Vendor\\Helper as H;\n"
+                      "class C {\n"
+                      "    public function run(): void { H::go(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* Vendor.Helper unindexed; emit unindexed entry. */
@@ -1180,13 +1186,12 @@ TEST(phplsp_static_call_via_alias) {
 /* ── 58. Function call with namespace ────────────────────── */
 
 TEST(phplsp_function_call_namespaced) {
-    const char *src =
-        "<?php\n"
-        "namespace App;\n"
-        "function helper(): int { return 1; }\n"
-        "class C {\n"
-        "    public function run(): void { helper(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App;\n"
+                      "function helper(): int { return 1; }\n"
+                      "class C {\n"
+                      "    public function run(): void { helper(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* Either path works. */
@@ -1198,18 +1203,17 @@ TEST(phplsp_function_call_namespaced) {
 /* ── 59. Reassignment changes type ─────────────────────── */
 
 TEST(phplsp_reassignment_changes_type) {
-    const char *src =
-        "<?php\n"
-        "class A { public function aa(): int { return 1; } }\n"
-        "class B { public function bb(): int { return 2; } }\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        $x = new A();\n"
-        "        $x->aa();\n"
-        "        $x = new B();\n"
-        "        $x->bb();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function aa(): int { return 1; } }\n"
+                      "class B { public function bb(): int { return 2; } }\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        $x = new A();\n"
+                      "        $x->aa();\n"
+                      "        $x = new B();\n"
+                      "        $x->bb();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "A.aa") >= 0);
@@ -1221,16 +1225,15 @@ TEST(phplsp_reassignment_changes_type) {
 /* ── 60. Chained `use` then `new` resolution ─────────────── */
 
 TEST(phplsp_use_then_new_aliased) {
-    const char *src =
-        "<?php\n"
-        "namespace App;\n"
-        "use Vendor\\Real as R;\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        $r = new R();\n"
-        "        $r->go();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App;\n"
+                      "use Vendor\\Real as R;\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        $r = new R();\n"
+                      "        $r->go();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* $r should bind to NAMED(Vendor.Real); $r->go() should emit override. */
@@ -1242,16 +1245,15 @@ TEST(phplsp_use_then_new_aliased) {
 /* ── 61. Type narrowing — multiple branches ──────────────── */
 
 TEST(phplsp_narrow_branches) {
-    const char *src =
-        "<?php\n"
-        "class A { public function aa(): int { return 1; } }\n"
-        "class B { public function bb(): int { return 2; } }\n"
-        "class C {\n"
-        "    public function run($x): void {\n"
-        "        if ($x instanceof A) { $x->aa(); }\n"
-        "        if ($x instanceof B) { $x->bb(); }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function aa(): int { return 1; } }\n"
+                      "class B { public function bb(): int { return 2; } }\n"
+                      "class C {\n"
+                      "    public function run($x): void {\n"
+                      "        if ($x instanceof A) { $x->aa(); }\n"
+                      "        if ($x instanceof B) { $x->bb(); }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "A.aa") >= 0);
@@ -1263,16 +1265,16 @@ TEST(phplsp_narrow_branches) {
 /* ── 62. Sequential statements maintain bindings ─────────── */
 
 TEST(phplsp_sequential_bindings) {
-    const char *src =
-        "<?php\n"
-        "class A { public function next(): A { return $this; } public function tap(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        $a = new A();\n"
-        "        $b = $a->next();\n"
-        "        $b->tap();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function next(): A { return $this; } public function "
+                      "tap(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        $a = new A();\n"
+                      "        $b = $a->next();\n"
+                      "        $b->tap();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "A.tap") >= 0);
@@ -1283,17 +1285,16 @@ TEST(phplsp_sequential_bindings) {
 /* ── 63. Chained calls with intermediate variable ────────── */
 
 TEST(phplsp_chained_with_intermediate_var) {
-    const char *src =
-        "<?php\n"
-        "class B { public function tap(): int { return 1; } }\n"
-        "class A { public function next(): B { return new B(); } }\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        $a = new A();\n"
-        "        $b = $a->next();\n"
-        "        $b->tap();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class B { public function tap(): int { return 1; } }\n"
+                      "class A { public function next(): B { return new B(); } }\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        $a = new A();\n"
+                      "        $b = $a->next();\n"
+                      "        $b->tap();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "A.next") >= 0);
@@ -1305,16 +1306,15 @@ TEST(phplsp_chained_with_intermediate_var) {
 /* ── 64. Trait with multiple methods, all flattened ──────── */
 
 TEST(phplsp_trait_multiple_methods) {
-    const char *src =
-        "<?php\n"
-        "trait T {\n"
-        "    public function aa(): int { return 1; }\n"
-        "    public function bb(): int { return 2; }\n"
-        "}\n"
-        "class C {\n"
-        "    use T;\n"
-        "    public function run(): void { $this->aa(); $this->bb(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "trait T {\n"
+                      "    public function aa(): int { return 1; }\n"
+                      "    public function bb(): int { return 2; }\n"
+                      "}\n"
+                      "class C {\n"
+                      "    use T;\n"
+                      "    public function run(): void { $this->aa(); $this->bb(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "C.aa") >= 0 || find_resolved(r, "C.run", "T.aa") >= 0);
@@ -1326,13 +1326,12 @@ TEST(phplsp_trait_multiple_methods) {
 /* ── 65. Cast expression ─────────────────────────────────── */
 
 TEST(phplsp_cast_expression) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run($x): void {\n"
-        "        $i = (int) $x;\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run($x): void {\n"
+                      "        $i = (int) $x;\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -1342,15 +1341,14 @@ TEST(phplsp_cast_expression) {
 /* ── 66. Clone returns same type ─────────────────────────── */
 
 TEST(phplsp_clone_preserves_type) {
-    const char *src =
-        "<?php\n"
-        "class A { public function go(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run(A $a): void {\n"
-        "        $b = clone $a;\n"
-        "        $b->go();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function go(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run(A $a): void {\n"
+                      "        $b = clone $a;\n"
+                      "        $b->go();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "A.go") >= 0);
@@ -1371,13 +1369,12 @@ TEST(phplsp_empty_class_body) {
 /* ── 68. PSR LoggerInterface ────────────────────────────── */
 
 TEST(phplsp_stdlib_psr_logger) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(\\Psr\\Log\\LoggerInterface $log): void {\n"
-        "        $log->info('hi');\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(\\Psr\\Log\\LoggerInterface $log): void {\n"
+                      "        $log->info('hi');\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "LoggerInterface.info") >= 0);
@@ -1388,12 +1385,12 @@ TEST(phplsp_stdlib_psr_logger) {
 /* ── 69. Long method chain doesn't overflow ─────────────── */
 
 TEST(phplsp_long_method_chain) {
-    const char *src =
-        "<?php\n"
-        "class A { public function n(): A { return $this; } public function t(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run(A $a): void { $a->n()->n()->n()->n()->n()->t(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function n(): A { return $this; } public function t(): int "
+                      "{ return 1; } }\n"
+                      "class C {\n"
+                      "    public function run(A $a): void { $a->n()->n()->n()->n()->n()->t(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "A.t") >= 0);
@@ -1404,13 +1401,12 @@ TEST(phplsp_long_method_chain) {
 /* ── 70. Conditional return doesn't crash ─────────────── */
 
 TEST(phplsp_conditional_return) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(bool $b): int {\n"
-        "        return $b ? 1 : 2;\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(bool $b): int {\n"
+                      "        return $b ? 1 : 2;\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -1420,15 +1416,14 @@ TEST(phplsp_conditional_return) {
 /* ── 71. PHPDoc @var on assignment ─────────────────────── */
 
 TEST(phplsp_phpdoc_var_at_assignment) {
-    const char *src =
-        "<?php\n"
-        "class P { public function tap(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run($x): void {\n"
-        "        /** @var P $x */\n"
-        "        $x->tap();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class P { public function tap(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run($x): void {\n"
+                      "        /** @var P $x */\n"
+                      "        $x->tap();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "P.tap") >= 0);
@@ -1439,13 +1434,12 @@ TEST(phplsp_phpdoc_var_at_assignment) {
 /* ── 72. is_int narrowing ─────────────────────────────── */
 
 TEST(phplsp_narrow_is_int) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run($x): void {\n"
-        "        if (is_int($x)) {}\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run($x): void {\n"
+                      "        if (is_int($x)) {}\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -1455,13 +1449,12 @@ TEST(phplsp_narrow_is_int) {
 /* ── 73. Encapsed string doesn't crash ────────────────── */
 
 TEST(phplsp_encapsed_string) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        $x = \"hello $name\";\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        $x = \"hello $name\";\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -1471,13 +1464,12 @@ TEST(phplsp_encapsed_string) {
 /* ── 74. Heredoc string ──────────────────────────────── */
 
 TEST(phplsp_heredoc) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(): string {\n"
-        "        return <<<EOT\nhi\nEOT;\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(): string {\n"
+                      "        return <<<EOT\nhi\nEOT;\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -1490,12 +1482,11 @@ TEST(phplsp_heredoc) {
 TEST(phplsp_cyclic_embed_bounded) {
     /* tree-sitter allows class A extends A; even if PHP doesn't run, our
      * resolver should bound its parent walk and not hang. */
-    const char *src =
-        "<?php\n"
-        "class A extends A {}\n"
-        "class C {\n"
-        "    public function run(A $a): void { $a->go(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A extends A {}\n"
+                      "class C {\n"
+                      "    public function run(A $a): void { $a->go(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -1505,22 +1496,21 @@ TEST(phplsp_cyclic_embed_bounded) {
 /* ── 76. Many use clauses don't grow unboundedly ──────── */
 
 TEST(phplsp_many_use_clauses) {
-    const char *src =
-        "<?php\n"
-        "namespace App;\n"
-        "use Vendor\\A;\n"
-        "use Vendor\\B;\n"
-        "use Vendor\\C2;\n"
-        "use Vendor\\D;\n"
-        "use Vendor\\E;\n"
-        "use Vendor\\F;\n"
-        "use Vendor\\G;\n"
-        "use Vendor\\H;\n"
-        "class K {\n"
-        "    public function run(A $a, B $b, C2 $c): void {\n"
-        "        $a->aa(); $b->bb(); $c->cc();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App;\n"
+                      "use Vendor\\A;\n"
+                      "use Vendor\\B;\n"
+                      "use Vendor\\C2;\n"
+                      "use Vendor\\D;\n"
+                      "use Vendor\\E;\n"
+                      "use Vendor\\F;\n"
+                      "use Vendor\\G;\n"
+                      "use Vendor\\H;\n"
+                      "class K {\n"
+                      "    public function run(A $a, B $b, C2 $c): void {\n"
+                      "        $a->aa(); $b->bb(); $c->cc();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "K.run", "Vendor.A.aa") >= 0);
@@ -1533,19 +1523,18 @@ TEST(phplsp_many_use_clauses) {
 /* ── 77. Method chain across $this and field ──────────── */
 
 TEST(phplsp_chain_through_this_field) {
-    const char *src =
-        "<?php\n"
-        "class Inner { public function go(): int { return 1; } }\n"
-        "class Outer {\n"
-        "    private Inner $i;\n"
-        "    public function __construct(Inner $i) { $this->i = $i; }\n"
-        "    public function tap(): Inner { return $this->i; }\n"
-        "}\n"
-        "class C {\n"
-        "    public function run(Outer $o): void {\n"
-        "        $o->tap()->go();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Inner { public function go(): int { return 1; } }\n"
+                      "class Outer {\n"
+                      "    private Inner $i;\n"
+                      "    public function __construct(Inner $i) { $this->i = $i; }\n"
+                      "    public function tap(): Inner { return $this->i; }\n"
+                      "}\n"
+                      "class C {\n"
+                      "    public function run(Outer $o): void {\n"
+                      "        $o->tap()->go();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "Outer.tap") >= 0);
@@ -1576,13 +1565,12 @@ TEST(phplsp_trait_with_alias) {
 /* ── 79. Yielding a value (generator) doesn't crash ────── */
 
 TEST(phplsp_yield_expression) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(): \\Generator {\n"
-        "        yield 1; yield 2;\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(): \\Generator {\n"
+                      "        yield 1; yield 2;\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -1592,15 +1580,14 @@ TEST(phplsp_yield_expression) {
 /* ── 80. Bool / true / false literal types ─────────────── */
 
 TEST(phplsp_bool_literals) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        $a = true;\n"
-        "        $b = false;\n"
-        "        $c = null;\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        $a = true;\n"
+                      "        $b = false;\n"
+                      "        $c = null;\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -1610,15 +1597,14 @@ TEST(phplsp_bool_literals) {
 /* ── 81. Generic @var Collection<User> ─────────────────────── */
 
 TEST(phplsp_generic_var_collection) {
-    const char *src =
-        "<?php\n"
-        "class User { public function name(): string { return 'u'; } }\n"
-        "class C {\n"
-        "    public function run($coll): void {\n"
-        "        /** @var \\Illuminate\\Support\\Collection<User> $coll */\n"
-        "        $coll->first();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class User { public function name(): string { return 'u'; } }\n"
+                      "class C {\n"
+                      "    public function run($coll): void {\n"
+                      "        /** @var \\Illuminate\\Support\\Collection<User> $coll */\n"
+                      "        $coll->first();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* Collection.first is registered in stdlib; should resolve. */
@@ -1630,15 +1616,14 @@ TEST(phplsp_generic_var_collection) {
 /* ── 82. Foreach over array<User> binds element ──────────── */
 
 TEST(phplsp_foreach_array_typed) {
-    const char *src =
-        "<?php\n"
-        "class User { public function name(): string { return 'u'; } }\n"
-        "class C {\n"
-        "    public function run($users): void {\n"
-        "        /** @var array<User> $users */\n"
-        "        foreach ($users as $u) { $u->name(); }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class User { public function name(): string { return 'u'; } }\n"
+                      "class C {\n"
+                      "    public function run($users): void {\n"
+                      "        /** @var array<User> $users */\n"
+                      "        foreach ($users as $u) { $u->name(); }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "User.name") >= 0);
@@ -1649,15 +1634,14 @@ TEST(phplsp_foreach_array_typed) {
 /* ── 83. Negative narrowing — early return ────────────────── */
 
 TEST(phplsp_negative_narrow_early_return) {
-    const char *src =
-        "<?php\n"
-        "class Foo { public function go(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run($x): void {\n"
-        "        if (!($x instanceof Foo)) { return; }\n"
-        "        $x->go();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Foo { public function go(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run($x): void {\n"
+                      "        if (!($x instanceof Foo)) { return; }\n"
+                      "        $x->go();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "Foo.go") >= 0);
@@ -1668,15 +1652,14 @@ TEST(phplsp_negative_narrow_early_return) {
 /* ── 84. Negative narrowing — throw ────────────────────────── */
 
 TEST(phplsp_negative_narrow_throw) {
-    const char *src =
-        "<?php\n"
-        "class Foo { public function go(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run($x): void {\n"
-        "        if (!($x instanceof Foo)) { throw new \\RuntimeException('bad'); }\n"
-        "        $x->go();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Foo { public function go(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run($x): void {\n"
+                      "        if (!($x instanceof Foo)) { throw new \\RuntimeException('bad'); }\n"
+                      "        $x->go();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "Foo.go") >= 0);
@@ -1706,13 +1689,12 @@ TEST(phplsp_eloquent_builder_chain) {
 /* ── 86. Collection map -> filter -> first chain ──────────── */
 
 TEST(phplsp_collection_chain) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(\\Illuminate\\Support\\Collection $c): void {\n"
-        "        $c->map(fn($x) => $x)->filter(fn($x) => true)->first();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(\\Illuminate\\Support\\Collection $c): void {\n"
+                      "        $c->map(fn($x) => $x)->filter(fn($x) => true)->first();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Collection.map") >= 0);
@@ -1742,13 +1724,12 @@ TEST(phplsp_symfony_request) {
 /* ── 88. Carbon date chain ────────────────────────────── */
 
 TEST(phplsp_carbon_chain) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(\\Carbon\\Carbon $now): void {\n"
-        "        $now->addDay()->format('Y-m-d');\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(\\Carbon\\Carbon $now): void {\n"
+                      "        $now->addDay()->format('Y-m-d');\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Carbon.addDay") >= 0);
@@ -1760,17 +1741,17 @@ TEST(phplsp_carbon_chain) {
 /* ── 89. Nested narrowing inside a method body ──────────── */
 
 TEST(phplsp_nested_if_narrowing) {
-    const char *src =
-        "<?php\n"
-        "class A { public function aa(): int { return 1; } public function bb(): int { return 2; } }\n"
-        "class C {\n"
-        "    public function run($x): void {\n"
-        "        if ($x instanceof A) {\n"
-        "            $x->aa();\n"
-        "            if (true) { $x->bb(); }\n"
-        "        }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function aa(): int { return 1; } public function bb(): int "
+                      "{ return 2; } }\n"
+                      "class C {\n"
+                      "    public function run($x): void {\n"
+                      "        if ($x instanceof A) {\n"
+                      "            $x->aa();\n"
+                      "            if (true) { $x->bb(); }\n"
+                      "        }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "A.aa") >= 0);
@@ -1782,16 +1763,15 @@ TEST(phplsp_nested_if_narrowing) {
 /* ── 90. assert + bb chain works ─────────────────────────── */
 
 TEST(phplsp_assert_then_chain) {
-    const char *src =
-        "<?php\n"
-        "class B { public function tap(): int { return 1; } }\n"
-        "class A { public function next(): B { return new B(); } }\n"
-        "class C {\n"
-        "    public function run($x): void {\n"
-        "        assert($x instanceof A);\n"
-        "        $x->next()->tap();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class B { public function tap(): int { return 1; } }\n"
+                      "class A { public function next(): B { return new B(); } }\n"
+                      "class C {\n"
+                      "    public function run($x): void {\n"
+                      "        assert($x instanceof A);\n"
+                      "        $x->next()->tap();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "A.next") >= 0);
@@ -1821,19 +1801,18 @@ TEST(phplsp_psr7_with_chain) {
 /* ── 92. @method virtual + chain into real type ──────────── */
 
 TEST(phplsp_at_method_then_real) {
-    const char *src =
-        "<?php\n"
-        "class Z { public function tap(): int { return 1; } }\n"
-        "/**\n"
-        " * @method Z fooBar()\n"
-        " * @method Z baz()\n"
-        " */\n"
-        "class M {\n"
-        "    public function run(): void {\n"
-        "        $this->fooBar()->tap();\n"
-        "        $this->baz()->tap();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Z { public function tap(): int { return 1; } }\n"
+                      "/**\n"
+                      " * @method Z fooBar()\n"
+                      " * @method Z baz()\n"
+                      " */\n"
+                      "class M {\n"
+                      "    public function run(): void {\n"
+                      "        $this->fooBar()->tap();\n"
+                      "        $this->baz()->tap();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "M.run", "M.fooBar") >= 0);
@@ -1846,19 +1825,18 @@ TEST(phplsp_at_method_then_real) {
 /* ── 93. @property chained with @method ──────────────────── */
 
 TEST(phplsp_property_method_combined) {
-    const char *src =
-        "<?php\n"
-        "class Q { public function tap(): int { return 1; } }\n"
-        "/**\n"
-        " * @property Q $q\n"
-        " * @method Q getQ()\n"
-        " */\n"
-        "class M {\n"
-        "    public function run(): void {\n"
-        "        $this->q->tap();\n"
-        "        $this->getQ()->tap();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Q { public function tap(): int { return 1; } }\n"
+                      "/**\n"
+                      " * @property Q $q\n"
+                      " * @method Q getQ()\n"
+                      " */\n"
+                      "class M {\n"
+                      "    public function run(): void {\n"
+                      "        $this->q->tap();\n"
+                      "        $this->getQ()->tap();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "M.run", "Q.tap") >= 0);
@@ -1909,15 +1887,14 @@ TEST(phplsp_long_eloquent_chain) {
 /* ── 96. Generic with two type args ──────────────────────── */
 
 TEST(phplsp_generic_two_args) {
-    const char *src =
-        "<?php\n"
-        "class User { public function name(): string { return 'u'; } }\n"
-        "class C {\n"
-        "    public function run($map): void {\n"
-        "        /** @var array<int, User> $map */\n"
-        "        foreach ($map as $u) { $u->name(); }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class User { public function name(): string { return 'u'; } }\n"
+                      "class C {\n"
+                      "    public function run($map): void {\n"
+                      "        /** @var array<int, User> $map */\n"
+                      "        foreach ($map as $u) { $u->name(); }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "User.name") >= 0);
@@ -1928,14 +1905,13 @@ TEST(phplsp_generic_two_args) {
 /* ── 97. Throwable.getMessage via specific subclass ──────── */
 
 TEST(phplsp_throwable_subclass_message) {
-    const char *src =
-        "<?php\n"
-        "class Custom extends \\RuntimeException {}\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        try { /* nop */ } catch (Custom $e) { $e->getMessage(); }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Custom extends \\RuntimeException {}\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        try { /* nop */ } catch (Custom $e) { $e->getMessage(); }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", ".getMessage") >= 0);
@@ -1946,18 +1922,17 @@ TEST(phplsp_throwable_subclass_message) {
 /* ── 98. instance method call followed by static call ────── */
 
 TEST(phplsp_instance_then_static_chain) {
-    const char *src =
-        "<?php\n"
-        "class B {\n"
-        "    public static function tap(): int { return 1; }\n"
-        "    public function next(): string { return 'b'; }\n"
-        "}\n"
-        "class C {\n"
-        "    public function run(B $b): void {\n"
-        "        $b->next();\n"
-        "        B::tap();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class B {\n"
+                      "    public static function tap(): int { return 1; }\n"
+                      "    public function next(): string { return 'b'; }\n"
+                      "}\n"
+                      "class C {\n"
+                      "    public function run(B $b): void {\n"
+                      "        $b->next();\n"
+                      "        B::tap();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "B.next") >= 0);
@@ -1969,14 +1944,13 @@ TEST(phplsp_instance_then_static_chain) {
 /* ── 99. self::method on an aliased class ─────────────────── */
 
 TEST(phplsp_self_method_chain) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function helper(): C { return $this; }\n"
-        "    public function run(): void {\n"
-        "        self::helper()->helper();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function helper(): C { return $this; }\n"
+                      "    public function run(): void {\n"
+                      "        self::helper()->helper();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* Both helpers should resolve. */
@@ -2006,21 +1980,20 @@ TEST(phplsp_interface_typed_param) {
 /* ── 101. Generic substitution: Collection<User> -> first() returns User ── */
 
 TEST(phplsp_generic_substitution_simple) {
-    const char *src =
-        "<?php\n"
-        "/** @template T */\n"
-        "class Container {\n"
-        "    /** @return T */\n"
-        "    public function get() { return null; }\n"
-        "}\n"
-        "class User { public function name(): string { return 'u'; } }\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        /** @var Container<User> $c */\n"
-        "        $c = null;\n"
-        "        $c->get()->name();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "/** @template T */\n"
+                      "class Container {\n"
+                      "    /** @return T */\n"
+                      "    public function get() { return null; }\n"
+                      "}\n"
+                      "class User { public function name(): string { return 'u'; } }\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        /** @var Container<User> $c */\n"
+                      "        $c = null;\n"
+                      "        $c->get()->name();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "User.name") >= 0);
@@ -2031,14 +2004,13 @@ TEST(phplsp_generic_substitution_simple) {
 /* ── 102. Closure use() captures typed variable ──────────────── */
 
 TEST(phplsp_closure_use_captures) {
-    const char *src =
-        "<?php\n"
-        "class P { public function tap(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run(P $p): void {\n"
-        "        $f = function () use ($p) { return $p->tap(); };\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class P { public function tap(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run(P $p): void {\n"
+                      "        $f = function () use ($p) { return $p->tap(); };\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "P.tap") >= 0);
@@ -2049,18 +2021,17 @@ TEST(phplsp_closure_use_captures) {
 /* ── 103. Multi-conjunction narrowing: if (A && B) ───────────── */
 
 TEST(phplsp_conjunction_narrowing) {
-    const char *src =
-        "<?php\n"
-        "class A { public function aa(): int { return 1; } }\n"
-        "class B { public function bb(): int { return 2; } }\n"
-        "class C {\n"
-        "    public function run($x, $y): void {\n"
-        "        if ($x instanceof A && $y instanceof B) {\n"
-        "            $x->aa();\n"
-        "            $y->bb();\n"
-        "        }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function aa(): int { return 1; } }\n"
+                      "class B { public function bb(): int { return 2; } }\n"
+                      "class C {\n"
+                      "    public function run($x, $y): void {\n"
+                      "        if ($x instanceof A && $y instanceof B) {\n"
+                      "            $x->aa();\n"
+                      "            $y->bb();\n"
+                      "        }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "A.aa") >= 0);
@@ -2072,14 +2043,13 @@ TEST(phplsp_conjunction_narrowing) {
 /* ── 104. is_a($x, Foo::class) narrowing ─────────────────────── */
 
 TEST(phplsp_is_a_narrowing) {
-    const char *src =
-        "<?php\n"
-        "class Foo { public function bar(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run($x): void {\n"
-        "        if (is_a($x, Foo::class)) { $x->bar(); }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Foo { public function bar(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run($x): void {\n"
+                      "        if (is_a($x, Foo::class)) { $x->bar(); }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "Foo.bar") >= 0);
@@ -2090,15 +2060,14 @@ TEST(phplsp_is_a_narrowing) {
 /* ── 105. Subscript inference: $arr[$k] when $arr: array<User> ─ */
 
 TEST(phplsp_subscript_array_typed) {
-    const char *src =
-        "<?php\n"
-        "class User { public function name(): string { return 'u'; } }\n"
-        "class C {\n"
-        "    public function run($arr): void {\n"
-        "        /** @var array<User> $arr */\n"
-        "        $arr[0]->name();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class User { public function name(): string { return 'u'; } }\n"
+                      "class C {\n"
+                      "    public function run($arr): void {\n"
+                      "        /** @var array<User> $arr */\n"
+                      "        $arr[0]->name();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "User.name") >= 0);
@@ -2109,15 +2078,14 @@ TEST(phplsp_subscript_array_typed) {
 /* ── 106. Subscript on array<int, User> returns User ─────────── */
 
 TEST(phplsp_subscript_array_keyed) {
-    const char *src =
-        "<?php\n"
-        "class User { public function name(): string { return 'u'; } }\n"
-        "class C {\n"
-        "    public function run($map): void {\n"
-        "        /** @var array<string, User> $map */\n"
-        "        $map['a']->name();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class User { public function name(): string { return 'u'; } }\n"
+                      "class C {\n"
+                      "    public function run($map): void {\n"
+                      "        /** @var array<string, User> $map */\n"
+                      "        $map['a']->name();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "User.name") >= 0);
@@ -2128,16 +2096,15 @@ TEST(phplsp_subscript_array_keyed) {
 /* ── 107. Enum case access -> enum type ──────────────────────── */
 
 TEST(phplsp_enum_case_value) {
-    const char *src =
-        "<?php\n"
-        "enum Suit {\n"
-        "    case Hearts;\n"
-        "    case Spades;\n"
-        "    public function label(): string { return 'x'; }\n"
-        "}\n"
-        "class C {\n"
-        "    public function run(): void { Suit::Hearts->label(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "enum Suit {\n"
+                      "    case Hearts;\n"
+                      "    case Spades;\n"
+                      "    public function label(): string { return 'x'; }\n"
+                      "}\n"
+                      "class C {\n"
+                      "    public function run(): void { Suit::Hearts->label(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Suit.label") >= 0);
@@ -2148,21 +2115,20 @@ TEST(phplsp_enum_case_value) {
 /* ── 108. @extends ParentClass<X> ─────────────────────────────── */
 
 TEST(phplsp_template_extends) {
-    const char *src =
-        "<?php\n"
-        "/** @template T */\n"
-        "class Container {\n"
-        "    /** @return T */\n"
-        "    public function get() { return null; }\n"
-        "}\n"
-        "class User { public function name(): string { return 'u'; } }\n"
-        "/** @extends Container<User> */\n"
-        "class UserContainer extends Container {}\n"
-        "class C {\n"
-        "    public function run(UserContainer $uc): void {\n"
-        "        $uc->get();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "/** @template T */\n"
+                      "class Container {\n"
+                      "    /** @return T */\n"
+                      "    public function get() { return null; }\n"
+                      "}\n"
+                      "class User { public function name(): string { return 'u'; } }\n"
+                      "/** @extends Container<User> */\n"
+                      "class UserContainer extends Container {}\n"
+                      "class C {\n"
+                      "    public function run(UserContainer $uc): void {\n"
+                      "        $uc->get();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* At minimum, get() resolves on the chain — deep substitution into
@@ -2196,7 +2162,8 @@ TEST(phplsp_doctrine_chain) {
         "<?php\n"
         "class C {\n"
         "    public function run(\\Doctrine\\ORM\\EntityManagerInterface $em): void {\n"
-        "        $em->createQueryBuilder()->select('u')->from('User','u')->getQuery()->getResult();\n"
+        "        "
+        "$em->createQueryBuilder()->select('u')->from('User','u')->getQuery()->getResult();\n"
         "    }\n"
         "}\n";
     CBMFileResult *r = extract_php(src);
@@ -2213,13 +2180,12 @@ TEST(phplsp_doctrine_chain) {
 /* ── 111. Guzzle client.request -> ResponseInterface chain ─── */
 
 TEST(phplsp_guzzle_chain) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(\\GuzzleHttp\\Client $http): void {\n"
-        "        $http->get('/x')->getStatusCode();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(\\GuzzleHttp\\Client $http): void {\n"
+                      "        $http->get('/x')->getStatusCode();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Client.get") >= 0);
@@ -2231,13 +2197,12 @@ TEST(phplsp_guzzle_chain) {
 /* ── 112. Twig render ─────────────────────────────────────── */
 
 TEST(phplsp_twig_render) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(\\Twig\\Environment $twig): void {\n"
-        "        $twig->load('x.html')->render([]);\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(\\Twig\\Environment $twig): void {\n"
+                      "        $twig->load('x.html')->render([]);\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Environment.load") >= 0);
@@ -2249,16 +2214,15 @@ TEST(phplsp_twig_render) {
 /* ── 113. Nested closure captures (parent->child) ───────── */
 
 TEST(phplsp_nested_closure_capture) {
-    const char *src =
-        "<?php\n"
-        "class P { public function tap(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run(P $p): void {\n"
-        "        $f = function () use ($p) {\n"
-        "            $g = function () use ($p) { return $p->tap(); };\n"
-        "        };\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class P { public function tap(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run(P $p): void {\n"
+                      "        $f = function () use ($p) {\n"
+                      "            $g = function () use ($p) { return $p->tap(); };\n"
+                      "        };\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "P.tap") >= 0);
@@ -2269,18 +2233,17 @@ TEST(phplsp_nested_closure_capture) {
 /* ── 114. Three-conjunction narrowing ───────────────────── */
 
 TEST(phplsp_three_conjunction) {
-    const char *src =
-        "<?php\n"
-        "class A { public function aa(): int { return 1; } }\n"
-        "class B { public function bb(): int { return 2; } }\n"
-        "class D { public function dd(): int { return 4; } }\n"
-        "class C {\n"
-        "    public function run($x, $y, $z): void {\n"
-        "        if ($x instanceof A && $y instanceof B && $z instanceof D) {\n"
-        "            $x->aa(); $y->bb(); $z->dd();\n"
-        "        }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function aa(): int { return 1; } }\n"
+                      "class B { public function bb(): int { return 2; } }\n"
+                      "class D { public function dd(): int { return 4; } }\n"
+                      "class C {\n"
+                      "    public function run($x, $y, $z): void {\n"
+                      "        if ($x instanceof A && $y instanceof B && $z instanceof D) {\n"
+                      "            $x->aa(); $y->bb(); $z->dd();\n"
+                      "        }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "A.aa") >= 0);
@@ -2293,13 +2256,12 @@ TEST(phplsp_three_conjunction) {
 /* ── 115. Eloquent Model::where()->first() ────────────── */
 
 TEST(phplsp_model_where_first) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        \\Illuminate\\Database\\Eloquent\\Model::where('a', 1)->first();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        \\Illuminate\\Database\\Eloquent\\Model::where('a', 1)->first();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Model.where") >= 0);
@@ -2311,13 +2273,12 @@ TEST(phplsp_model_where_first) {
 /* ── 116. Static call on alias inside namespace ─────────── */
 
 TEST(phplsp_namespaced_alias_static) {
-    const char *src =
-        "<?php\n"
-        "namespace App;\n"
-        "use Illuminate\\Database\\Eloquent\\Model as Base;\n"
-        "class C {\n"
-        "    public function run(): void { Base::where('a', 1); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App;\n"
+                      "use Illuminate\\Database\\Eloquent\\Model as Base;\n"
+                      "class C {\n"
+                      "    public function run(): void { Base::where('a', 1); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Model.where") >= 0);
@@ -2345,15 +2306,14 @@ TEST(phplsp_logger_through_field) {
 /* ── 118. Closure use() with multiple captures ────────── */
 
 TEST(phplsp_closure_multiple_captures) {
-    const char *src =
-        "<?php\n"
-        "class A { public function aa(): int { return 1; } }\n"
-        "class B { public function bb(): int { return 2; } }\n"
-        "class C {\n"
-        "    public function run(A $a, B $b): void {\n"
-        "        $f = function () use ($a, $b) { $a->aa(); $b->bb(); };\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function aa(): int { return 1; } }\n"
+                      "class B { public function bb(): int { return 2; } }\n"
+                      "class C {\n"
+                      "    public function run(A $a, B $b): void {\n"
+                      "        $f = function () use ($a, $b) { $a->aa(); $b->bb(); };\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "A.aa") >= 0);
@@ -2365,15 +2325,14 @@ TEST(phplsp_closure_multiple_captures) {
 /* ── 119. is_a + then chain ─────────────────────────── */
 
 TEST(phplsp_is_a_then_chain) {
-    const char *src =
-        "<?php\n"
-        "class B { public function tap(): int { return 1; } }\n"
-        "class A { public function next(): B { return new B(); } }\n"
-        "class C {\n"
-        "    public function run($x): void {\n"
-        "        if (is_a($x, A::class)) { $x->next()->tap(); }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class B { public function tap(): int { return 1; } }\n"
+                      "class A { public function next(): B { return new B(); } }\n"
+                      "class C {\n"
+                      "    public function run($x): void {\n"
+                      "        if (is_a($x, A::class)) { $x->next()->tap(); }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "A.next") >= 0);
@@ -2385,16 +2344,15 @@ TEST(phplsp_is_a_then_chain) {
 /* ── 120. Mixed narrowing AND function call ──────────── */
 
 TEST(phplsp_mixed_narrow_call) {
-    const char *src =
-        "<?php\n"
-        "class Foo { public function bar(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run($x): void {\n"
-        "        if ($x instanceof Foo && method_exists($x, 'bar')) {\n"
-        "            $x->bar();\n"
-        "        }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Foo { public function bar(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run($x): void {\n"
+                      "        if ($x instanceof Foo && method_exists($x, 'bar')) {\n"
+                      "            $x->bar();\n"
+                      "        }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Foo.bar") >= 0);
@@ -2405,16 +2363,15 @@ TEST(phplsp_mixed_narrow_call) {
 /* ── 121. Subscript chain in foreach key=>value ──────── */
 
 TEST(phplsp_foreach_key_value) {
-    const char *src =
-        "<?php\n"
-        "class User { public function name(): string { return 'u'; } }\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        /** @var array<int, User> $users */\n"
-        "        $users = [];\n"
-        "        foreach ($users as $idx => $user) { $user->name(); }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class User { public function name(): string { return 'u'; } }\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        /** @var array<int, User> $users */\n"
+                      "        $users = [];\n"
+                      "        foreach ($users as $idx => $user) { $user->name(); }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "User.name") >= 0);
@@ -2425,13 +2382,12 @@ TEST(phplsp_foreach_key_value) {
 /* ── 122. Static call with namespaced class const ──── */
 
 TEST(phplsp_static_class_const) {
-    const char *src =
-        "<?php\n"
-        "namespace App;\n"
-        "class Cfg { const KEY = 'k'; }\n"
-        "class C {\n"
-        "    public function run(): void { $x = Cfg::KEY; }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App;\n"
+                      "class Cfg { const KEY = 'k'; }\n"
+                      "class C {\n"
+                      "    public function run(): void { $x = Cfg::KEY; }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -2441,15 +2397,14 @@ TEST(phplsp_static_class_const) {
 /* ── 123. Chained ternary preserving type ───────────── */
 
 TEST(phplsp_ternary_chain) {
-    const char *src =
-        "<?php\n"
-        "class A { public function go(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run(bool $b1, bool $b2, A $a): void {\n"
-        "        $x = $b1 ? $a : ($b2 ? $a : $a);\n"
-        "        $x->go();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function go(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run(bool $b1, bool $b2, A $a): void {\n"
+                      "        $x = $b1 ? $a : ($b2 ? $a : $a);\n"
+                      "        $x->go();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "A.go") >= 0);
@@ -2460,14 +2415,13 @@ TEST(phplsp_ternary_chain) {
 /* ── 124. Trait insteadof not crashed ────────────────── */
 
 TEST(phplsp_trait_insteadof) {
-    const char *src =
-        "<?php\n"
-        "trait A { public function shared(): int { return 1; } }\n"
-        "trait B { public function shared(): int { return 2; } }\n"
-        "class C {\n"
-        "    use A, B { A::shared insteadof B; }\n"
-        "    public function run(): void { $this->shared(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "trait A { public function shared(): int { return 1; } }\n"
+                      "trait B { public function shared(): int { return 2; } }\n"
+                      "class C {\n"
+                      "    use A, B { A::shared insteadof B; }\n"
+                      "    public function run(): void { $this->shared(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -2533,14 +2487,13 @@ TEST(phplsp_long_property_chain) {
 /* ── 128. Conjunction with isset ─────────────────────── */
 
 TEST(phplsp_conjunction_with_isset) {
-    const char *src =
-        "<?php\n"
-        "class Foo { public function bar(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run($x): void {\n"
-        "        if (isset($x) && $x instanceof Foo) { $x->bar(); }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Foo { public function bar(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run($x): void {\n"
+                      "        if (isset($x) && $x instanceof Foo) { $x->bar(); }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Foo.bar") >= 0);
@@ -2551,20 +2504,19 @@ TEST(phplsp_conjunction_with_isset) {
 /* ── 129. Match expression with class arms ─────────── */
 
 TEST(phplsp_match_class_arms) {
-    const char *src =
-        "<?php\n"
-        "class A { public function go(): int { return 1; } }\n"
-        "class B { public function go(): int { return 2; } }\n"
-        "class C {\n"
-        "    public function run(int $i): void {\n"
-        "        $obj = match (true) {\n"
-        "            $i === 1 => new A(),\n"
-        "            $i === 2 => new B(),\n"
-        "            default => new A(),\n"
-        "        };\n"
-        "        $obj->go();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function go(): int { return 1; } }\n"
+                      "class B { public function go(): int { return 2; } }\n"
+                      "class C {\n"
+                      "    public function run(int $i): void {\n"
+                      "        $obj = match (true) {\n"
+                      "            $i === 1 => new A(),\n"
+                      "            $i === 2 => new B(),\n"
+                      "            default => new A(),\n"
+                      "        };\n"
+                      "        $obj->go();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* Match returns first arm's type — A. A.go should resolve. */
@@ -2576,13 +2528,12 @@ TEST(phplsp_match_class_arms) {
 /* ── 130. Static factory through use alias ────────── */
 
 TEST(phplsp_static_factory_via_alias) {
-    const char *src =
-        "<?php\n"
-        "namespace App;\n"
-        "use Illuminate\\Database\\Eloquent\\Builder as B;\n"
-        "class C {\n"
-        "    public function run(B $b): void { $b->where('a', 1); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App;\n"
+                      "use Illuminate\\Database\\Eloquent\\Builder as B;\n"
+                      "class C {\n"
+                      "    public function run(B $b): void { $b->where('a', 1); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Builder.where") >= 0);
@@ -2593,11 +2544,10 @@ TEST(phplsp_static_factory_via_alias) {
 /* ── 131. Static call on a fully-qualified reference ──── */
 
 TEST(phplsp_static_call_fqn) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(): void { \\Carbon\\Carbon::now(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(): void { \\Carbon\\Carbon::now(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Carbon.now") >= 0);
@@ -2608,15 +2558,15 @@ TEST(phplsp_static_call_fqn) {
 /* ── 132. Method with declared return type generic ──── */
 
 TEST(phplsp_method_returns_typed_generic) {
-    const char *src =
-        "<?php\n"
-        "class User { public function name(): string { return 'u'; } }\n"
-        "class Pool {\n"
-        "    public function items(): \\Illuminate\\Support\\Collection { return new \\Illuminate\\Support\\Collection(); }\n"
-        "}\n"
-        "class C {\n"
-        "    public function run(Pool $p): void { $p->items()->map(fn($x)=>$x); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class User { public function name(): string { return 'u'; } }\n"
+                      "class Pool {\n"
+                      "    public function items(): \\Illuminate\\Support\\Collection { return new "
+                      "\\Illuminate\\Support\\Collection(); }\n"
+                      "}\n"
+                      "class C {\n"
+                      "    public function run(Pool $p): void { $p->items()->map(fn($x)=>$x); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Pool.items") >= 0);
@@ -2628,15 +2578,14 @@ TEST(phplsp_method_returns_typed_generic) {
 /* ── 133. Nullsafe chain after instanceof narrowing ─ */
 
 TEST(phplsp_nullsafe_after_narrowing) {
-    const char *src =
-        "<?php\n"
-        "class Foo { public function bar(): ?int { return null; } }\n"
-        "class C {\n"
-        "    public function run(?Foo $x): void {\n"
-        "        if ($x !== null) {}\n"
-        "        $x?->bar();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Foo { public function bar(): ?int { return null; } }\n"
+                      "class C {\n"
+                      "    public function run(?Foo $x): void {\n"
+                      "        if ($x !== null) {}\n"
+                      "        $x?->bar();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Foo.bar") >= 0);
@@ -2647,18 +2596,18 @@ TEST(phplsp_nullsafe_after_narrowing) {
 /* ── 134. PSR Logger from Symfony Console ─────────── */
 
 TEST(phplsp_logger_in_console_command) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    private \\Psr\\Log\\LoggerInterface $log;\n"
-        "    public function __construct(\\Psr\\Log\\LoggerInterface $log) {\n"
-        "        $this->log = $log;\n"
-        "    }\n"
-        "    public function execute(\\Symfony\\Component\\Console\\Style\\SymfonyStyle $io): void {\n"
-        "        $this->log->info('start');\n"
-        "        $io->success('done');\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    private \\Psr\\Log\\LoggerInterface $log;\n"
+                      "    public function __construct(\\Psr\\Log\\LoggerInterface $log) {\n"
+                      "        $this->log = $log;\n"
+                      "    }\n"
+                      "    public function "
+                      "execute(\\Symfony\\Component\\Console\\Style\\SymfonyStyle $io): void {\n"
+                      "        $this->log->info('start');\n"
+                      "        $io->success('done');\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.execute", "LoggerInterface.info") >= 0);
@@ -2688,12 +2637,11 @@ TEST(phplsp_doctrine_repo_find) {
 /* ── 136. Complex Eloquent with magic ::query() ────── */
 
 TEST(phplsp_model_static_query) {
-    const char *src =
-        "<?php\n"
-        "class User extends \\Illuminate\\Database\\Eloquent\\Model {}\n"
-        "class C {\n"
-        "    public function run(): void { User::query()->where('a', 1)->first(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class User extends \\Illuminate\\Database\\Eloquent\\Model {}\n"
+                      "class C {\n"
+                      "    public function run(): void { User::query()->where('a', 1)->first(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Model.query") >= 0);
@@ -2704,16 +2652,15 @@ TEST(phplsp_model_static_query) {
 /* ── 137. Switch statement doesn't crash with narrowings ─ */
 
 TEST(phplsp_switch_statement) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(int $i): void {\n"
-        "        switch ($i) {\n"
-        "            case 1: $x = 'a'; break;\n"
-        "            default: $x = 'b';\n"
-        "        }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(int $i): void {\n"
+                      "        switch ($i) {\n"
+                      "            case 1: $x = 'a'; break;\n"
+                      "            default: $x = 'b';\n"
+                      "        }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -2757,17 +2704,16 @@ TEST(phplsp_factory_method_chain) {
 /* ── 140. PHPDoc @var with intersection type ──────── */
 
 TEST(phplsp_phpdoc_intersection) {
-    const char *src =
-        "<?php\n"
-        "interface Walk { public function walk(): void; }\n"
-        "interface Talk { public function talk(): string; }\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        /** @var Walk&Talk $x */\n"
-        "        $x = null;\n"
-        "        $x->walk();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "interface Walk { public function walk(): void; }\n"
+                      "interface Talk { public function talk(): string; }\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        /** @var Walk&Talk $x */\n"
+                      "        $x = null;\n"
+                      "        $x->walk();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* My resolver takes leftmost interface — should resolve walk. */
@@ -2778,13 +2724,12 @@ TEST(phplsp_phpdoc_intersection) {
 /* ── 141. Abstract method called via concrete subclass ─ */
 
 TEST(phplsp_abstract_via_concrete) {
-    const char *src =
-        "<?php\n"
-        "abstract class B { abstract public function go(): int; }\n"
-        "class K extends B { public function go(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run(K $k): void { $k->go(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "abstract class B { abstract public function go(): int; }\n"
+                      "class K extends B { public function go(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run(K $k): void { $k->go(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "K.go") >= 0);
@@ -2795,16 +2740,15 @@ TEST(phplsp_abstract_via_concrete) {
 /* ── 142. PHPDoc @var on parameter + chain ─────── */
 
 TEST(phplsp_phpdoc_var_on_param_chain) {
-    const char *src =
-        "<?php\n"
-        "class B { public function tap(): int { return 1; } }\n"
-        "class A { public function next(): B { return new B(); } }\n"
-        "class C {\n"
-        "    /**\n"
-        "     * @param A $a\n"
-        "     */\n"
-        "    public function run($a): void { $a->next()->tap(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class B { public function tap(): int { return 1; } }\n"
+                      "class A { public function next(): B { return new B(); } }\n"
+                      "class C {\n"
+                      "    /**\n"
+                      "     * @param A $a\n"
+                      "     */\n"
+                      "    public function run($a): void { $a->next()->tap(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "A.next") >= 0);
@@ -2816,14 +2760,13 @@ TEST(phplsp_phpdoc_var_on_param_chain) {
 /* ── 143. Non-namespaced FQN chain ─────────────── */
 
 TEST(phplsp_fqn_method_chain) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        $r = new \\Illuminate\\Support\\Collection();\n"
-        "        $r->map(fn($x)=>$x)->filter(fn($x)=>true)->first();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        $r = new \\Illuminate\\Support\\Collection();\n"
+                      "        $r->map(fn($x)=>$x)->filter(fn($x)=>true)->first();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Collection.map") >= 0);
@@ -2836,14 +2779,13 @@ TEST(phplsp_fqn_method_chain) {
 /* ── 144. Nested class declaration in namespace ───── */
 
 TEST(phplsp_nested_namespace) {
-    const char *src =
-        "<?php\n"
-        "namespace App {\n"
-        "    class Foo { public function bar(): int { return 1; } }\n"
-        "    class C {\n"
-        "        public function run(Foo $f): void { $f->bar(); }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App {\n"
+                      "    class Foo { public function bar(): int { return 1; } }\n"
+                      "    class C {\n"
+                      "        public function run(Foo $f): void { $f->bar(); }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "Foo.bar") >= 0);
@@ -2854,13 +2796,12 @@ TEST(phplsp_nested_namespace) {
 /* ── 145. Carbon::now()->addDay() chain ─────────── */
 
 TEST(phplsp_carbon_static_chain) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        \\Carbon\\Carbon::now()->addDay()->format('Y-m-d');\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        \\Carbon\\Carbon::now()->addDay()->format('Y-m-d');\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Carbon.now") >= 0);
@@ -2873,11 +2814,11 @@ TEST(phplsp_carbon_static_chain) {
 /* ── 146. Illuminate Container -> get returns mixed ── */
 
 TEST(phplsp_psr_container_get) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(\\Psr\\Container\\ContainerInterface $c): void { $c->get('id'); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(\\Psr\\Container\\ContainerInterface $c): void { "
+                      "$c->get('id'); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "ContainerInterface.get") >= 0);
@@ -2888,13 +2829,12 @@ TEST(phplsp_psr_container_get) {
 /* ── 147. Variadic typed parameter then call ───── */
 
 TEST(phplsp_variadic_typed_then_call) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(string ...$args): void {\n"
-        "        $count = count($args);\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(string ...$args): void {\n"
+                      "        $count = count($args);\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -2904,13 +2844,12 @@ TEST(phplsp_variadic_typed_then_call) {
 /* ── 148. Method overrides with covariant return ── */
 
 TEST(phplsp_method_covariant_return) {
-    const char *src =
-        "<?php\n"
-        "class P { public function go(): self { return $this; } }\n"
-        "class K extends P { public function go(): self { return $this; } }\n"
-        "class C {\n"
-        "    public function run(K $k): void { $k->go(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class P { public function go(): self { return $this; } }\n"
+                      "class K extends P { public function go(): self { return $this; } }\n"
+                      "class C {\n"
+                      "    public function run(K $k): void { $k->go(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(require_resolved(r, "C.run", "K.go") >= 0);
@@ -2921,13 +2860,12 @@ TEST(phplsp_method_covariant_return) {
 /* ── 149. Interface inheritance dispatch ────────── */
 
 TEST(phplsp_interface_inheritance) {
-    const char *src =
-        "<?php\n"
-        "interface Base { public function tag(): string; }\n"
-        "interface Ext extends Base { public function ext(): string; }\n"
-        "class C {\n"
-        "    public function run(Ext $e): void { $e->tag(); $e->ext(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "interface Base { public function tag(): string; }\n"
+                      "interface Ext extends Base { public function ext(): string; }\n"
+                      "class C {\n"
+                      "    public function run(Ext $e): void { $e->tag(); $e->ext(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Base.tag") >= 0);
@@ -2939,15 +2877,14 @@ TEST(phplsp_interface_inheritance) {
 /* ── 150. Magic __get / __set don't crash ──────── */
 
 TEST(phplsp_magic_get_set) {
-    const char *src =
-        "<?php\n"
-        "class M {\n"
-        "    public function __get(string $k) { return null; }\n"
-        "    public function __set(string $k, $v): void {}\n"
-        "}\n"
-        "class C {\n"
-        "    public function run(M $m): void { $x = $m->something; $m->other = 1; }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class M {\n"
+                      "    public function __get(string $k) { return null; }\n"
+                      "    public function __set(string $k, $v): void {}\n"
+                      "}\n"
+                      "class C {\n"
+                      "    public function run(M $m): void { $x = $m->something; $m->other = 1; }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -2957,20 +2894,19 @@ TEST(phplsp_magic_get_set) {
 /* ── 151. @return $this fluent chain ─────────────────────── */
 
 TEST(phplsp_at_return_this_fluent) {
-    const char *src =
-        "<?php\n"
-        "class Builder {\n"
-        "    /** @return $this */\n"
-        "    public function where($a, $b) { return $this; }\n"
-        "    /** @return $this */\n"
-        "    public function orderBy($k) { return $this; }\n"
-        "    public function get(): array { return []; }\n"
-        "}\n"
-        "class C {\n"
-        "    public function run(Builder $b): void {\n"
-        "        $b->where('a', 1)->orderBy('id')->get();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Builder {\n"
+                      "    /** @return $this */\n"
+                      "    public function where($a, $b) { return $this; }\n"
+                      "    /** @return $this */\n"
+                      "    public function orderBy($k) { return $this; }\n"
+                      "    public function get(): array { return []; }\n"
+                      "}\n"
+                      "class C {\n"
+                      "    public function run(Builder $b): void {\n"
+                      "        $b->where('a', 1)->orderBy('id')->get();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Builder.where") >= 0);
@@ -2983,16 +2919,15 @@ TEST(phplsp_at_return_this_fluent) {
 /* ── 152. @return static (covariant return) ───────────── */
 
 TEST(phplsp_at_return_static_covariant) {
-    const char *src =
-        "<?php\n"
-        "class Base {\n"
-        "    /** @return static */\n"
-        "    public function self() { return $this; }\n"
-        "}\n"
-        "class Kid extends Base { public function ext(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run(Kid $k): void { $k->self()->ext(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Base {\n"
+                      "    /** @return static */\n"
+                      "    public function self() { return $this; }\n"
+                      "}\n"
+                      "class Kid extends Base { public function ext(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run(Kid $k): void { $k->self()->ext(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* @return static — at least .self() resolves; .ext() may or may not
@@ -3025,7 +2960,8 @@ TEST(phplsp_event_dispatcher) {
     const char *src =
         "<?php\n"
         "class C {\n"
-        "    public function run(\\Symfony\\Contracts\\EventDispatcher\\EventDispatcherInterface $d): void {\n"
+        "    public function run(\\Symfony\\Contracts\\EventDispatcher\\EventDispatcherInterface "
+        "$d): void {\n"
         "        $d->dispatch(new \\Symfony\\Contracts\\EventDispatcher\\Event());\n"
         "    }\n"
         "}\n";
@@ -3063,14 +2999,13 @@ TEST(phplsp_mailer_chain) {
 /* ── 156. Laravel Request input/validate ─────────────── */
 
 TEST(phplsp_laravel_request) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(\\Illuminate\\Http\\Request $req): void {\n"
-        "        $req->input('name');\n"
-        "        $req->validate(['a' => 'required']);\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(\\Illuminate\\Http\\Request $req): void {\n"
+                      "        $req->input('name');\n"
+                      "        $req->validate(['a' => 'required']);\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Request.input") >= 0);
@@ -3100,13 +3035,12 @@ TEST(phplsp_laravel_auth) {
 /* ── 158. Laravel View render ────────────────────── */
 
 TEST(phplsp_laravel_view) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(\\Illuminate\\View\\View $v): string {\n"
-        "        return $v->with('x', 1)->render();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(\\Illuminate\\View\\View $v): string {\n"
+                      "        return $v->with('x', 1)->render();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "View.with") >= 0);
@@ -3118,13 +3052,12 @@ TEST(phplsp_laravel_view) {
 /* ── 159. ReactPHP Promise ───────────────────────── */
 
 TEST(phplsp_promise_chain) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(\\React\\Promise\\PromiseInterface $p): void {\n"
-        "        $p->then(fn() => null)->catch(fn() => null);\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(\\React\\Promise\\PromiseInterface $p): void {\n"
+                      "        $p->then(fn() => null)->catch(fn() => null);\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "PromiseInterface.then") >= 0);
@@ -3136,14 +3069,13 @@ TEST(phplsp_promise_chain) {
 /* ── 160. Monolog logger from PSR ─────────────── */
 
 TEST(phplsp_monolog_logger) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(\\Monolog\\Logger $log): void {\n"
-        "        $log->info('msg');\n"
-        "        $log->pushHandler('h')->pushProcessor('p');\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(\\Monolog\\Logger $log): void {\n"
+                      "        $log->info('msg');\n"
+                      "        $log->pushHandler('h')->pushProcessor('p');\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", ".info") >= 0);
@@ -3156,13 +3088,12 @@ TEST(phplsp_monolog_logger) {
 /* ── 161. Reflection API ───────────────────────── */
 
 TEST(phplsp_reflection_class) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(\\ReflectionClass $rc): void {\n"
-        "        $rc->getMethod('foo')->invoke($rc->newInstance());\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(\\ReflectionClass $rc): void {\n"
+                      "        $rc->getMethod('foo')->invoke($rc->newInstance());\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "ReflectionClass.getMethod") >= 0);
@@ -3178,7 +3109,8 @@ TEST(phplsp_validator) {
     const char *src =
         "<?php\n"
         "class C {\n"
-        "    public function run(\\Symfony\\Component\\Validator\\Validator\\ValidatorInterface $v): void {\n"
+        "    public function run(\\Symfony\\Component\\Validator\\Validator\\ValidatorInterface "
+        "$v): void {\n"
         "        $v->validate('input')->count();\n"
         "    }\n"
         "}\n";
@@ -3213,16 +3145,15 @@ TEST(phplsp_psr_cache) {
 /* ── 164. Many parent levels ────────────── */
 
 TEST(phplsp_many_parents) {
-    const char *src =
-        "<?php\n"
-        "class A { public function aa(): int { return 1; } }\n"
-        "class B extends A {}\n"
-        "class C extends B {}\n"
-        "class D extends C {}\n"
-        "class E extends D {}\n"
-        "class Caller {\n"
-        "    public function run(E $e): void { $e->aa(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function aa(): int { return 1; } }\n"
+                      "class B extends A {}\n"
+                      "class C extends B {}\n"
+                      "class D extends C {}\n"
+                      "class E extends D {}\n"
+                      "class Caller {\n"
+                      "    public function run(E $e): void { $e->aa(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "Caller.run", ".aa") >= 0);
@@ -3233,19 +3164,18 @@ TEST(phplsp_many_parents) {
 /* ── 165. Class implementing many interfaces ─ */
 
 TEST(phplsp_multi_interface_impl) {
-    const char *src =
-        "<?php\n"
-        "interface A { public function aa(): int; }\n"
-        "interface B { public function bb(): int; }\n"
-        "interface D { public function dd(): int; }\n"
-        "class K implements A, B, D {\n"
-        "    public function aa(): int { return 1; }\n"
-        "    public function bb(): int { return 2; }\n"
-        "    public function dd(): int { return 3; }\n"
-        "}\n"
-        "class C {\n"
-        "    public function run(K $k): void { $k->aa(); $k->bb(); $k->dd(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "interface A { public function aa(): int; }\n"
+                      "interface B { public function bb(): int; }\n"
+                      "interface D { public function dd(): int; }\n"
+                      "class K implements A, B, D {\n"
+                      "    public function aa(): int { return 1; }\n"
+                      "    public function bb(): int { return 2; }\n"
+                      "    public function dd(): int { return 3; }\n"
+                      "}\n"
+                      "class C {\n"
+                      "    public function run(K $k): void { $k->aa(); $k->bb(); $k->dd(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "K.aa") >= 0);
@@ -3258,15 +3188,14 @@ TEST(phplsp_multi_interface_impl) {
 /* ── 166. Static method on FQN with @return self ── */
 
 TEST(phplsp_static_self_return) {
-    const char *src =
-        "<?php\n"
-        "class A {\n"
-        "    public static function make(): self { return new self(); }\n"
-        "    public function go(): int { return 1; }\n"
-        "}\n"
-        "class C {\n"
-        "    public function run(): void { A::make()->go(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A {\n"
+                      "    public static function make(): self { return new self(); }\n"
+                      "    public function go(): int { return 1; }\n"
+                      "}\n"
+                      "class C {\n"
+                      "    public function run(): void { A::make()->go(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "A.make") >= 0);
@@ -3279,16 +3208,15 @@ TEST(phplsp_static_self_return) {
  *      doesn't crash) */
 
 TEST(phplsp_static_this_phpdoc) {
-    const char *src =
-        "<?php\n"
-        "class A {\n"
-        "    /** @return $this */\n"
-        "    public function chain() { return $this; }\n"
-        "    public function go(): int { return 1; }\n"
-        "}\n"
-        "class C {\n"
-        "    public function run(A $a): void { $a->chain()->go(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A {\n"
+                      "    /** @return $this */\n"
+                      "    public function chain() { return $this; }\n"
+                      "    public function go(): int { return 1; }\n"
+                      "}\n"
+                      "class C {\n"
+                      "    public function run(A $a): void { $a->chain()->go(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "A.chain") >= 0);
@@ -3300,14 +3228,13 @@ TEST(phplsp_static_this_phpdoc) {
 /* ── 168. Method on a property typed as interface ── */
 
 TEST(phplsp_field_interface_typed) {
-    const char *src =
-        "<?php\n"
-        "interface Greeter { public function hi(): string; }\n"
-        "class C {\n"
-        "    private Greeter $g;\n"
-        "    public function __construct(Greeter $g) { $this->g = $g; }\n"
-        "    public function run(): void { $this->g->hi(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "interface Greeter { public function hi(): string; }\n"
+                      "class C {\n"
+                      "    private Greeter $g;\n"
+                      "    public function __construct(Greeter $g) { $this->g = $g; }\n"
+                      "    public function run(): void { $this->g->hi(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Greeter.hi") >= 0);
@@ -3318,15 +3245,14 @@ TEST(phplsp_field_interface_typed) {
 /* ── 169. Foreach over Collection<T> via @var ─── */
 
 TEST(phplsp_foreach_collection_typed) {
-    const char *src =
-        "<?php\n"
-        "class User { public function name(): string { return 'u'; } }\n"
-        "class C {\n"
-        "    public function run(\\Illuminate\\Support\\Collection $c): void {\n"
-        "        /** @var \\Illuminate\\Support\\Collection<User> $c */\n"
-        "        foreach ($c as $u) { $u->name(); }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class User { public function name(): string { return 'u'; } }\n"
+                      "class C {\n"
+                      "    public function run(\\Illuminate\\Support\\Collection $c): void {\n"
+                      "        /** @var \\Illuminate\\Support\\Collection<User> $c */\n"
+                      "        foreach ($c as $u) { $u->name(); }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* Foreach with Collection<User> isn't ideal yet; accept either resolve
@@ -3354,15 +3280,14 @@ TEST(phplsp_nullsafe_null_coalesce) {
 /* ── 171. Nested ternary preserving instance ─ */
 
 TEST(phplsp_nested_ternary_instance) {
-    const char *src =
-        "<?php\n"
-        "class A { public function go(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run(bool $a, bool $b, A $x): void {\n"
-        "        $r = $a ? $x : ($b ? $x : $x);\n"
-        "        $r->go();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function go(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run(bool $a, bool $b, A $x): void {\n"
+                      "        $r = $a ? $x : ($b ? $x : $x);\n"
+                      "        $r->go();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "A.go") >= 0);
@@ -3376,13 +3301,12 @@ TEST(phplsp_nested_ternary_instance) {
  * and ->ok() resolves on C. */
 
 TEST(phplsp_trait_in_chain) {
-    const char *src =
-        "<?php\n"
-        "trait T { public function tap(): self { return $this; } }\n"
-        "class C { use T; public function ok(): int { return 1; } }\n"
-        "class Caller {\n"
-        "    public function run(C $c): void { $c->tap()->ok(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "trait T { public function tap(): self { return $this; } }\n"
+                      "class C { use T; public function ok(): int { return 1; } }\n"
+                      "class Caller {\n"
+                      "    public function run(C $c): void { $c->tap()->ok(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "Caller.run", ".tap") >= 0);
@@ -3394,14 +3318,13 @@ TEST(phplsp_trait_in_chain) {
 /* ── 173. Interface with default method (PHP 8+) — inheritance ─ */
 
 TEST(phplsp_interface_method_via_class) {
-    const char *src =
-        "<?php\n"
-        "interface I { public function go(): int; }\n"
-        "class A implements I { public function go(): int { return 1; } }\n"
-        "class B extends A {}\n"
-        "class C {\n"
-        "    public function run(B $b): void { $b->go(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "interface I { public function go(): int; }\n"
+                      "class A implements I { public function go(): int { return 1; } }\n"
+                      "class B extends A {}\n"
+                      "class C {\n"
+                      "    public function run(B $b): void { $b->go(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", ".go") >= 0);
@@ -3427,13 +3350,12 @@ TEST(phplsp_static_through_interface) {
 /* ── 175. Foreach over Iterator → current() ───── */
 
 TEST(phplsp_foreach_iterator_current) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(\\Iterator $it): void {\n"
-        "        foreach ($it as $x) { /* nothing */ }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(\\Iterator $it): void {\n"
+                      "        foreach ($it as $x) { /* nothing */ }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -3443,16 +3365,15 @@ TEST(phplsp_foreach_iterator_current) {
 /* ── 176. Method called via $this in trait ───── */
 
 TEST(phplsp_trait_uses_this) {
-    const char *src =
-        "<?php\n"
-        "trait T {\n"
-        "    public function shared(): void { $this->local(); }\n"
-        "}\n"
-        "class C {\n"
-        "    use T;\n"
-        "    public function local(): int { return 1; }\n"
-        "    public function run(): void { $this->shared(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "trait T {\n"
+                      "    public function shared(): void { $this->local(); }\n"
+                      "}\n"
+                      "class C {\n"
+                      "    use T;\n"
+                      "    public function local(): int { return 1; }\n"
+                      "    public function run(): void { $this->shared(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", ".shared") >= 0);
@@ -3463,15 +3384,14 @@ TEST(phplsp_trait_uses_this) {
 /* ── 177. Casting + chain ─────────────────────── */
 
 TEST(phplsp_cast_then_chain) {
-    const char *src =
-        "<?php\n"
-        "class A { public function go(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run($x): void {\n"
-        "        $a = (object) $x;\n"
-        "        /* Cast result is `object` not specific class — fine. */\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function go(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run($x): void {\n"
+                      "        $a = (object) $x;\n"
+                      "        /* Cast result is `object` not specific class — fine. */\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -3481,13 +3401,12 @@ TEST(phplsp_cast_then_chain) {
 /* ── 178. Iterator chain — current/next/key ── */
 
 TEST(phplsp_iterator_full_api) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(\\Iterator $it): void {\n"
-        "        if ($it->valid()) { $it->current(); $it->key(); $it->next(); }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(\\Iterator $it): void {\n"
+                      "        if ($it->valid()) { $it->current(); $it->key(); $it->next(); }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Iterator.valid") >= 0);
@@ -3539,13 +3458,12 @@ TEST(phplsp_psr7_request_builder) {
 /* ── 181. ArrayObject getIterator ──────────── */
 
 TEST(phplsp_array_object_iterator) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(\\ArrayObject $a): void {\n"
-        "        $a->getIterator()->current();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(\\ArrayObject $a): void {\n"
+                      "        $a->getIterator()->current();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "ArrayObject.getIterator") >= 0);
@@ -3558,14 +3476,13 @@ TEST(phplsp_array_object_iterator) {
 /* ── 182. PHPDoc @param chain ─────────────── */
 
 TEST(phplsp_phpdoc_param_then_chain) {
-    const char *src =
-        "<?php\n"
-        "class B { public function tap(): int { return 1; } }\n"
-        "class A { public function next(): B { return new B(); } }\n"
-        "class C {\n"
-        "    /** @param A $x */\n"
-        "    public function run($x): void { $x->next()->tap(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class B { public function tap(): int { return 1; } }\n"
+                      "class A { public function next(): B { return new B(); } }\n"
+                      "class C {\n"
+                      "    /** @param A $x */\n"
+                      "    public function run($x): void { $x->next()->tap(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "A.next") >= 0);
@@ -3577,13 +3494,12 @@ TEST(phplsp_phpdoc_param_then_chain) {
 /* ── 183. Symfony Twig render with array ─── */
 
 TEST(phplsp_twig_render_array) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(\\Twig\\Environment $twig): string {\n"
-        "        return $twig->render('tpl.html', ['key' => 'val']);\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(\\Twig\\Environment $twig): string {\n"
+                      "        return $twig->render('tpl.html', ['key' => 'val']);\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Environment.render") >= 0);
@@ -3594,13 +3510,12 @@ TEST(phplsp_twig_render_array) {
 /* ── 184. Static call via aliased namespace + chain ─ */
 
 TEST(phplsp_aliased_static_chain) {
-    const char *src =
-        "<?php\n"
-        "namespace App;\n"
-        "use Carbon\\Carbon as Time;\n"
-        "class C {\n"
-        "    public function run(): string { return Time::now()->format('Y'); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App;\n"
+                      "use Carbon\\Carbon as Time;\n"
+                      "class C {\n"
+                      "    public function run(): string { return Time::now()->format('Y'); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Carbon.now") >= 0);
@@ -3612,20 +3527,19 @@ TEST(phplsp_aliased_static_chain) {
 /* ── 185. Foreach with continue / break ─── */
 
 TEST(phplsp_foreach_with_control) {
-    const char *src =
-        "<?php\n"
-        "class User { public function name(): string { return 'u'; } }\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        /** @var array<User> $users */\n"
-        "        $users = [];\n"
-        "        foreach ($users as $u) {\n"
-        "            if (!$u) continue;\n"
-        "            $u->name();\n"
-        "            if ($u) break;\n"
-        "        }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class User { public function name(): string { return 'u'; } }\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        /** @var array<User> $users */\n"
+                      "        $users = [];\n"
+                      "        foreach ($users as $u) {\n"
+                      "            if (!$u) continue;\n"
+                      "            $u->name();\n"
+                      "            if ($u) break;\n"
+                      "        }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "User.name") >= 0);
@@ -3636,16 +3550,15 @@ TEST(phplsp_foreach_with_control) {
 /* ── 186. Sequential narrowing via assert ─ */
 
 TEST(phplsp_sequential_assert_chain) {
-    const char *src =
-        "<?php\n"
-        "class B { public function tap(): int { return 1; } }\n"
-        "class A { public function next(): B { return new B(); } }\n"
-        "class C {\n"
-        "    public function run($x): void {\n"
-        "        assert($x instanceof A);\n"
-        "        $x->next()->tap();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class B { public function tap(): int { return 1; } }\n"
+                      "class A { public function next(): B { return new B(); } }\n"
+                      "class C {\n"
+                      "    public function run($x): void {\n"
+                      "        assert($x instanceof A);\n"
+                      "        $x->next()->tap();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "A.next") >= 0);
@@ -3657,14 +3570,13 @@ TEST(phplsp_sequential_assert_chain) {
 /* ── 187. Traits in inheritance chain ──── */
 
 TEST(phplsp_trait_in_inherited) {
-    const char *src =
-        "<?php\n"
-        "trait T { public function shared(): int { return 1; } }\n"
-        "class Base { use T; }\n"
-        "class Kid extends Base {}\n"
-        "class C {\n"
-        "    public function run(Kid $k): void { $k->shared(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "trait T { public function shared(): int { return 1; } }\n"
+                      "class Base { use T; }\n"
+                      "class Kid extends Base {}\n"
+                      "class C {\n"
+                      "    public function run(Kid $k): void { $k->shared(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", ".shared") >= 0);
@@ -3675,15 +3587,14 @@ TEST(phplsp_trait_in_inherited) {
 /* ── 188. Multiple narrowing types ─────── */
 
 TEST(phplsp_multiple_narrowing_types) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run($x, $y, $z): void {\n"
-        "        if (is_string($x)) { $a = strlen($x); }\n"
-        "        if (is_array($y)) { $b = count($y); }\n"
-        "        if (is_int($z)) { $c = $z + 1; }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run($x, $y, $z): void {\n"
+                      "        if (is_string($x)) { $a = strlen($x); }\n"
+                      "        if (is_array($y)) { $b = count($y); }\n"
+                      "        if (is_int($z)) { $c = $z + 1; }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -3693,18 +3604,17 @@ TEST(phplsp_multiple_narrowing_types) {
 /* ── 189. Eloquent Builder via Model::query() chain ─ */
 
 TEST(phplsp_eloquent_query_full) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        \\Illuminate\\Database\\Eloquent\\Model::query()\n"
-        "            ->where('a', 1)\n"
-        "            ->whereNotNull('b')\n"
-        "            ->orderBy('id')\n"
-        "            ->limit(10)\n"
-        "            ->get();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        \\Illuminate\\Database\\Eloquent\\Model::query()\n"
+                      "            ->where('a', 1)\n"
+                      "            ->whereNotNull('b')\n"
+                      "            ->orderBy('id')\n"
+                      "            ->limit(10)\n"
+                      "            ->get();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Model.query") >= 0);
@@ -3720,16 +3630,15 @@ TEST(phplsp_eloquent_query_full) {
 /* ── 190. Chained property + method through field ─ */
 
 TEST(phplsp_chained_field_method) {
-    const char *src =
-        "<?php\n"
-        "class Inner { public function go(): int { return 1; } }\n"
-        "class Outer {\n"
-        "    public Inner $i;\n"
-        "    public function __construct(Inner $i) { $this->i = $i; }\n"
-        "}\n"
-        "class C {\n"
-        "    public function run(Outer $o): void { $o->i->go(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Inner { public function go(): int { return 1; } }\n"
+                      "class Outer {\n"
+                      "    public Inner $i;\n"
+                      "    public function __construct(Inner $i) { $this->i = $i; }\n"
+                      "}\n"
+                      "class C {\n"
+                      "    public function run(Outer $o): void { $o->i->go(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Inner.go") >= 0);
@@ -3740,16 +3649,15 @@ TEST(phplsp_chained_field_method) {
 /* ── 191. Nullsafe field then method ─── */
 
 TEST(phplsp_nullsafe_field) {
-    const char *src =
-        "<?php\n"
-        "class Inner { public function go(): int { return 1; } }\n"
-        "class Outer {\n"
-        "    public ?Inner $i;\n"
-        "    public function __construct(?Inner $i) { $this->i = $i; }\n"
-        "}\n"
-        "class C {\n"
-        "    public function run(Outer $o): void { $o->i?->go(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Inner { public function go(): int { return 1; } }\n"
+                      "class Outer {\n"
+                      "    public ?Inner $i;\n"
+                      "    public function __construct(?Inner $i) { $this->i = $i; }\n"
+                      "}\n"
+                      "class C {\n"
+                      "    public function run(Outer $o): void { $o->i?->go(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Inner.go") >= 0);
@@ -3775,13 +3683,12 @@ TEST(phplsp_closure_invoke) {
 /* ── 193. PSR Logger LogLevel constants ─ */
 
 TEST(phplsp_psr_log_constants) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(\\Psr\\Log\\LoggerInterface $log): void {\n"
-        "        $log->log('info', 'msg');\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(\\Psr\\Log\\LoggerInterface $log): void {\n"
+                      "        $log->log('info', 'msg');\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "LoggerInterface.log") >= 0);
@@ -3810,13 +3717,12 @@ TEST(phplsp_eloquent_first_or_create) {
 /* ── 195. Container::get with class-string ─ */
 
 TEST(phplsp_container_get) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    public function run(\\Psr\\Container\\ContainerInterface $c): void {\n"
-        "        $svc = $c->get('logger');\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    public function run(\\Psr\\Container\\ContainerInterface $c): void {\n"
+                      "        $svc = $c->get('logger');\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "ContainerInterface.get") >= 0);
@@ -3827,18 +3733,17 @@ TEST(phplsp_container_get) {
 /* ── 196. Multiple classes from one file ─ */
 
 TEST(phplsp_multiple_classes_one_file) {
-    const char *src =
-        "<?php\n"
-        "class A { public function aa(): int { return 1; } }\n"
-        "class B { public function bb(): int { return 2; } }\n"
-        "class D { public function dd(): int { return 3; } }\n"
-        "class E { public function ee(): int { return 4; } }\n"
-        "class F { public function ff(): int { return 5; } }\n"
-        "class C {\n"
-        "    public function run(A $a, B $b, D $d, E $e, F $f): void {\n"
-        "        $a->aa(); $b->bb(); $d->dd(); $e->ee(); $f->ff();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function aa(): int { return 1; } }\n"
+                      "class B { public function bb(): int { return 2; } }\n"
+                      "class D { public function dd(): int { return 3; } }\n"
+                      "class E { public function ee(): int { return 4; } }\n"
+                      "class F { public function ff(): int { return 5; } }\n"
+                      "class C {\n"
+                      "    public function run(A $a, B $b, D $d, E $e, F $f): void {\n"
+                      "        $a->aa(); $b->bb(); $d->dd(); $e->ee(); $f->ff();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "A.aa") >= 0);
@@ -3853,15 +3758,14 @@ TEST(phplsp_multiple_classes_one_file) {
 /* ── 197. Type stays valid after if-else ─ */
 
 TEST(phplsp_type_valid_after_branch) {
-    const char *src =
-        "<?php\n"
-        "class A { public function go(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run(A $a, bool $b): void {\n"
-        "        if ($b) { /* nothing */ } else { /* nothing */ }\n"
-        "        $a->go();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function go(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run(A $a, bool $b): void {\n"
+                      "        if ($b) { /* nothing */ } else { /* nothing */ }\n"
+                      "        $a->go();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "A.go") >= 0);
@@ -3872,17 +3776,16 @@ TEST(phplsp_type_valid_after_branch) {
 /* ── 198. Binding via foreach key=>value+chain ── */
 
 TEST(phplsp_foreach_kv_chain) {
-    const char *src =
-        "<?php\n"
-        "class B { public function tap(): int { return 1; } }\n"
-        "class A { public function next(): B { return new B(); } }\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        /** @var array<int, A> $arr */\n"
-        "        $arr = [];\n"
-        "        foreach ($arr as $i => $a) { $a->next()->tap(); }\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class B { public function tap(): int { return 1; } }\n"
+                      "class A { public function next(): B { return new B(); } }\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        /** @var array<int, A> $arr */\n"
+                      "        $arr = [];\n"
+                      "        foreach ($arr as $i => $a) { $a->next()->tap(); }\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "A.next") >= 0);
@@ -3894,17 +3797,16 @@ TEST(phplsp_foreach_kv_chain) {
 /* ── 199. Self ref chain ── */
 
 TEST(phplsp_self_ref_recursive) {
-    const char *src =
-        "<?php\n"
-        "class Tree {\n"
-        "    public ?Tree $left;\n"
-        "    public function leaf(): bool { return true; }\n"
-        "}\n"
-        "class C {\n"
-        "    public function run(Tree $t): void {\n"
-        "        $t->left?->leaf();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Tree {\n"
+                      "    public ?Tree $left;\n"
+                      "    public function leaf(): bool { return true; }\n"
+                      "}\n"
+                      "class C {\n"
+                      "    public function run(Tree $t): void {\n"
+                      "        $t->left?->leaf();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Tree.leaf") >= 0);
@@ -3963,9 +3865,9 @@ TEST(phplsp_edge_namespaced_facade) {
 }
 
 TEST(phplsp_edge_chain_through_promotion) {
-    const char *src =
-        "<?php\nclass Inner { public function go(): int { return 1; } }\n"
-        "class C { public function __construct(public Inner $i) {} public function r(): void { $this->i->go(); } }\n";
+    const char *src = "<?php\nclass Inner { public function go(): int { return 1; } }\n"
+                      "class C { public function __construct(public Inner $i) {} public function "
+                      "r(): void { $this->i->go(); } }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.r", "Inner.go") >= 0);
@@ -3984,10 +3886,9 @@ TEST(phplsp_edge_static_property_chain) {
 }
 
 TEST(phplsp_edge_enum_method_chain) {
-    const char *src =
-        "<?php\nenum Status: string { case Active = 'a'; case Inactive = 'i';\n"
-        "    public function label(): string { return $this->value; } }\n"
-        "class C { public function r(): void { Status::Active->label(); } }\n";
+    const char *src = "<?php\nenum Status: string { case Active = 'a'; case Inactive = 'i';\n"
+                      "    public function label(): string { return $this->value; } }\n"
+                      "class C { public function r(): void { Status::Active->label(); } }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.r", "Status.label") >= 0);
@@ -4009,12 +3910,11 @@ TEST(phplsp_edge_call_after_assert_two_levels) {
 }
 
 TEST(phplsp_edge_negative_narrow_chain) {
-    const char *src =
-        "<?php\nclass Foo { public function go(): int { return 1; } }\n"
-        "class C { public function r($x): void {\n"
-        "    if (!($x instanceof Foo)) { throw new \\RuntimeException('x'); }\n"
-        "    $x->go();\n"
-        "} }\n";
+    const char *src = "<?php\nclass Foo { public function go(): int { return 1; } }\n"
+                      "class C { public function r($x): void {\n"
+                      "    if (!($x instanceof Foo)) { throw new \\RuntimeException('x'); }\n"
+                      "    $x->go();\n"
+                      "} }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.r", "Foo.go") >= 0);
@@ -4023,13 +3923,12 @@ TEST(phplsp_edge_negative_narrow_chain) {
 }
 
 TEST(phplsp_edge_closure_bound_class) {
-    const char *src =
-        "<?php\nclass C {\n"
-        "    public function r(): void {\n"
-        "        $f = \\Closure::fromCallable([$this, 'helper']);\n"
-        "    }\n"
-        "    public function helper(): int { return 1; }\n"
-        "}\n";
+    const char *src = "<?php\nclass C {\n"
+                      "    public function r(): void {\n"
+                      "        $f = \\Closure::fromCallable([$this, 'helper']);\n"
+                      "    }\n"
+                      "    public function helper(): int { return 1; }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -4037,13 +3936,12 @@ TEST(phplsp_edge_closure_bound_class) {
 }
 
 TEST(phplsp_edge_late_assignment_chain) {
-    const char *src =
-        "<?php\nclass A { public function go(): int { return 1; } }\n"
-        "class C { public function r(): void {\n"
-        "    $a = null;\n"
-        "    $a = new A();\n"
-        "    $a->go();\n"
-        "} }\n";
+    const char *src = "<?php\nclass A { public function go(): int { return 1; } }\n"
+                      "class C { public function r(): void {\n"
+                      "    $a = null;\n"
+                      "    $a = new A();\n"
+                      "    $a->go();\n"
+                      "} }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.r", "A.go") >= 0);
@@ -4052,8 +3950,7 @@ TEST(phplsp_edge_late_assignment_chain) {
 }
 
 TEST(phplsp_edge_callable_type_param) {
-    const char *src =
-        "<?php\nclass C { public function r(callable $f): void { $f(1, 2); } }\n";
+    const char *src = "<?php\nclass C { public function r(callable $f): void { $f(1, 2); } }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -4061,9 +3958,8 @@ TEST(phplsp_edge_callable_type_param) {
 }
 
 TEST(phplsp_edge_nullable_param_chain) {
-    const char *src =
-        "<?php\nclass A { public function go(): int { return 1; } }\n"
-        "class C { public function r(?A $a): void { if ($a) { $a->go(); } } }\n";
+    const char *src = "<?php\nclass A { public function go(): int { return 1; } }\n"
+                      "class C { public function r(?A $a): void { if ($a) { $a->go(); } } }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.r", "A.go") >= 0);
@@ -4072,13 +3968,12 @@ TEST(phplsp_edge_nullable_param_chain) {
 }
 
 TEST(phplsp_edge_phpdoc_ignored_then_real) {
-    const char *src =
-        "<?php\nclass A { public function go(): int { return 1; } }\n"
-        "class C { public function r(): void {\n"
-        "    /** unrelated comment */\n"
-        "    $a = new A();\n"
-        "    $a->go();\n"
-        "} }\n";
+    const char *src = "<?php\nclass A { public function go(): int { return 1; } }\n"
+                      "class C { public function r(): void {\n"
+                      "    /** unrelated comment */\n"
+                      "    $a = new A();\n"
+                      "    $a->go();\n"
+                      "} }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.r", "A.go") >= 0);
@@ -4087,10 +3982,9 @@ TEST(phplsp_edge_phpdoc_ignored_then_real) {
 }
 
 TEST(phplsp_edge_attribute_above_class) {
-    const char *src =
-        "<?php\n#[\\AllowDynamicProperties]\n"
-        "class A { public function go(): int { return 1; } }\n"
-        "class C { public function r(A $a): void { $a->go(); } }\n";
+    const char *src = "<?php\n#[\\AllowDynamicProperties]\n"
+                      "class A { public function go(): int { return 1; } }\n"
+                      "class C { public function r(A $a): void { $a->go(); } }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.r", "A.go") >= 0);
@@ -4108,8 +4002,7 @@ TEST(phplsp_edge_method_with_ref_param) {
 }
 
 TEST(phplsp_edge_abstract_no_body) {
-    const char *src =
-        "<?php\nabstract class A { abstract public function go(): int; }\n";
+    const char *src = "<?php\nabstract class A { abstract public function go(): int; }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -4132,15 +4025,14 @@ TEST(phplsp_edge_interface_only) {
 }
 
 TEST(phplsp_edge_nested_match) {
-    const char *src =
-        "<?php\nclass A { public function go(): int { return 1; } }\n"
-        "class B { public function go(): int { return 2; } }\n"
-        "class C { public function r(int $i, int $j): void {\n"
-        "    $r = match($i) {\n"
-        "        1 => match($j) { 1 => new A(), default => new B() },\n"
-        "        default => new A(),\n"
-        "    };\n"
-        "} }\n";
+    const char *src = "<?php\nclass A { public function go(): int { return 1; } }\n"
+                      "class B { public function go(): int { return 2; } }\n"
+                      "class C { public function r(int $i, int $j): void {\n"
+                      "    $r = match($i) {\n"
+                      "        1 => match($j) { 1 => new A(), default => new B() },\n"
+                      "        default => new A(),\n"
+                      "    };\n"
+                      "} }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -4162,10 +4054,9 @@ TEST(phplsp_edge_long_static_chain) {
 }
 
 TEST(phplsp_edge_iterator_iterable_param) {
-    const char *src =
-        "<?php\nclass C { public function r(iterable $items): void {\n"
-        "    foreach ($items as $i) { /* nothing */ }\n"
-        "} }\n";
+    const char *src = "<?php\nclass C { public function r(iterable $items): void {\n"
+                      "    foreach ($items as $i) { /* nothing */ }\n"
+                      "} }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -4173,13 +4064,12 @@ TEST(phplsp_edge_iterator_iterable_param) {
 }
 
 TEST(phplsp_edge_array_of_classes) {
-    const char *src =
-        "<?php\nclass A { public function go(): int { return 1; } }\n"
-        "class C { public function r(): void {\n"
-        "    /** @var array<A> $arr */\n"
-        "    $arr = [];\n"
-        "    foreach ($arr as $a) { $a->go(); }\n"
-        "} }\n";
+    const char *src = "<?php\nclass A { public function go(): int { return 1; } }\n"
+                      "class C { public function r(): void {\n"
+                      "    /** @var array<A> $arr */\n"
+                      "    $arr = [];\n"
+                      "    foreach ($arr as $a) { $a->go(); }\n"
+                      "} }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.r", "A.go") >= 0);
@@ -4188,13 +4078,12 @@ TEST(phplsp_edge_array_of_classes) {
 }
 
 TEST(phplsp_edge_phpdoc_var_then_assign_chain) {
-    const char *src =
-        "<?php\nclass A { public function go(): int { return 1; } }\n"
-        "class C { public function r(): void {\n"
-        "    /** @var A $a */\n"
-        "    $a = null;\n"
-        "    $a->go();\n"
-        "} }\n";
+    const char *src = "<?php\nclass A { public function go(): int { return 1; } }\n"
+                      "class C { public function r(): void {\n"
+                      "    /** @var A $a */\n"
+                      "    $a = null;\n"
+                      "    $a->go();\n"
+                      "} }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.r", "A.go") >= 0);
@@ -4216,13 +4105,12 @@ TEST(phplsp_edge_two_traits_one_class) {
 }
 
 TEST(phplsp_edge_enum_with_interface) {
-    const char *src =
-        "<?php\ninterface HasLabel { public function label(): string; }\n"
-        "enum Status: string implements HasLabel {\n"
-        "    case Active = 'a';\n"
-        "    public function label(): string { return $this->value; }\n"
-        "}\n"
-        "class C { public function r(Status $s): void { $s->label(); } }\n";
+    const char *src = "<?php\ninterface HasLabel { public function label(): string; }\n"
+                      "enum Status: string implements HasLabel {\n"
+                      "    case Active = 'a';\n"
+                      "    public function label(): string { return $this->value; }\n"
+                      "}\n"
+                      "class C { public function r(Status $s): void { $s->label(); } }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.r", "Status.label") >= 0);
@@ -4231,12 +4119,11 @@ TEST(phplsp_edge_enum_with_interface) {
 }
 
 TEST(phplsp_edge_constructor_promote_then_use) {
-    const char *src =
-        "<?php\nclass Foo { public function go(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function __construct(private readonly Foo $f) {}\n"
-        "    public function r(): void { $this->f->go(); }\n"
-        "}\n";
+    const char *src = "<?php\nclass Foo { public function go(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function __construct(private readonly Foo $f) {}\n"
+                      "    public function r(): void { $this->f->go(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.r", "Foo.go") >= 0);
@@ -4245,11 +4132,10 @@ TEST(phplsp_edge_constructor_promote_then_use) {
 }
 
 TEST(phplsp_edge_anonymous_class_in_call) {
-    const char *src =
-        "<?php\nclass C { public function r(): void {\n"
-        "    $obj = new class { public function go(): int { return 1; } };\n"
-        "    /* anonymous class types aren't tracked — chain not asserted */\n"
-        "} }\n";
+    const char *src = "<?php\nclass C { public function r(): void {\n"
+                      "    $obj = new class { public function go(): int { return 1; } };\n"
+                      "    /* anonymous class types aren't tracked — chain not asserted */\n"
+                      "} }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -4257,12 +4143,11 @@ TEST(phplsp_edge_anonymous_class_in_call) {
 }
 
 TEST(phplsp_edge_arrow_function_capture_implicit) {
-    const char *src =
-        "<?php\nclass A { public function go(): int { return 1; } }\n"
-        "class C { public function r(A $a): void {\n"
-        "    /* arrow functions implicitly capture by value */\n"
-        "    $f = fn() => $a->go();\n"
-        "} }\n";
+    const char *src = "<?php\nclass A { public function go(): int { return 1; } }\n"
+                      "class C { public function r(A $a): void {\n"
+                      "    /* arrow functions implicitly capture by value */\n"
+                      "    $f = fn() => $a->go();\n"
+                      "} }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.r", "A.go") >= 0);
@@ -4271,10 +4156,9 @@ TEST(phplsp_edge_arrow_function_capture_implicit) {
 }
 
 TEST(phplsp_edge_long_namespace_chain) {
-    const char *src =
-        "<?php\nnamespace A\\B\\C\\D\\E;\n"
-        "class Foo { public function bar(): int { return 1; } }\n"
-        "class K { public function r(Foo $f): void { $f->bar(); } }\n";
+    const char *src = "<?php\nnamespace A\\B\\C\\D\\E;\n"
+                      "class Foo { public function bar(): int { return 1; } }\n"
+                      "class K { public function r(Foo $f): void { $f->bar(); } }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "K.r", "Foo.bar") >= 0);
@@ -4342,10 +4226,9 @@ TEST(phplsp_edge_doctrine_qb_orderBy_setMax) {
 }
 
 TEST(phplsp_edge_guzzle_chain) {
-    const char *src =
-        "<?php\nclass C { public function r(\\GuzzleHttp\\Client $h): int {\n"
-        "    return $h->get('https://x')->getStatusCode();\n"
-        "} }\n";
+    const char *src = "<?php\nclass C { public function r(\\GuzzleHttp\\Client $h): int {\n"
+                      "    return $h->get('https://x')->getStatusCode();\n"
+                      "} }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.r", "Client.get") >= 0);
@@ -4369,10 +4252,9 @@ TEST(phplsp_edge_psr7_full_lifecycle) {
 }
 
 TEST(phplsp_edge_dt_immutable_chain) {
-    const char *src =
-        "<?php\nclass C { public function r(\\DateTimeImmutable $d): string {\n"
-        "    return $d->modify('+1 day')->format('Y-m-d');\n"
-        "} }\n";
+    const char *src = "<?php\nclass C { public function r(\\DateTimeImmutable $d): string {\n"
+                      "    return $d->modify('+1 day')->format('Y-m-d');\n"
+                      "} }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.r", "DateTimeImmutable.modify") >= 0);
@@ -4381,12 +4263,11 @@ TEST(phplsp_edge_dt_immutable_chain) {
 }
 
 TEST(phplsp_edge_throwable_chain) {
-    const char *src =
-        "<?php\nclass C { public function r(): void {\n"
-        "    try { /* nop */ } catch (\\Throwable $t) {\n"
-        "        $t->getMessage(); $t->getCode(); $t->getFile(); $t->getLine();\n"
-        "    }\n"
-        "} }\n";
+    const char *src = "<?php\nclass C { public function r(): void {\n"
+                      "    try { /* nop */ } catch (\\Throwable $t) {\n"
+                      "        $t->getMessage(); $t->getCode(); $t->getFile(); $t->getLine();\n"
+                      "    }\n"
+                      "} }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.r", "Throwable.getMessage") >= 0);
@@ -4408,9 +4289,8 @@ TEST(phplsp_edge_psr_container_resolve) {
 }
 
 TEST(phplsp_edge_nullsafe_long) {
-    const char *src =
-        "<?php\nclass D { public function ok(): int { return 1; } }\n"
-        "class C { public ?D $x; public function r(): void { $this->x?->ok(); } }\n";
+    const char *src = "<?php\nclass D { public function ok(): int { return 1; } }\n"
+                      "class C { public ?D $x; public function r(): void { $this->x?->ok(); } }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.r", "D.ok") >= 0);
@@ -4419,9 +4299,8 @@ TEST(phplsp_edge_nullsafe_long) {
 }
 
 TEST(phplsp_edge_self_in_constructor) {
-    const char *src =
-        "<?php\nclass C { public function __construct() { self::init(); }\n"
-        "    public static function init(): void {} }\n";
+    const char *src = "<?php\nclass C { public function __construct() { self::init(); }\n"
+                      "    public static function init(): void {} }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.__construct", "C.init") >= 0);
@@ -4430,9 +4309,8 @@ TEST(phplsp_edge_self_in_constructor) {
 }
 
 TEST(phplsp_edge_static_in_constructor) {
-    const char *src =
-        "<?php\nclass C { public function __construct() { static::init(); }\n"
-        "    public static function init(): void {} }\n";
+    const char *src = "<?php\nclass C { public function __construct() { static::init(); }\n"
+                      "    public static function init(): void {} }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.__construct", "C.init") >= 0);
@@ -4441,9 +4319,8 @@ TEST(phplsp_edge_static_in_constructor) {
 }
 
 TEST(phplsp_edge_parent_method) {
-    const char *src =
-        "<?php\nclass B { public function tap(): int { return 1; } }\n"
-        "class C extends B { public function r(): void { parent::tap(); } }\n";
+    const char *src = "<?php\nclass B { public function tap(): int { return 1; } }\n"
+                      "class C extends B { public function r(): void { parent::tap(); } }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.r", "B.tap") >= 0);
@@ -4452,12 +4329,11 @@ TEST(phplsp_edge_parent_method) {
 }
 
 TEST(phplsp_edge_method_visibility_modifiers) {
-    const char *src =
-        "<?php\nclass C {\n"
-        "    private function x(): int { return 1; }\n"
-        "    protected function y(): int { return 2; }\n"
-        "    public function z(): int { return $this->x() + $this->y(); }\n"
-        "}\n";
+    const char *src = "<?php\nclass C {\n"
+                      "    private function x(): int { return 1; }\n"
+                      "    protected function y(): int { return 2; }\n"
+                      "    public function z(): int { return $this->x() + $this->y(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.z", "C.x") >= 0);
@@ -4467,9 +4343,8 @@ TEST(phplsp_edge_method_visibility_modifiers) {
 }
 
 TEST(phplsp_edge_final_class) {
-    const char *src =
-        "<?php\nfinal class C { public function go(): int { return 1; } }\n"
-        "class K { public function r(C $c): void { $c->go(); } }\n";
+    const char *src = "<?php\nfinal class C { public function go(): int { return 1; } }\n"
+                      "class K { public function r(C $c): void { $c->go(); } }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "K.r", "C.go") >= 0);
@@ -4496,9 +4371,8 @@ TEST(phplsp_edge_parameter_default_value) {
 }
 
 TEST(phplsp_edge_return_type_union) {
-    const char *src =
-        "<?php\nclass A { public function go(): int { return 1; } }\n"
-        "class C { public function r(): A|null { return null; } }\n";
+    const char *src = "<?php\nclass A { public function go(): int { return 1; } }\n"
+                      "class C { public function r(): A|null { return null; } }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -4506,12 +4380,11 @@ TEST(phplsp_edge_return_type_union) {
 }
 
 TEST(phplsp_edge_multi_param_typed) {
-    const char *src =
-        "<?php\nclass A { public function aa(): int { return 1; } }\n"
-        "class B { public function bb(): int { return 2; } }\n"
-        "class C { public function r(A $a, B $b, int $i, string $s): void {\n"
-        "    $a->aa(); $b->bb();\n"
-        "} }\n";
+    const char *src = "<?php\nclass A { public function aa(): int { return 1; } }\n"
+                      "class B { public function bb(): int { return 2; } }\n"
+                      "class C { public function r(A $a, B $b, int $i, string $s): void {\n"
+                      "    $a->aa(); $b->bb();\n"
+                      "} }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.r", "A.aa") >= 0);
@@ -4521,10 +4394,9 @@ TEST(phplsp_edge_multi_param_typed) {
 }
 
 TEST(phplsp_edge_function_with_default_typed) {
-    const char *src =
-        "<?php\nclass C { public function r(\\DateTimeImmutable $d = null): void {\n"
-        "    /* default null but param typed */\n"
-        "} }\n";
+    const char *src = "<?php\nclass C { public function r(\\DateTimeImmutable $d = null): void {\n"
+                      "    /* default null but param typed */\n"
+                      "} }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -4532,11 +4404,10 @@ TEST(phplsp_edge_function_with_default_typed) {
 }
 
 TEST(phplsp_edge_property_with_default) {
-    const char *src =
-        "<?php\nclass C {\n"
-        "    public int $count = 0;\n"
-        "    public function r(): int { return $this->count; }\n"
-        "}\n";
+    const char *src = "<?php\nclass C {\n"
+                      "    public int $count = 0;\n"
+                      "    public function r(): int { return $this->count; }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -4544,12 +4415,11 @@ TEST(phplsp_edge_property_with_default) {
 }
 
 TEST(phplsp_edge_private_static) {
-    const char *src =
-        "<?php\nclass C {\n"
-        "    private static function make(): self { return new self(); }\n"
-        "    public function go(): int { return 1; }\n"
-        "    public function r(): void { self::make()->go(); }\n"
-        "}\n";
+    const char *src = "<?php\nclass C {\n"
+                      "    private static function make(): self { return new self(); }\n"
+                      "    public function go(): int { return 1; }\n"
+                      "    public function r(): void { self::make()->go(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.r", "C.make") >= 0);
@@ -4561,19 +4431,18 @@ TEST(phplsp_edge_private_static) {
 /* ── 249-280: Phase 5f / 4ac / 4ad ────────────────────────── */
 
 TEST(phplsp_phpstan_type_alias_basic) {
-    const char *src =
-        "<?php\n"
-        "class User { public function name(): string { return 'u'; } }\n"
-        "/**\n"
-        " * @phpstan-type Maybe User\n"
-        " */\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        /** @var Maybe $x */\n"
-        "        $x = null;\n"
-        "        $x->name();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class User { public function name(): string { return 'u'; } }\n"
+                      "/**\n"
+                      " * @phpstan-type Maybe User\n"
+                      " */\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        /** @var Maybe $x */\n"
+                      "        $x = null;\n"
+                      "        $x->name();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "User.name") >= 0);
@@ -4582,17 +4451,16 @@ TEST(phplsp_phpstan_type_alias_basic) {
 }
 
 TEST(phplsp_phpstan_type_alias_via_param) {
-    const char *src =
-        "<?php\n"
-        "class B { public function tap(): int { return 1; } }\n"
-        "class A { public function next(): B { return new B(); } }\n"
-        "/**\n"
-        " * @phpstan-type Maker A\n"
-        " */\n"
-        "class C {\n"
-        "    /** @param Maker $a */\n"
-        "    public function run($a): void { $a->next()->tap(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class B { public function tap(): int { return 1; } }\n"
+                      "class A { public function next(): B { return new B(); } }\n"
+                      "/**\n"
+                      " * @phpstan-type Maker A\n"
+                      " */\n"
+                      "class C {\n"
+                      "    /** @param Maker $a */\n"
+                      "    public function run($a): void { $a->next()->tap(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "A.next") >= 0);
@@ -4602,16 +4470,15 @@ TEST(phplsp_phpstan_type_alias_via_param) {
 }
 
 TEST(phplsp_psalm_type_alias_alternate_spelling) {
-    const char *src =
-        "<?php\n"
-        "class User { public function name(): string { return 'u'; } }\n"
-        "/**\n"
-        " * @psalm-type UID User\n"
-        " */\n"
-        "class C {\n"
-        "    /** @param UID $u */\n"
-        "    public function run($u): void { $u->name(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class User { public function name(): string { return 'u'; } }\n"
+                      "/**\n"
+                      " * @psalm-type UID User\n"
+                      " */\n"
+                      "class C {\n"
+                      "    /** @param UID $u */\n"
+                      "    public function run($u): void { $u->name(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "User.name") >= 0);
@@ -4620,12 +4487,11 @@ TEST(phplsp_psalm_type_alias_alternate_spelling) {
 }
 
 TEST(phplsp_phpstan_import_type_no_crash) {
-    const char *src =
-        "<?php\n"
-        "/**\n"
-        " * @phpstan-import-type Foo from \\Other\\Class_\n"
-        " */\n"
-        "class C { public function run(): void {} }\n";
+    const char *src = "<?php\n"
+                      "/**\n"
+                      " * @phpstan-import-type Foo from \\Other\\Class_\n"
+                      " */\n"
+                      "class C { public function run(): void {} }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -4633,15 +4499,14 @@ TEST(phplsp_phpstan_import_type_no_crash) {
 }
 
 TEST(phplsp_closure_bindTo_resolves_this) {
-    const char *src =
-        "<?php\n"
-        "class Other { public function helper(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run(Other $o): void {\n"
-        "        $f = function () { return $this->helper(); };\n"
-        "        $f->bindTo($o);\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Other { public function helper(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run(Other $o): void {\n"
+                      "        $f = function () { return $this->helper(); };\n"
+                      "        $f->bindTo($o);\n"
+                      "    }\n"
+                      "}\n";
     /* The closure literal is the callee of bindTo; my walker should
      * re-walk the closure body with $this rebound to Other. */
     CBMFileResult *r = extract_php(src);
@@ -4652,14 +4517,13 @@ TEST(phplsp_closure_bindTo_resolves_this) {
 }
 
 TEST(phplsp_closure_static_bind_resolves_this) {
-    const char *src =
-        "<?php\n"
-        "class Other { public function helper(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run(Other $o): void {\n"
-        "        \\Closure::bind(function () { return $this->helper(); }, $o);\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Other { public function helper(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run(Other $o): void {\n"
+                      "        \\Closure::bind(function () { return $this->helper(); }, $o);\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Other.helper") >= 0);
@@ -4668,14 +4532,13 @@ TEST(phplsp_closure_static_bind_resolves_this) {
 }
 
 TEST(phplsp_closure_static_bind_arrow_fn) {
-    const char *src =
-        "<?php\n"
-        "class Other { public function helper(): int { return 1; } }\n"
-        "class C {\n"
-        "    public function run(Other $o): void {\n"
-        "        \\Closure::bind(fn() => $this->helper(), $o);\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Other { public function helper(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    public function run(Other $o): void {\n"
+                      "        \\Closure::bind(fn() => $this->helper(), $o);\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Other.helper") >= 0);
@@ -4684,15 +4547,14 @@ TEST(phplsp_closure_static_bind_arrow_fn) {
 }
 
 TEST(phplsp_conditional_return_no_crash) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    /**\n"
-        "     * @return ($x is string ? int : bool)\n"
-        "     */\n"
-        "    public function strange(string|int $x): mixed { return 1; }\n"
-        "    public function run(): void { $this->strange('a'); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    /**\n"
+                      "     * @return ($x is string ? int : bool)\n"
+                      "     */\n"
+                      "    public function strange(string|int $x): mixed { return 1; }\n"
+                      "    public function run(): void { $this->strange('a'); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "C.strange") >= 0);
@@ -4701,23 +4563,22 @@ TEST(phplsp_conditional_return_no_crash) {
 }
 
 TEST(phplsp_template_covariant_no_crash) {
-    const char *src =
-        "<?php\n"
-        "/**\n"
-        " * @template-covariant T\n"
-        " */\n"
-        "class Box {\n"
-        "    /** @return T */\n"
-        "    public function get() { return null; }\n"
-        "}\n"
-        "class User { public function name(): string { return 'u'; } }\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        /** @var Box<User> $b */\n"
-        "        $b = null;\n"
-        "        $b->get()->name();\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "/**\n"
+                      " * @template-covariant T\n"
+                      " */\n"
+                      "class Box {\n"
+                      "    /** @return T */\n"
+                      "    public function get() { return null; }\n"
+                      "}\n"
+                      "class User { public function name(): string { return 'u'; } }\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        /** @var Box<User> $b */\n"
+                      "        $b = null;\n"
+                      "        $b->get()->name();\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "User.name") >= 0);
@@ -4726,16 +4587,15 @@ TEST(phplsp_template_covariant_no_crash) {
 }
 
 TEST(phplsp_template_contravariant_no_crash) {
-    const char *src =
-        "<?php\n"
-        "/**\n"
-        " * @template-contravariant T\n"
-        " */\n"
-        "class Sink {\n"
-        "    /** @param T $x */\n"
-        "    public function take($x): void {}\n"
-        "}\n"
-        "class C { public function run(): void {} }\n";
+    const char *src = "<?php\n"
+                      "/**\n"
+                      " * @template-contravariant T\n"
+                      " */\n"
+                      "class Sink {\n"
+                      "    /** @param T $x */\n"
+                      "    public function take($x): void {}\n"
+                      "}\n"
+                      "class C { public function run(): void {} }\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -4743,14 +4603,13 @@ TEST(phplsp_template_contravariant_no_crash) {
 }
 
 TEST(phplsp_phpstan_type_array_shape) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    /**\n"
-        "     * @phpstan-type Pair array{a: int, b: string}\n"
-        "     */\n"
-        "    public function run(): void {}\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    /**\n"
+                      "     * @phpstan-type Pair array{a: int, b: string}\n"
+                      "     */\n"
+                      "    public function run(): void {}\n"
+                      "}\n";
     /* @phpstan-type at method-level — we don't apply but shouldn't crash. */
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
@@ -4759,17 +4618,16 @@ TEST(phplsp_phpstan_type_array_shape) {
 }
 
 TEST(phplsp_phpstan_type_union) {
-    const char *src =
-        "<?php\n"
-        "class A { public function aa(): int { return 1; } }\n"
-        "class B { public function bb(): int { return 2; } }\n"
-        "/**\n"
-        " * @phpstan-type Either A|B\n"
-        " */\n"
-        "class C {\n"
-        "    /** @param Either $x */\n"
-        "    public function run($x): void { $x->aa(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function aa(): int { return 1; } }\n"
+                      "class B { public function bb(): int { return 2; } }\n"
+                      "/**\n"
+                      " * @phpstan-type Either A|B\n"
+                      " */\n"
+                      "class C {\n"
+                      "    /** @param Either $x */\n"
+                      "    public function run($x): void { $x->aa(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     /* Union types take leftmost — A. */
@@ -4779,20 +4637,19 @@ TEST(phplsp_phpstan_type_union) {
 
 TEST(phplsp_eloquent_macro_pattern) {
     /* Laravel macroable pattern — closures bound to a class via macro(). */
-    const char *src =
-        "<?php\n"
-        "class Builder {\n"
-        "    public function where($a, $b): self { return $this; }\n"
-        "    public function search(string $q): self { return $this; }\n"
-        "}\n"
-        "class C {\n"
-        "    public function run(): void {\n"
-        "        $builder = new Builder();\n"
-        "        \\Closure::bind(function (string $q) {\n"
-        "            return $this->where('name', 'like', \"%{$q}%\");\n"
-        "        }, $builder);\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Builder {\n"
+                      "    public function where($a, $b): self { return $this; }\n"
+                      "    public function search(string $q): self { return $this; }\n"
+                      "}\n"
+                      "class C {\n"
+                      "    public function run(): void {\n"
+                      "        $builder = new Builder();\n"
+                      "        \\Closure::bind(function (string $q) {\n"
+                      "            return $this->where('name', 'like', \"%{$q}%\");\n"
+                      "        }, $builder);\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Builder.where") >= 0);
@@ -4801,14 +4658,13 @@ TEST(phplsp_eloquent_macro_pattern) {
 }
 
 TEST(phplsp_array_shape_call_no_crash) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    /**\n"
-        "     * @param array{name: string, age: int} $data\n"
-        "     */\n"
-        "    public function run(array $data): void { /* nothing */ }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    /**\n"
+                      "     * @param array{name: string, age: int} $data\n"
+                      "     */\n"
+                      "    public function run(array $data): void { /* nothing */ }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -4816,15 +4672,14 @@ TEST(phplsp_array_shape_call_no_crash) {
 }
 
 TEST(phplsp_class_string_no_crash) {
-    const char *src =
-        "<?php\n"
-        "class A {}\n"
-        "class C {\n"
-        "    /**\n"
-        "     * @param class-string<A> $cls\n"
-        "     */\n"
-        "    public function run(string $cls): void {}\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A {}\n"
+                      "class C {\n"
+                      "    /**\n"
+                      "     * @param class-string<A> $cls\n"
+                      "     */\n"
+                      "    public function run(string $cls): void {}\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -4832,14 +4687,13 @@ TEST(phplsp_class_string_no_crash) {
 }
 
 TEST(phplsp_int_range_no_crash) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    /**\n"
-        "     * @param int<0, 100> $pct\n"
-        "     */\n"
-        "    public function run(int $pct): void {}\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    /**\n"
+                      "     * @param int<0, 100> $pct\n"
+                      "     */\n"
+                      "    public function run(int $pct): void {}\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -4847,14 +4701,13 @@ TEST(phplsp_int_range_no_crash) {
 }
 
 TEST(phplsp_literal_string_no_crash) {
-    const char *src =
-        "<?php\n"
-        "class C {\n"
-        "    /**\n"
-        "     * @param literal-string $s\n"
-        "     */\n"
-        "    public function run(string $s): void {}\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class C {\n"
+                      "    /**\n"
+                      "     * @param literal-string $s\n"
+                      "     */\n"
+                      "    public function run(string $s): void {}\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     cbm_free_result(r);
@@ -4862,20 +4715,19 @@ TEST(phplsp_literal_string_no_crash) {
 }
 
 TEST(phplsp_recursive_phpstan_alias) {
-    const char *src =
-        "<?php\n"
-        "class User { public function name(): string { return 'u'; } }\n"
-        "/**\n"
-        " * @phpstan-type ID int\n"
-        " * @phpstan-type Maybe User\n"
-        " */\n"
-        "class C {\n"
-        "    /**\n"
-        "     * @param ID $id\n"
-        "     * @param Maybe $u\n"
-        "     */\n"
-        "    public function run($id, $u): void { $u->name(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class User { public function name(): string { return 'u'; } }\n"
+                      "/**\n"
+                      " * @phpstan-type ID int\n"
+                      " * @phpstan-type Maybe User\n"
+                      " */\n"
+                      "class C {\n"
+                      "    /**\n"
+                      "     * @param ID $id\n"
+                      "     * @param Maybe $u\n"
+                      "     */\n"
+                      "    public function run($id, $u): void { $u->name(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "User.name") >= 0);
@@ -4884,17 +4736,16 @@ TEST(phplsp_recursive_phpstan_alias) {
 }
 
 TEST(phplsp_phpstan_type_with_template) {
-    const char *src =
-        "<?php\n"
-        "class User { public function name(): string { return 'u'; } }\n"
-        "/**\n"
-        " * @template T\n"
-        " * @phpstan-type Maybe User\n"
-        " */\n"
-        "class C {\n"
-        "    /** @param Maybe $u */\n"
-        "    public function run($u): void { $u->name(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class User { public function name(): string { return 'u'; } }\n"
+                      "/**\n"
+                      " * @template T\n"
+                      " * @phpstan-type Maybe User\n"
+                      " */\n"
+                      "class C {\n"
+                      "    /** @param Maybe $u */\n"
+                      "    public function run($u): void { $u->name(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "User.name") >= 0);
@@ -4903,19 +4754,18 @@ TEST(phplsp_phpstan_type_with_template) {
 }
 
 TEST(phplsp_closure_bind_chain) {
-    const char *src =
-        "<?php\n"
-        "class Bag {\n"
-        "    public int $count = 0;\n"
-        "    public function add(int $n): void { $this->count += $n; }\n"
-        "}\n"
-        "class C {\n"
-        "    public function run(Bag $b): void {\n"
-        "        \\Closure::bind(function () {\n"
-        "            $this->add(5);\n"
-        "        }, $b);\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class Bag {\n"
+                      "    public int $count = 0;\n"
+                      "    public function add(int $n): void { $this->count += $n; }\n"
+                      "}\n"
+                      "class C {\n"
+                      "    public function run(Bag $b): void {\n"
+                      "        \\Closure::bind(function () {\n"
+                      "            $this->add(5);\n"
+                      "        }, $b);\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "Bag.add") >= 0);
@@ -4924,22 +4774,21 @@ TEST(phplsp_closure_bind_chain) {
 }
 
 TEST(phplsp_long_phpdoc_block) {
-    const char *src =
-        "<?php\n"
-        "class A { public function go(): int { return 1; } }\n"
-        "class C {\n"
-        "    /**\n"
-        "     * Long description\n"
-        "     * with multiple lines\n"
-        "     * and various tags.\n"
-        "     *\n"
-        "     * @param A $a The thing\n"
-        "     * @return void\n"
-        "     * @throws \\RuntimeException\n"
-        "     * @internal\n"
-        "     */\n"
-        "    public function run($a): void { $a->go(); }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "class A { public function go(): int { return 1; } }\n"
+                      "class C {\n"
+                      "    /**\n"
+                      "     * Long description\n"
+                      "     * with multiple lines\n"
+                      "     * and various tags.\n"
+                      "     *\n"
+                      "     * @param A $a The thing\n"
+                      "     * @return void\n"
+                      "     * @throws \\RuntimeException\n"
+                      "     * @internal\n"
+                      "     */\n"
+                      "    public function run($a): void { $a->go(); }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "C.run", "A.go") >= 0);
@@ -4984,17 +4833,16 @@ TEST(phplsp_realistic_repository_pattern) {
 }
 
 TEST(phplsp_realistic_event_listener) {
-    const char *src =
-        "<?php\n"
-        "namespace App\\Listener;\n"
-        "use Symfony\\Contracts\\EventDispatcher\\Event;\n"
-        "use Psr\\Log\\LoggerInterface;\n"
-        "class OrderCreatedListener {\n"
-        "    public function __construct(private readonly LoggerInterface $log) {}\n"
-        "    public function __invoke(Event $event): void {\n"
-        "        $this->log->info('order created');\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App\\Listener;\n"
+                      "use Symfony\\Contracts\\EventDispatcher\\Event;\n"
+                      "use Psr\\Log\\LoggerInterface;\n"
+                      "class OrderCreatedListener {\n"
+                      "    public function __construct(private readonly LoggerInterface $log) {}\n"
+                      "    public function __invoke(Event $event): void {\n"
+                      "        $this->log->info('order created');\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "OrderCreatedListener.__invoke", "LoggerInterface.info") >= 0);
@@ -5026,17 +4874,16 @@ TEST(phplsp_realistic_command) {
 }
 
 TEST(phplsp_realistic_form_handler) {
-    const char *src =
-        "<?php\n"
-        "namespace App\\Form;\n"
-        "use Symfony\\Component\\Validator\\Validator\\ValidatorInterface;\n"
-        "class FormHandler {\n"
-        "    public function __construct(private readonly ValidatorInterface $v) {}\n"
-        "    public function handle(array $data): bool {\n"
-        "        $errors = $this->v->validate($data);\n"
-        "        return $errors->count() === 0;\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App\\Form;\n"
+                      "use Symfony\\Component\\Validator\\Validator\\ValidatorInterface;\n"
+                      "class FormHandler {\n"
+                      "    public function __construct(private readonly ValidatorInterface $v) {}\n"
+                      "    public function handle(array $data): bool {\n"
+                      "        $errors = $this->v->validate($data);\n"
+                      "        return $errors->count() === 0;\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "FormHandler.handle", "ValidatorInterface.validate") >= 0);
@@ -5046,18 +4893,17 @@ TEST(phplsp_realistic_form_handler) {
 }
 
 TEST(phplsp_realistic_mail_sender) {
-    const char *src =
-        "<?php\n"
-        "namespace App\\Service;\n"
-        "use Symfony\\Component\\Mailer\\MailerInterface;\n"
-        "use Symfony\\Component\\Mime\\Email;\n"
-        "class WelcomeMailer {\n"
-        "    public function __construct(private readonly MailerInterface $m) {}\n"
-        "    public function send(string $to): void {\n"
-        "        $email = (new Email())->from('a@b')->to($to)->subject('Welcome');\n"
-        "        $this->m->send($email);\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App\\Service;\n"
+                      "use Symfony\\Component\\Mailer\\MailerInterface;\n"
+                      "use Symfony\\Component\\Mime\\Email;\n"
+                      "class WelcomeMailer {\n"
+                      "    public function __construct(private readonly MailerInterface $m) {}\n"
+                      "    public function send(string $to): void {\n"
+                      "        $email = (new Email())->from('a@b')->to($to)->subject('Welcome');\n"
+                      "        $this->m->send($email);\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "WelcomeMailer.send", "Email.from") >= 0);
@@ -5069,17 +4915,16 @@ TEST(phplsp_realistic_mail_sender) {
 }
 
 TEST(phplsp_realistic_cached_service) {
-    const char *src =
-        "<?php\n"
-        "namespace App\\Service;\n"
-        "use Symfony\\Contracts\\Cache\\CacheInterface;\n"
-        "class CachedService {\n"
-        "    public function __construct(private readonly CacheInterface $cache) {}\n"
-        "    public function getData(string $k): mixed {\n"
-        "        return $this->cache->get($k, fn() => $this->compute($k));\n"
-        "    }\n"
-        "    private function compute(string $k): mixed { return null; }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App\\Service;\n"
+                      "use Symfony\\Contracts\\Cache\\CacheInterface;\n"
+                      "class CachedService {\n"
+                      "    public function __construct(private readonly CacheInterface $cache) {}\n"
+                      "    public function getData(string $k): mixed {\n"
+                      "        return $this->cache->get($k, fn() => $this->compute($k));\n"
+                      "    }\n"
+                      "    private function compute(string $k): mixed { return null; }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "CachedService.getData", "CacheInterface.get") >= 0);
@@ -5088,21 +4933,20 @@ TEST(phplsp_realistic_cached_service) {
 }
 
 TEST(phplsp_realistic_logger_chain_with_context) {
-    const char *src =
-        "<?php\n"
-        "namespace App;\n"
-        "use Psr\\Log\\LoggerInterface;\n"
-        "class S {\n"
-        "    public function __construct(private LoggerInterface $log) {}\n"
-        "    public function r(): void {\n"
-        "        $this->log->info('a', ['k' => 1]);\n"
-        "        $this->log->warning('b');\n"
-        "        $this->log->error('c');\n"
-        "        $this->log->critical('d');\n"
-        "        $this->log->debug('e');\n"
-        "        $this->log->log('info', 'f');\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App;\n"
+                      "use Psr\\Log\\LoggerInterface;\n"
+                      "class S {\n"
+                      "    public function __construct(private LoggerInterface $log) {}\n"
+                      "    public function r(): void {\n"
+                      "        $this->log->info('a', ['k' => 1]);\n"
+                      "        $this->log->warning('b');\n"
+                      "        $this->log->error('c');\n"
+                      "        $this->log->critical('d');\n"
+                      "        $this->log->debug('e');\n"
+                      "        $this->log->log('info', 'f');\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "S.r", "LoggerInterface.info") >= 0);
@@ -5116,18 +4960,17 @@ TEST(phplsp_realistic_logger_chain_with_context) {
 }
 
 TEST(phplsp_realistic_carbon_chain_in_method) {
-    const char *src =
-        "<?php\n"
-        "namespace App;\n"
-        "use Carbon\\Carbon;\n"
-        "class Clock {\n"
-        "    public function tomorrow(): string {\n"
-        "        return Carbon::now()->addDay()->format('Y-m-d');\n"
-        "    }\n"
-        "    public function lastWeek(): string {\n"
-        "        return Carbon::now()->subDay()->subDay()->format('Y-m-d');\n"
-        "    }\n"
-        "}\n";
+    const char *src = "<?php\n"
+                      "namespace App;\n"
+                      "use Carbon\\Carbon;\n"
+                      "class Clock {\n"
+                      "    public function tomorrow(): string {\n"
+                      "        return Carbon::now()->addDay()->format('Y-m-d');\n"
+                      "    }\n"
+                      "    public function lastWeek(): string {\n"
+                      "        return Carbon::now()->subDay()->subDay()->format('Y-m-d');\n"
+                      "    }\n"
+                      "}\n";
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "Clock.tomorrow", "Carbon.now") >= 0);
@@ -5186,6 +5029,8 @@ SUITE(php_lsp) {
     RUN_TEST(phplsp_phpdoc_method_class_tag);
     RUN_TEST(phplsp_trait_method_flattened);
     RUN_TEST(phplsp_trait_self_use_terminates);
+    RUN_TEST(phplsp_trait_aliased_import_name_collision_terminates);
+    RUN_TEST(phplsp_class_aliased_trait_name_collision_terminates);
     RUN_TEST(phplsp_match_result_type);
     RUN_TEST(phplsp_ternary_result_type);
     RUN_TEST(phplsp_method_chain_depth_three);
