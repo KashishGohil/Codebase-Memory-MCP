@@ -21,6 +21,17 @@ static int has_def(CBMFileResult *r, const char *label, const char *name) {
     return 0;
 }
 
+static const CBMDefinition *find_def_by_label_name(CBMFileResult *r, const char *label,
+                                                   const char *name) {
+    for (int i = 0; i < r->defs.count; i++) {
+        if (r->defs.items[i].label && strcmp(r->defs.items[i].label, label) == 0 &&
+            r->defs.items[i].name && strcmp(r->defs.items[i].name, name) == 0) {
+            return &r->defs.items[i];
+        }
+    }
+    return NULL;
+}
+
 /* Check if any definition has the given name (any label). */
 static int has_def_any(CBMFileResult *r, const char *name) {
     for (int i = 0; i < r->defs.count; i++) {
@@ -1279,6 +1290,13 @@ TEST(cpp_preproc_signature_gap_issue946) {
     ASSERT_FALSE(r->has_error);
     ASSERT(has_def(r, "Method", "commit"));
     ASSERT(has_def(r, "Method", "composite"));
+    const CBMDefinition *composite = find_def_by_label_name(r, "Method", "composite");
+    ASSERT_NOT_NULL(composite);
+    ASSERT_EQ(composite->start_line, 31u);
+    ASSERT_EQ(composite->end_line, 31u);
+    ASSERT_FALSE(r->parse_incomplete);
+    ASSERT_EQ(r->error_region_count, 0);
+    ASSERT_NULL(r->error_ranges);
     cbm_free_result(r);
     PASS();
 }
