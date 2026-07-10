@@ -15,6 +15,14 @@ char *cbm_node_text(CBMArena *a, TSNode node, const char *source);
 // Check if a string is a language keyword (should be skipped as callee/usage).
 bool cbm_is_keyword(const char *name, CBMLanguage lang);
 
+// Check if a name is a builtin we mint a real graph node for, so a CALL to it
+// must NOT be keyword-filtered out of call extraction (the LSP resolves it to
+// the injected builtin node and forms a CALLS edge). Narrower than
+// cbm_is_keyword: it only covers builtins with a target node, so un-filtering
+// them cannot produce a node-less / Module-sourced edge. The Python set MUST
+// stay in sync with kPyBuiltinNodes in internal/cbm/lsp/py_builtins.c.
+bool cbm_is_resolvable_builtin(const char *name, CBMLanguage lang);
+
 // Classify a string literal as URL, config, or neither.
 // Returns CBM_STRREF_URL (0), CBM_STRREF_CONFIG (1), or -1 for neither.
 int cbm_classify_string(const char *str, int len);
@@ -49,6 +57,12 @@ const char *cbm_enclosing_func_qn_cached(CBMExtractCtx *ctx, TSNode node);
 // found. Shared by the defs, calls, and unified extractors so all three agree on
 // enclosing-function attribution — drift between private copies caused #438.
 TSNode cbm_resolve_c_declarator_name_node(TSNode func_node);
+
+// Convert a resolved function/method name node to its name string, normalizing a
+// C++ conversion-operator's `operator_cast` node (which spans the full
+// "operator bool() const") down to "operator bool". Shared by the defs and
+// unified extractors so the def name and call-scope QN agree.
+char *cbm_func_name_node_text(CBMArena *a, TSNode name_node, const char *source);
 
 // Resolve a function/method definition node's NAME node across all ~130 grammars
 // (generic `name` field, arrow→declarator, C/C++ declarator chain, plus the many
@@ -116,6 +130,21 @@ char *cbm_fqn_compute(CBMArena *a, const char *project, const char *rel_path, co
 
 // Module QN (file without name): project.rel_path_parts
 char *cbm_fqn_module(CBMArena *a, const char *project, const char *rel_path);
+
+// Language-aware module QN. For directory-module languages (Java package, Go
+// package) the module is derived from the CONTAINING DIRECTORY (the filename
+// stem is NOT baked in): `Outer.java` at root -> "proj", `myapp/db/conn.go` ->
+// "proj.myapp.db". For every OTHER language this returns exactly what
+// cbm_fqn_module returns (no behavior change).
+char *cbm_fqn_module_source_lang(CBMArena *a, const char *project, const char *rel_path,
+                                 CBMLanguage lang);
+
+// Language-aware symbol QN. For directory-module languages this is the
+// directory-based module + "." + name (so a top-level class `Outer` in
+// `Outer.java` is "proj.Outer", not "proj.Outer.Outer"). For every other
+// language this is exactly cbm_fqn_compute (no behavior change).
+char *cbm_fqn_compute_source_lang(CBMArena *a, const char *project, const char *rel_path,
+                                  const char *name, CBMLanguage lang);
 
 // Folder QN: project.dir_parts
 char *cbm_fqn_folder(CBMArena *a, const char *project, const char *rel_dir);

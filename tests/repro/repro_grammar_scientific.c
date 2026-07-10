@@ -486,23 +486,29 @@ TEST(repro_grammar_scientific_matlab) {
 /* ── Magma ────────────────────────────────────────────────────────────────────
  * Computational algebra system; (magma_func_types = function_definition/
  * procedure_definition, magma_call_types = call_expression). Idiomatic: a
- * function `Add` and a function `Compute` that calls it, using Magma's
- * `func<...>` / `function ... end function;` def form. Expected: dims 1-6 + 8
- * GREEN, dim 7 RED (enclosing-func gap).
+ * function `Add` and a function `Compute` that calls it.
+ *
+ * Fixture correction: the prior `Add := function(a, b) ... end function;`
+ * assignment form does NOT parse to a `function_definition` in tree-sitter-magma
+ * — `function(a, b)` is read as a `call_expression` named "function" and the
+ * trailing `end function;` lands in an ERROR node, so no Function def was minted.
+ * The declarative `function Name(...) ... end function;` form (the construct the
+ * grammar and magma_func_types target) parses cleanly into `function_definition`
+ * with a `name` field. Expected: dims 1-6 + 8 GREEN, dim 7 RED (enclosing-func gap).
  */
 TEST(repro_grammar_scientific_magma) {
     static const char src[] =
-        "Add := function(a, b)\n"
+        "function Add(a, b)\n"
         "    return a + b;\n"
         "end function;\n"
         "\n"
-        "Compute := function(x)\n"
+        "function Compute(x)\n"
         "    return Add(x, 1);\n"
         "end function;\n";
     if (single_file_battery("Magma", src, CBM_LANG_MAGMA, "calc.magma",
                             "Function", NULL, "Add") != 0)
         return 1;
-    if (robustness_probe("Magma", "Compute := function(x)\n  return Add(",
+    if (robustness_probe("Magma", "function Compute(x)\n  return Add(",
                          CBM_LANG_MAGMA, "calc.magma") != 0)
         return 1;
     return pipeline_battery("Magma", "calc.magma", src);
