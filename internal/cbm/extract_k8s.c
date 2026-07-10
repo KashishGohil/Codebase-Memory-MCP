@@ -179,7 +179,7 @@ static void emit_kustomize_kind_def(CBMExtractCtx *ctx, TSNode mapping) {
         CBMDefinition def = {0};
         def.name = cbm_arena_strdup(a, kind);
         def.qualified_name = cbm_arena_sprintf(a, "%s.%s", ctx->module_qn, kind);
-        def.label = cbm_arena_strdup(a, "Class");
+        def.label = cbm_arena_strdup(a, "Resource");
         def.file_path = ctx->rel_path;
         def.start_line = ts_node_start_point(mapping).row + TS_LINE_OFFSET;
         def.end_line = ts_node_end_point(mapping).row + TS_LINE_OFFSET;
@@ -334,10 +334,10 @@ static void extract_k8s_manifest(CBMExtractCtx *ctx) {
         CBMDefinition def = {0};
         def.name = cbm_arena_strdup(a, def_name);
         def.qualified_name = cbm_arena_sprintf(a, "%s.%s", ctx->module_qn, def_name);
-        // "Class" is the canonical def label for a K8s resource kind: "Resource"
-        // is not in the graph's known label set, so a resource def carrying it is
-        // dropped by downstream label validation.
-        def.label = cbm_arena_strdup(a, "Class");
+        // "Resource" is the canonical def label for a K8s resource kind. It is a
+        // valid graph label and is what the K8s pipeline pass (pass_k8s.c) filters
+        // on to upsert Resource nodes and emit INFRA_MAPS edges.
+        def.label = cbm_arena_strdup(a, "Resource");
         def.file_path = ctx->rel_path;
         def.start_line = ts_node_start_point(mapping).row + TS_LINE_OFFSET;
         def.end_line = ts_node_end_point(mapping).row + TS_LINE_OFFSET;

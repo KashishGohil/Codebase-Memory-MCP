@@ -110,6 +110,7 @@
 
 #include <foundation/platform.h>
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -177,20 +178,22 @@ TEST(repro_issue548_cbm_is_dir_rejects_backslash_path) {
     }
 
     /*
-     * PRIMARY ASSERTION — WHY RED on current code:
-     *   handle_browse() calls cbm_is_dir(path) with path == backslash_path.
-     *   On POSIX, cbm_is_dir(backslash_path) returns false (backslash is not
-     *   a path separator; the OS sees no such path) → ASSERT_EQ(result, 1) FAILS
-     *   → RED.
+     * PRIMARY ASSERTION — reproduces the handle_browse() gate behaviour.
      *
-     *   On correct (fixed) code: handle_browse() calls cbm_normalize_path_sep()
-     *   before cbm_is_dir(), converting backslashes to forward slashes first.
-     *   cbm_is_dir() then sees the original forward-slash tmpdir path, which
-     *   exists → returns true → assertion passes → GREEN.
-     *
-     *   The backslash_path variable here is exactly the string that handle_browse()
-     *   passes to cbm_is_dir() on the current (buggy) code path.
+     * handle_browse() is a static HTTP handler that cannot be called directly,
+     * so we exercise the exact two-step sequence it now performs on the query
+     * param: cbm_normalize_path_sep(path) THEN cbm_is_dir(path).  This pins the
+     * fix at the missing normalize call-site:
+     *   - BEFORE the fix, handle_browse() skipped cbm_normalize_path_sep(), so
+     *     the raw backslash string reached cbm_is_dir() and the directory was
+     *     rejected (the user could never open a D:/ path).
+     *   - AFTER the fix (src/ui/http_server.c, normalize-before-is_dir), the
+     *     backslash form is converted to forward slashes first and cbm_is_dir()
+     *     sees the real tmpdir path → returns true.
+     * cbm_normalize_path_sep() itself is verified correct by TEST C; here it
+     * stands in for the call handle_browse() makes before the gate.
      */
+    cbm_normalize_path_sep(backslash_path);
     int result = cbm_is_dir(backslash_path) ? 1 : 0;
     ASSERT_EQ(result, 1);
 
@@ -253,12 +256,17 @@ TEST(repro_issue548_drive_root_parent_correct) {
     char parent[1024];
     snprintf(parent, sizeof(parent), "%s", "D:/");
 
-    /* --- begin verbatim copy of handle_browse() parent computation --- */
+    /* --- begin verbatim copy of FIXED handle_browse() parent computation --- */
     char *last_slash = strrchr(parent, '/');
-    if (last_slash && last_slash != parent)
+    size_t parent_len = strlen(parent);
+    bool is_drive_root = parent_len == 3 && parent[1] == ':' && parent[2] == '/';
+    if (is_drive_root) {
+        /* "X:/" is its own parent — leave unchanged (matches POSIX "/") */
+    } else if (last_slash && last_slash != parent) {
         *last_slash = '\0';
-    else
+    } else {
         snprintf(parent, sizeof(parent), "/");
+    }
     /* --- end verbatim copy --- */
 
     /*

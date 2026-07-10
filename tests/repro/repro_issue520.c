@@ -44,6 +44,7 @@
 #include "test_framework.h"
 #include "test_helpers.h"
 #include <mcp/mcp.h>
+#include <pipeline/pipeline.h> /* cbm_project_name_from_path */
 
 #include <string.h>
 #include <stdlib.h>
@@ -137,10 +138,23 @@ TEST(repro_issue520_detect_changes_includes_new_untracked_file) {
      * no committed change) + git diff (no staged change), so on current
      * code the result is always {"changed_files":[],"changed_count":0}.
      * After the fix, git status --porcelain would also be consulted and
-     * new_func.py (marked "??") would appear in the output. */
-    char dc_args[512];
+     * new_func.py (marked "??") would appear in the output.
+     *
+     * The `project` argument is REQUIRED: detect_changes (like every other
+     * MCP tool) resolves the project DB via resolve_store(), which has no
+     * implicit fallback for a NULL project.  The real issue #520 reproduction
+     * calls detect_changes(project="...") explicitly; the project name is
+     * derived from the indexed repo path exactly as the pipeline derives it. */
+    char *dc_project = cbm_project_name_from_path(tmpdir);
+    if (!dc_project) {
+        cbm_mcp_server_free(srv);
+        th_rmtree(tmpdir);
+        FAIL("cbm_project_name_from_path failed");
+    }
+    char dc_args[640];
     snprintf(dc_args, sizeof(dc_args),
-             "{\"base_branch\":\"main\"}");
+             "{\"base_branch\":\"main\",\"project\":\"%s\"}", dc_project);
+    free(dc_project);
     char *dc_resp = cbm_mcp_handle_tool(srv, "detect_changes", dc_args);
 
     /* --- assert the new file is reported ---------------------------- */
