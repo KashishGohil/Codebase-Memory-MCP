@@ -113,6 +113,7 @@ extern void suite_repro_lsp_ts(void);
 extern void suite_repro_ts_inherited_method(void);
 extern void suite_repro_lsp_java_cs(void);
 extern void suite_repro_lsp_kt_php_rust(void);
+extern void suite_repro_ast_dump(void); /* TEMP diagnostic — remove after grammar cluster */
 
 int main(void) {
     /* #845 belt-and-suspenders: this binary EMBEDS cbm_mcp_handle_tool and its
@@ -191,6 +192,7 @@ int main(void) {
     RUN_SUITE(repro_ts_inherited_method);
     RUN_SUITE(repro_lsp_java_cs);
     RUN_SUITE(repro_lsp_kt_php_rust);
+    RUN_SUITE(repro_ast_dump);
 
     TEST_SUMMARY();
 }
