@@ -194,24 +194,23 @@ static bool cbm_scope_before_name_matches(const char *source, int name_pos, cons
     if (!scope || !scope[0]) {
         return true;
     }
-    const char *begin = source;
-    const char *p = source + name_pos;
-    while (p > begin && isspace((unsigned char)p[-1])) {
+    int p = name_pos;
+    while (p > 0 && isspace((unsigned char)source[p - 1])) {
         p--;
     }
-    if (p - begin < 2 || p[-1] != ':' || p[-2] != ':') {
+    if (p < 2 || source[p - 1] != ':' || source[p - 2] != ':') {
         return false;
     }
     p -= 2;
-    while (p > begin && isspace((unsigned char)p[-1])) {
+    while (p > 0 && isspace((unsigned char)source[p - 1])) {
         p--;
     }
-    const char *end = p;
-    while (p > begin && cbm_ident_char(p[-1])) {
+    int end = p;
+    while (p > 0 && cbm_ident_char(source[p - 1])) {
         p--;
     }
     size_t len = (size_t)(end - p);
-    return len == strlen(scope) && strncmp(p, scope, len) == 0;
+    return len == strlen(scope) && strncmp(source + p, scope, len) == 0;
 }
 
 static int cbm_find_matching_paren(const char *source, int source_len, int open_pos) {
@@ -319,8 +318,7 @@ static bool cbm_remap_preprocessed_callable_lines(CBMDefinition *def, const char
         if (close_paren < 0) {
             continue;
         }
-        if (def->signature && !cbm_span_ws_equal(source + p, close_paren - p + 1,
-                                                 def->signature)) {
+        if (def->signature && !cbm_span_ws_equal(source + p, close_paren - p + 1, def->signature)) {
             continue;
         }
         int open_brace = cbm_find_definition_open_brace(source, source_len, close_paren);
@@ -1087,10 +1085,11 @@ static bool cbm_line_blank_or_preproc(const char *source, int start, int end, bo
     while (p < end && isspace((unsigned char)source[p])) {
         p++;
     }
+    bool preproc = p < end && source[p] == '#';
     if (is_preproc) {
-        *is_preproc = p < end && source[p] == '#';
+        *is_preproc = preproc;
     }
-    return p >= end || (p < end && source[p] == '#');
+    return p >= end || preproc;
 }
 
 static void cbm_collect_cpp_preproc_alt_signatures(const char *source, int source_len, uint32_t rs,
@@ -1102,12 +1101,13 @@ static void cbm_collect_cpp_preproc_alt_signatures(const char *source, int sourc
         if (p < source_len && source[p] != '\n') {
             continue;
         }
-        int line_end = p;
         if (line >= rs && line <= re) {
+            int line_end = p;
             for (int di = 0; di < defs->count; di++) {
                 const CBMDefinition *d = &defs->items[di];
                 if (!cbm_def_is_recovery_evidence(d, rs, re) ||
-                    !def_label_is_preprocessed_callable(d->label) || !cbm_plain_identifier(d->name)) {
+                    !def_label_is_preprocessed_callable(d->label) ||
+                    !cbm_plain_identifier(d->name)) {
                     continue;
                 }
                 const char *scope = NULL;
@@ -1131,7 +1131,8 @@ static void cbm_collect_cpp_preproc_alt_signatures(const char *source, int sourc
                     if (close_paren < 0) {
                         continue;
                     }
-                    int open_brace = cbm_find_definition_open_brace(source, source_len, close_paren);
+                    int open_brace =
+                        cbm_find_definition_open_brace(source, source_len, close_paren);
                     if (open_brace < 0) {
                         continue;
                     }
@@ -1153,9 +1154,8 @@ static void cbm_collect_cpp_preproc_alt_signatures(const char *source, int sourc
  * unselected same-name signature lines are not a graph miss for that selected
  * configuration. Different-name branches still stay flagged. */
 static bool cbm_region_is_recovered_with_cpp_preproc(uint32_t rs, uint32_t re,
-                                                     const CBMDefArray *defs,
-                                                     const char *source, int source_len,
-                                                     CBMLanguage language) {
+                                                     const CBMDefArray *defs, const char *source,
+                                                     int source_len, CBMLanguage language) {
     if (!cbm_lang_uses_c_preprocessor(language) || !source || source_len <= 0) {
         return false;
     }
@@ -1181,8 +1181,8 @@ static bool cbm_region_is_recovered_with_cpp_preproc(uint32_t rs, uint32_t re,
         if (p < source_len && source[p] != '\n') {
             continue;
         }
-        int line_end = p;
         if (line >= rs && line <= re) {
+            int line_end = p;
             bool is_preproc = false;
             if (cbm_line_blank_or_preproc(source, line_start, line_end, &is_preproc)) {
                 saw_preproc = saw_preproc || is_preproc;
@@ -1203,8 +1203,8 @@ static void cbm_subtract_recovered_regions(cbm_error_regions_t *regs, const CBMD
     int kept = 0;
     for (int i = 0; i < regs->count; i++) {
         if (!cbm_region_is_recovered(regs->starts[i], regs->ends[i], defs) &&
-            !cbm_region_is_recovered_with_cpp_preproc(regs->starts[i], regs->ends[i], defs,
-                                                      source, source_len, language)) {
+            !cbm_region_is_recovered_with_cpp_preproc(regs->starts[i], regs->ends[i], defs, source,
+                                                      source_len, language)) {
             regs->starts[kept] = regs->starts[i];
             regs->ends[kept] = regs->ends[i];
             kept++;
