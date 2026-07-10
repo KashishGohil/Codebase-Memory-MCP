@@ -411,6 +411,36 @@ TEST(handles_aspnet_csharp) {
     PASS();
 }
 
+/* ASP.NET Core MVC — class and action attributes compose into concrete,
+ * versioned routes. Attribute lists may be split by unrelated authorization
+ * metadata, and [controller] must derive from the class rather than filename. */
+TEST(handles_aspnet_controller_csharp) {
+    static const char *routes[] = {"/api/v1/Orders", "/api/v1/Orders/{id}",
+                                   "/internal/v2/reports", NULL};
+    static const EtFile f[] = {
+        {"Controllers.cs",
+         "[ApiController]\n"
+         "[ApiVersion(\"1.0\")]\n"
+         "[Route(\"api/v{version:apiVersion}/[controller]\")]\n"
+         "public class OrdersController {\n"
+         "    [Authorize]\n"
+         "    [HttpGet]\n"
+         "    public string List() { return \"all\"; }\n"
+         "    [HttpGet(\"{id}\")]\n"
+         "    public string Get(int id) { return \"one\"; }\n"
+         "}\n"
+         "[ApiController]\n"
+         "[ApiVersion(\"2.0\")]\n"
+         "[Route(\"internal/v{version:apiVersion}/reports\")]\n"
+         "public class ReportController {\n"
+         "    [HttpPost]\n"
+         "    public string Create() { return \"created\"; }\n"
+         "}\n"}};
+    ASSERT_TRUE(et_edge_present(f, 1, "HANDLES", 3));
+    ASSERT_TRUE(et_routes_exact(f, 1, routes));
+    PASS();
+}
+
 /* Laravel (PHP) — Route facade whose QN contains "Laravel".
  * REAL BUG: internal/cbm/extract_calls.c:extract_handler_arg only accepts an
  * identifier/member_expression/selector_expression/attribute/field_expression as
@@ -1452,6 +1482,7 @@ SUITE(edge_types_probe) {
     RUN_TEST(handles_spring_java);
     RUN_TEST(handles_spring_kotlin);
     RUN_TEST(handles_aspnet_csharp);
+    RUN_TEST(handles_aspnet_controller_csharp);
     RUN_TEST(handles_laravel_php);
     RUN_TEST(handles_rails_ruby);
     RUN_TEST(handles_actix_rust);

@@ -1272,26 +1272,59 @@ static const char *decorator_method_name(const char *attr_text) {
 /* HTTP method for a Spring/JAX-RS style annotation name (e.g. "GetMapping" →
  * "GET", "RequestMapping" → "ANY", JAX-RS "GET" → "GET"). Returns NULL when the
  * annotation is not a route-mapping annotation. */
+static const char *annotation_short_name(const char *name, char *buf, size_t buf_sz) {
+    if (!name || !buf || buf_sz == 0) {
+        return NULL;
+    }
+    const char *short_name = strrchr(name, '.');
+    short_name = short_name ? short_name + SKIP_CHAR : name;
+    size_t len = strlen(short_name);
+    static const char suffix[] = "Attribute";
+    size_t suffix_len = sizeof(suffix) - SKIP_CHAR;
+    if (len > suffix_len && strcmp(short_name + len - suffix_len, suffix) == 0) {
+        len -= suffix_len;
+    }
+    if (len == 0 || len >= buf_sz) {
+        return NULL;
+    }
+    memcpy(buf, short_name, len);
+    buf[len] = '\0';
+    return buf;
+}
+
+static bool is_aspnet_route_annotation(const char *name) {
+    char short_name[CBM_SZ_64];
+    const char *n = annotation_short_name(name, short_name, sizeof(short_name));
+    return n && (strcmp(n, "Route") == 0 || strcmp(n, "HttpGet") == 0 ||
+                 strcmp(n, "HttpPost") == 0 || strcmp(n, "HttpPut") == 0 ||
+                 strcmp(n, "HttpDelete") == 0 || strcmp(n, "HttpPatch") == 0);
+}
+
 static const char *annotation_route_method(const char *name) {
     if (!name) {
         return NULL;
     }
-    if (strcmp(name, "GetMapping") == 0) {
+    char short_name[CBM_SZ_64];
+    name = annotation_short_name(name, short_name, sizeof(short_name));
+    if (!name) {
+        return NULL;
+    }
+    if (strcmp(name, "GetMapping") == 0 || strcmp(name, "HttpGet") == 0) {
         return "GET";
     }
-    if (strcmp(name, "PostMapping") == 0) {
+    if (strcmp(name, "PostMapping") == 0 || strcmp(name, "HttpPost") == 0) {
         return "POST";
     }
-    if (strcmp(name, "PutMapping") == 0) {
+    if (strcmp(name, "PutMapping") == 0 || strcmp(name, "HttpPut") == 0) {
         return "PUT";
     }
-    if (strcmp(name, "DeleteMapping") == 0) {
+    if (strcmp(name, "DeleteMapping") == 0 || strcmp(name, "HttpDelete") == 0) {
         return "DELETE";
     }
-    if (strcmp(name, "PatchMapping") == 0) {
+    if (strcmp(name, "PatchMapping") == 0 || strcmp(name, "HttpPatch") == 0) {
         return "PATCH";
     }
-    if (strcmp(name, "RequestMapping") == 0) {
+    if (strcmp(name, "RequestMapping") == 0 || strcmp(name, "Route") == 0) {
         return "ANY";
     }
     /* JAX-RS bare-verb annotations (@GET/@POST/...) — path comes from @Path. */
@@ -1315,7 +1348,8 @@ static TSNode find_decorator_args(TSNode call_node) {
     if (ts_node_is_null(args)) {
         for (uint32_t ai = 0; ai < ts_node_named_child_count(call_node); ai++) {
             TSNode ac = ts_node_named_child(call_node, ai);
-            if (strcmp(ts_node_type(ac), "argument_list") == 0) {
+            if (strcmp(ts_node_type(ac), "argument_list") == 0 ||
+                strcmp(ts_node_type(ac), "attribute_argument_list") == 0) {
                 return ac;
             }
         }
@@ -1328,7 +1362,8 @@ static bool is_route_string_kind(const char *kind) {
            strcmp(kind, "interpreted_string_literal") == 0;
 }
 
-static const char *route_path_from_string_node(CBMArena *a, TSNode node, const char *source) {
+static const char *route_path_from_string_node(CBMArena *a, TSNode node, const char *source,
+                                               bool allow_relative) {
     if (!is_route_string_kind(ts_node_type(node))) {
         return NULL;
     }
@@ -1340,21 +1375,22 @@ static const char *route_path_from_string_node(CBMArena *a, TSNode node, const c
     if (plen >= PAIR_CHARS && (path[0] == '"' || path[0] == '\'')) {
         path = cbm_arena_strndup(a, path + SKIP_CHAR, (size_t)(plen - PAIR_CHARS));
     }
-    return (path && path[0] == '/') ? path : NULL;
+    return (path && (allow_relative || path[0] == '/')) ? path : NULL;
 }
 
 static const char *find_route_path_literal(CBMArena *a, TSNode node, const char *source,
-                                           int max_depth) {
+                                           int max_depth, bool allow_relative) {
     if (ts_node_is_null(node) || max_depth < 0) {
         return NULL;
     }
-    const char *path = route_path_from_string_node(a, node, source);
+    const char *path = route_path_from_string_node(a, node, source, allow_relative);
     if (path || max_depth == 0) {
         return path;
     }
     uint32_t nc = ts_node_named_child_count(node);
     for (uint32_t i = 0; i < nc && i < DECORATOR_SCAN_LIMIT; i++) {
-        path = find_route_path_literal(a, ts_node_named_child(node, i), source, max_depth - 1);
+        path = find_route_path_literal(a, ts_node_named_child(node, i), source, max_depth - 1,
+                                       allow_relative);
         if (path) {
             return path;
         }
@@ -1363,7 +1399,8 @@ static const char *find_route_path_literal(CBMArena *a, TSNode node, const char 
 }
 
 // Extract route path from decorator arguments (first string that starts with /).
-static const char *extract_route_path_from_args(CBMArena *a, TSNode args, const char *source) {
+static const char *extract_route_path_from_args(CBMArena *a, TSNode args, const char *source,
+                                                bool allow_relative) {
     uint32_t nc = ts_node_named_child_count(args);
     for (uint32_t ai = 0; ai < nc && ai < DECORATOR_SCAN_LIMIT; ai++) {
         TSNode arg = ts_node_named_child(args, ai);
@@ -1372,7 +1409,8 @@ static const char *extract_route_path_from_args(CBMArena *a, TSNode args, const 
          *   @GetMapping(path = {"/orders"})
          * Walk a bounded subtree and keep the first string literal that is
          * path-shaped, while ignoring non-route literals such as media types. */
-        const char *path = find_route_path_literal(a, arg, source, CBM_DESCENDANT_MAX_DEPTH);
+        const char *path =
+            find_route_path_literal(a, arg, source, CBM_DESCENDANT_MAX_DEPTH, allow_relative);
         if (path) {
             return path;
         }
@@ -1518,7 +1556,7 @@ static bool try_route_from_decorator_call(CBMArena *a, TSNode dchild, const char
 
     TSNode args = find_decorator_args(dchild);
     if (!ts_node_is_null(args)) {
-        const char *path = extract_route_path_from_args(a, args, source);
+        const char *path = extract_route_path_from_args(a, args, source, false);
         if (path) {
             *out_path = path;
             *out_method = method;
@@ -1598,7 +1636,7 @@ static bool try_route_from_annotation(CBMArena *a, TSNode annotation, const char
     TSNode args = annotation_args_node(annotation);
     const char *path = NULL;
     if (!ts_node_is_null(args)) {
-        path = extract_route_path_from_args(a, args, source);
+        path = extract_route_path_from_args(a, args, source, is_aspnet_route_annotation(name));
     }
     *out_path = path ? path : "/";
     *out_method = method;
@@ -1612,25 +1650,23 @@ static bool try_route_from_annotation(CBMArena *a, TSNode annotation, const char
 static bool extract_route_from_annotations(CBMArena *a, TSNode func_node, const char *source,
                                            const CBMLangSpec *spec, const char **out_path,
                                            const char **out_method) {
-    TSNode modifiers = find_jvm_modifiers(func_node, spec->language);
-    if (!ts_node_is_null(modifiers)) {
-        uint32_t mc = ts_node_child_count(modifiers);
-        for (uint32_t mi = 0; mi < mc; mi++) {
-            TSNode mchild = ts_node_child(modifiers, mi);
-            if (cbm_kind_in_set(mchild, spec->decorator_node_types) &&
-                try_route_from_annotation(a, mchild, source, out_path, out_method)) {
-                return true;
-            }
-        }
-    }
-    /* Direct-child annotations (some grammars attach the annotation as a child
-     * of the method node rather than under `modifiers`). */
+    /* Scan every direct annotation and every direct wrapper. C# permits several
+     * sibling attribute_list nodes (for example [Authorize] then [HttpGet]);
+     * looking up only the first wrapper silently misses the route attribute. */
     uint32_t cc = ts_node_child_count(func_node);
     for (uint32_t ci = 0; ci < cc; ci++) {
         TSNode child = ts_node_child(func_node, ci);
         if (cbm_kind_in_set(child, spec->decorator_node_types) &&
             try_route_from_annotation(a, child, source, out_path, out_method)) {
             return true;
+        }
+        uint32_t wc = ts_node_child_count(child);
+        for (uint32_t wi = 0; wi < wc; wi++) {
+            TSNode wrapped = ts_node_child(child, wi);
+            if (cbm_kind_in_set(wrapped, spec->decorator_node_types) &&
+                try_route_from_annotation(a, wrapped, source, out_path, out_method)) {
+                return true;
+            }
         }
     }
     return false;
@@ -1700,14 +1736,117 @@ static const char *join_route_paths(CBMArena *a, const char *prefix, const char 
     return cbm_arena_sprintf(a, "%s%s", prefix, path);
 }
 
-static const char *spring_class_route_prefix(CBMArena *a, TSNode class_node, const char *source,
-                                             const CBMLangSpec *spec) {
+static const char *class_route_prefix(CBMArena *a, TSNode class_node, const char *source,
+                                      const CBMLangSpec *spec) {
     const char *prefix = NULL;
     const char *method = NULL;
     if (extract_route_from_annotations(a, class_node, source, spec, &prefix, &method)) {
         return prefix;
     }
     return NULL;
+}
+
+static const char *annotation_string_value(CBMArena *a, TSNode node, const char *source,
+                                           const CBMLangSpec *spec, const char *wanted_name) {
+    uint32_t count = ts_node_child_count(node);
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_child(node, i);
+        uint32_t candidate_count = cbm_kind_in_set(child, spec->decorator_node_types)
+                                       ? SKIP_ONE
+                                       : ts_node_child_count(child);
+        for (uint32_t ci = 0; ci < candidate_count; ci++) {
+            TSNode candidate = cbm_kind_in_set(child, spec->decorator_node_types)
+                                   ? child
+                                   : ts_node_child(child, ci);
+            if (ts_node_is_null(candidate) ||
+                !cbm_kind_in_set(candidate, spec->decorator_node_types)) {
+                continue;
+            }
+            TSNode name_node = annotation_name_node(candidate);
+            if (ts_node_is_null(name_node)) {
+                continue;
+            }
+            char *raw_name = cbm_node_text(a, name_node, source);
+            char short_name[CBM_SZ_64];
+            const char *name = annotation_short_name(raw_name, short_name, sizeof(short_name));
+            if (!name || strcmp(name, wanted_name) != 0) {
+                continue;
+            }
+            TSNode args = annotation_args_node(candidate);
+            if (ts_node_is_null(args)) {
+                return NULL;
+            }
+            return extract_route_path_from_args(a, args, source, true);
+        }
+    }
+    return NULL;
+}
+
+static const char *replace_route_token(CBMArena *a, const char *path, const char *token,
+                                       const char *value) {
+    if (!path || !token || !value) {
+        return path;
+    }
+    const char *at = strstr(path, token);
+    if (!at) {
+        return path;
+    }
+    size_t before = (size_t)(at - path);
+    return cbm_arena_sprintf(a, "%.*s%s%s", (int)before, path, value, at + strlen(token));
+}
+
+static const char *aspnet_controller_segment(CBMArena *a, TSNode class_node, const char *source) {
+    TSNode name_node = ts_node_child_by_field_name(class_node, TS_FIELD("name"));
+    if (ts_node_is_null(name_node)) {
+        return NULL;
+    }
+    char *name = cbm_node_text(a, name_node, source);
+    if (!name) {
+        return NULL;
+    }
+    size_t len = strlen(name);
+    static const char suffix[] = "Controller";
+    size_t suffix_len = sizeof(suffix) - SKIP_CHAR;
+    if (len > suffix_len && strcmp(name + len - suffix_len, suffix) == 0) {
+        len -= suffix_len;
+    }
+    return cbm_arena_strndup(a, name, len);
+}
+
+static const char *aspnet_major_version(CBMArena *a, TSNode class_node, const char *source,
+                                        const CBMLangSpec *spec) {
+    const char *version = annotation_string_value(a, class_node, source, spec, "ApiVersion");
+    if (!version) {
+        return NULL;
+    }
+    const char *dot = strchr(version, '.');
+    return dot ? cbm_arena_strndup(a, version, (size_t)(dot - version)) : version;
+}
+
+static const char *compose_aspnet_route(CBMArena *a, TSNode class_node, const char *source,
+                                        const CBMLangSpec *spec, const char *method_name,
+                                        const char *method_path) {
+    const char *prefix = class_route_prefix(a, class_node, source, spec);
+    const char *path = join_route_paths(a, prefix, method_path);
+    if (!path) {
+        return NULL;
+    }
+    if (path[0] != '/') {
+        path = cbm_arena_sprintf(a, "/%s", path);
+    }
+    const char *controller = aspnet_controller_segment(a, class_node, source);
+    if (controller) {
+        path = replace_route_token(a, path, "[controller]", controller);
+    }
+    if (method_name) {
+        path = replace_route_token(a, path, "[action]", method_name);
+    }
+    const char *version = aspnet_major_version(a, class_node, source, spec);
+    if (version) {
+        path = replace_route_token(a, path, "{version:apiVersion}", version);
+        path = replace_route_token(a, path, "{version}", version);
+    }
+    return path;
 }
 
 // Extract decorator names from preceding decorator/annotation nodes
@@ -4135,8 +4274,11 @@ static void push_method_def(CBMExtractCtx *ctx, TSNode child, TSNode class_node,
     def.decorators = extract_decorators(a, child, ctx->source, ctx->language, spec);
     extract_route_from_decorators(a, child, ctx->source, spec, &def.route_path, &def.route_method);
     if (def.route_path && (ctx->language == CBM_LANG_JAVA || ctx->language == CBM_LANG_KOTLIN)) {
-        const char *prefix = spring_class_route_prefix(a, class_node, ctx->source, spec);
+        const char *prefix = class_route_prefix(a, class_node, ctx->source, spec);
         def.route_path = join_route_paths(a, prefix, def.route_path);
+    } else if (def.route_path && ctx->language == CBM_LANG_CSHARP) {
+        def.route_path =
+            compose_aspnet_route(a, class_node, ctx->source, spec, name, def.route_path);
     }
     def.docstring = extract_docstring(a, child, ctx->source, ctx->language);
 

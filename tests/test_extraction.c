@@ -59,6 +59,19 @@ static int count_defs_with_label(CBMFileResult *r, const char *label) {
     return count;
 }
 
+static int has_method_route(CBMFileResult *r, const char *name, const char *path,
+                            const char *method) {
+    for (int i = 0; i < r->defs.count; i++) {
+        const CBMDefinition *def = &r->defs.items[i];
+        if (strcmp(def->label, "Method") == 0 && strcmp(def->name, name) == 0 && def->route_path &&
+            strcmp(def->route_path, path) == 0 && def->route_method &&
+            strcmp(def->route_method, method) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Convenience: extract, assert no error, return result. Caller frees. */
 static CBMFileResult *extract(const char *src, CBMLanguage lang, const char *proj,
                               const char *path) {
@@ -517,6 +530,29 @@ TEST(csharp_interface) {
     ASSERT_NOT_NULL(r);
     ASSERT_FALSE(r->has_error);
     ASSERT(has_def_any(r, "IService"));
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(csharp_aspnet_attribute_routes) {
+    CBMFileResult *r = extract("[ApiController]\n"
+                               "[ApiVersion(\"1.0\")]\n"
+                               "[Route(\"api/v{version:apiVersion}/[controller]\")]\n"
+                               "public class OrdersController {\n"
+                               "  [Authorize]\n"
+                               "  [HttpGet]\n"
+                               "  public string List() => \"all\";\n"
+                               "  [HttpGet(\"{id}\")]\n"
+                               "  public string Get(int id) => \"one\";\n"
+                               "  [HttpPost(\"by-action/[action]\")]\n"
+                               "  public string Create() => \"created\";\n"
+                               "}\n",
+                               CBM_LANG_CSHARP, "t", "MisspelledFilename.cs");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    ASSERT(has_method_route(r, "List", "/api/v1/Orders", "GET"));
+    ASSERT(has_method_route(r, "Get", "/api/v1/Orders/{id}", "GET"));
+    ASSERT(has_method_route(r, "Create", "/api/v1/Orders/by-action/Create", "POST"));
     cbm_free_result(r);
     PASS();
 }
@@ -3531,6 +3567,7 @@ SUITE(extraction) {
     RUN_TEST(ruby_module);
     RUN_TEST(csharp_class);
     RUN_TEST(csharp_interface);
+    RUN_TEST(csharp_aspnet_attribute_routes);
     RUN_TEST(swift_class);
     RUN_TEST(kotlin_function);
     RUN_TEST(kotlin_class);
