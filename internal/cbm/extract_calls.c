@@ -42,6 +42,7 @@ static const char *lookup_string_constant(const CBMExtractCtx *ctx, const char *
 /* Check if a node type is a string literal */
 static int is_string_like(const char *kind) {
     return (strcmp(kind, "string") == 0 || strcmp(kind, "string_literal") == 0 ||
+            strcmp(kind, "template_string") == 0 ||
             strcmp(kind, "interpreted_string_literal") == 0 ||
             strcmp(kind, "raw_string_literal") == 0 || strcmp(kind, "string_content") == 0);
 }
@@ -52,10 +53,107 @@ static const char *strip_quotes(CBMArena *a, const char *text) {
         return NULL;
     }
     int len = (int)strlen(text);
-    if (len >= CBM_QUOTE_PAIR && (text[0] == '"' || text[0] == '\'')) {
+    if (len >= CBM_QUOTE_PAIR && (text[0] == '"' || text[0] == '\'' || text[0] == '`')) {
         return cbm_arena_strndup(a, text + CBM_QUOTE_OFFSET, (size_t)(len - CBM_QUOTE_PAIR));
     }
     return text;
+}
+
+static bool is_typescript_language(CBMLanguage lang) {
+    return lang == CBM_LANG_TYPESCRIPT || lang == CBM_LANG_TSX || lang == CBM_LANG_JAVASCRIPT;
+}
+
+static bool text_has_identifier(const char *text, const char *identifier) {
+    if (!text || !identifier || !identifier[0]) {
+        return false;
+    }
+    size_t len = strlen(identifier);
+    const char *at = text;
+    while ((at = strstr(at, identifier)) != NULL) {
+        bool left_ok = at == text || !(isalnum((unsigned char)at[-SKIP_ONE]) ||
+                                       at[-SKIP_ONE] == '_' || at[-SKIP_ONE] == '$');
+        char after = at[len];
+        bool right_ok = !(isalnum((unsigned char)after) || after == '_' || after == '$');
+        if (left_ok && right_ok) {
+            return true;
+        }
+        at += len;
+    }
+    return false;
+}
+
+static TSNode enclosing_ts_class(TSNode node) {
+    for (int depth = 0; depth < LEAN_MAX_PARENT_DEPTH && !ts_node_is_null(node); depth++) {
+        const char *kind = ts_node_type(node);
+        if (strcmp(kind, "class_declaration") == 0 || strcmp(kind, "class") == 0) {
+            return node;
+        }
+        node = ts_node_parent(node);
+    }
+    TSNode null_node = {0};
+    return null_node;
+}
+
+static bool class_binds_angular_http_client(CBMExtractCtx *ctx, TSNode class_node,
+                                            const char *receiver) {
+    if (!strstr(ctx->source, "@angular/common/http") || ts_node_is_null(class_node)) {
+        return false;
+    }
+    TSNodeStack stack;
+    ts_nstack_init(&stack, ctx->arena, CBM_SZ_64);
+    ts_nstack_push(&stack, ctx->arena, class_node);
+    while (stack.count > 0) {
+        TSNode current = ts_nstack_pop(&stack);
+        const char *kind = ts_node_type(current);
+        bool declaration =
+            strcmp(kind, "required_parameter") == 0 || strcmp(kind, "optional_parameter") == 0 ||
+            strcmp(kind, "public_field_definition") == 0 || strcmp(kind, "field_definition") == 0 ||
+            strcmp(kind, "property_declaration") == 0;
+        if (declaration) {
+            char *text = cbm_node_text(ctx->arena, current, ctx->source);
+            if (text && strstr(text, "HttpClient") && text_has_identifier(text, receiver)) {
+                return true;
+            }
+        }
+        ts_nstack_push_children(&stack, ctx->arena, current);
+    }
+    return false;
+}
+
+static const char *angular_http_client_callee(CBMExtractCtx *ctx, TSNode call_node,
+                                              const char *callee) {
+    if (!is_typescript_language(ctx->language) || !callee) {
+        return callee;
+    }
+    const char *dot = strrchr(callee, '.');
+    if (!dot || !dot[SKIP_ONE]) {
+        return callee;
+    }
+    const char *method = dot + SKIP_ONE;
+    if (strcmp(method, "get") != 0 && strcmp(method, "post") != 0 && strcmp(method, "put") != 0 &&
+        strcmp(method, "delete") != 0 && strcmp(method, "patch") != 0 &&
+        strcmp(method, "request") != 0) {
+        return callee;
+    }
+    TSNode function = ts_node_child_by_field_name(call_node, TS_FIELD("function"));
+    if (ts_node_is_null(function) || strcmp(ts_node_type(function), "member_expression") != 0) {
+        return callee;
+    }
+    TSNode object = ts_node_child_by_field_name(function, TS_FIELD("object"));
+    if (ts_node_is_null(object)) {
+        return callee;
+    }
+    char *object_text = cbm_node_text(ctx->arena, object, ctx->source);
+    if (!object_text) {
+        return callee;
+    }
+    const char *receiver = strrchr(object_text, '.');
+    receiver = receiver ? receiver + SKIP_ONE : object_text;
+    TSNode class_node = enclosing_ts_class(call_node);
+    if (!class_binds_angular_http_client(ctx, class_node, receiver)) {
+        return callee;
+    }
+    return cbm_arena_sprintf(ctx->arena, "@angular/common/http.HttpClient.%s", method);
 }
 
 // Callee suffixes for IRIS Python interop string-dispatch. Kept at file scope
@@ -1237,7 +1335,7 @@ static const char *strip_and_validate_string_arg(CBMArena *a, char *text) {
         return NULL;
     }
     int len = (int)strlen(text);
-    if (len >= CBM_QUOTE_PAIR && (text[0] == '"' || text[0] == '\'')) {
+    if (len >= CBM_QUOTE_PAIR && (text[0] == '"' || text[0] == '\'' || text[0] == '`')) {
         text = cbm_arena_strndup(a, text + CBM_QUOTE_OFFSET, (size_t)(len - CBM_QUOTE_PAIR));
         len -= CBM_QUOTE_PAIR;
     }
@@ -1502,10 +1600,132 @@ static const char *extract_keyword_url(CBMExtractCtx *ctx, TSNode arg) {
     return extract_string_value(ctx, val_node);
 }
 
+static TSNode enclosing_ts_function(TSNode node) {
+    for (int depth = 0; depth < LEAN_MAX_PARENT_DEPTH && !ts_node_is_null(node); depth++) {
+        const char *kind = ts_node_type(node);
+        if (strcmp(kind, "method_definition") == 0 || strcmp(kind, "function_declaration") == 0 ||
+            strcmp(kind, "function_expression") == 0 || strcmp(kind, "arrow_function") == 0) {
+            return node;
+        }
+        node = ts_node_parent(node);
+    }
+    TSNode null_node = {0};
+    return null_node;
+}
+
+static TSNode find_local_string_initializer(CBMExtractCtx *ctx, TSNode use_node, const char *name) {
+    TSNode function = enclosing_ts_function(use_node);
+    TSNode best = {0};
+    if (ts_node_is_null(function)) {
+        return best;
+    }
+    uint32_t use_start = ts_node_start_byte(use_node);
+    uint32_t best_start = 0;
+    TSNodeStack stack;
+    ts_nstack_init(&stack, ctx->arena, CBM_SZ_64);
+    ts_nstack_push(&stack, ctx->arena, function);
+    while (stack.count > 0) {
+        TSNode current = ts_nstack_pop(&stack);
+        uint32_t current_start = ts_node_start_byte(current);
+        if (current_start >= use_start) {
+            continue;
+        }
+        if (strcmp(ts_node_type(current), "variable_declarator") == 0) {
+            TSNode name_node = ts_node_child_by_field_name(current, TS_FIELD("name"));
+            TSNode value_node = ts_node_child_by_field_name(current, TS_FIELD("value"));
+            if (!ts_node_is_null(name_node) && !ts_node_is_null(value_node) &&
+                is_string_like(ts_node_type(value_node))) {
+                char *candidate = cbm_node_text(ctx->arena, name_node, ctx->source);
+                if (candidate && strcmp(candidate, name) == 0 && current_start >= best_start) {
+                    best = value_node;
+                    best_start = current_start;
+                }
+            }
+        }
+        ts_nstack_push_children(&stack, ctx->arena, current);
+    }
+    return best;
+}
+
+static bool is_typescript_static_asset_path(CBMExtractCtx *ctx, const char *raw) {
+    const char *path = strip_quotes(ctx->arena, raw);
+    if (!path) {
+        return false;
+    }
+    while (strncmp(path, "../", strlen("../")) == 0) {
+        path += strlen("../");
+    }
+    if (strncmp(path, "./", strlen("./")) == 0) {
+        path += strlen("./");
+    }
+    if (strncmp(path, "/assets", strlen("/assets")) == 0) {
+        char boundary = path[strlen("/assets")];
+        return boundary == '\0' || boundary == '/' || boundary == '?' || boundary == '#';
+    }
+    if (strncmp(path, "assets", strlen("assets")) == 0) {
+        char boundary = path[strlen("assets")];
+        return boundary == '\0' || boundary == '/' || boundary == '?' || boundary == '#';
+    }
+    return false;
+}
+
+static const char *normalize_typescript_route(CBMExtractCtx *ctx, const char *raw) {
+    const char *text = strip_quotes(ctx->arena, raw);
+    if (!text || is_typescript_static_asset_path(ctx, raw)) {
+        return NULL;
+    }
+    const char *start = text;
+    const char *api = strstr(text, "/api/");
+    const char *internal = strstr(text, "/internal/");
+    if (api && internal) {
+        start = api < internal ? api : internal;
+    } else if (api) {
+        start = api;
+    } else if (internal) {
+        start = internal;
+    } else if (text[0] != '/') {
+        const char *scheme = strstr(text, "://");
+        start = scheme ? strchr(scheme + strlen("://"), '/') : NULL;
+        if (!start) {
+            return NULL;
+        }
+    }
+
+    char normalized[CBM_SZ_512];
+    size_t out = 0;
+    for (size_t i = 0; start[i] && start[i] != '?' && start[i] != '#';) {
+        if (start[i] == '$' && start[i + SKIP_ONE] == '{') {
+            const char *close = strchr(start + i + PAIR_LEN, '}');
+            if (!close || out + PAIR_LEN >= sizeof(normalized)) {
+                return NULL;
+            }
+            normalized[out++] = '{';
+            normalized[out++] = '}';
+            i = (size_t)(close - start) + SKIP_ONE;
+            continue;
+        }
+        if (out + SKIP_ONE >= sizeof(normalized)) {
+            return NULL;
+        }
+        normalized[out++] = start[i++];
+    }
+    normalized[out] = '\0';
+    return out > 0 && normalized[0] == '/' ? cbm_arena_strdup(ctx->arena, normalized) : NULL;
+}
+
 // Try to extract URL/topic from a positional argument (string or constant).
 static const char *extract_positional_url(CBMExtractCtx *ctx, TSNode arg, const char *ak) {
     if (is_string_like(ak)) {
         char *text = cbm_node_text(ctx->arena, arg, ctx->source);
+        if (is_typescript_language(ctx->language)) {
+            if (is_typescript_static_asset_path(ctx, text)) {
+                return NULL;
+            }
+            const char *route = normalize_typescript_route(ctx, text);
+            if (route) {
+                return route;
+            }
+        }
         const char *validated = strip_and_validate_string_arg(ctx->arena, text);
         if (validated) {
             return validated;
@@ -1514,7 +1734,19 @@ static const char *extract_positional_url(CBMExtractCtx *ctx, TSNode arg, const 
     if (strcmp(ak, "identifier") == 0) {
         char *const_name = cbm_node_text(ctx->arena, arg, ctx->source);
         if (const_name) {
-            return lookup_string_constant(ctx, const_name);
+            const char *value = lookup_string_constant(ctx, const_name);
+            if (value) {
+                return is_typescript_language(ctx->language)
+                           ? normalize_typescript_route(ctx, value)
+                           : value;
+            }
+            if (is_typescript_language(ctx->language)) {
+                TSNode initializer = find_local_string_initializer(ctx, arg, const_name);
+                if (!ts_node_is_null(initializer)) {
+                    char *raw = cbm_node_text(ctx->arena, initializer, ctx->source);
+                    return normalize_typescript_route(ctx, raw);
+                }
+            }
         }
     }
     return NULL;
@@ -1873,6 +2105,7 @@ void handle_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, Walk
 
     if (cbm_kind_in_set(node, spec->call_node_types)) {
         char *callee = extract_callee_name(ctx->arena, node, ctx->source, ctx->language);
+        callee = (char *)angular_http_client_callee(ctx, node, callee);
         // Keyword-filter callees, but keep builtins we mint a node for (len, str,
         // ...) so the LSP-resolved builtin call still forms a CALLS edge.
         if (callee && callee[0] &&
