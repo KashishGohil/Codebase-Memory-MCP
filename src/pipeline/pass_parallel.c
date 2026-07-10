@@ -2356,6 +2356,7 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
                                      (psvc == CBM_SVC_ASYNC && strlen(u) > PP_ESC_SPACE));
                 if (url_or_topic) {
                     emit_service_edge(ws->local_edge_buf, source_node, NULL, call, &res, module_qn,
+                                      rc->registry, rc->main_gbuf, imp_keys, imp_vals, imp_count);
                                       rc->registry, rc->main_gbuf, imp_keys, imp_vals, imp_count,
                                       false);
                     ws->calls_resolved++;

@@ -984,6 +984,7 @@ int cbm_discover_ex2(const char *repo_path, const cbm_discover_opts_t *opts, cbm
     bool has_git_config = false;
     /* Always honour the .gitignore at the indexed-directory root, even when the
      * directory is not a git repo root (e.g. indexing a sub-package directly).
+     * The .git/info/exclude and global-excludes sources still require .git/.
      * Fixes issue #510: a root .gitignore was silently ignored without .git/. */
     snprintf(gi_path, sizeof(gi_path), "%s/.gitignore", repo_path);
     gitignore = cbm_gitignore_load(gi_path);

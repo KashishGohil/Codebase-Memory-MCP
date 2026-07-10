@@ -624,6 +624,9 @@ static bool is_upstream_config_key(const char *key_path) {
         /* No key context (e.g. flat string) — keep prior behaviour and mint. */
         return false;
     }
+    static const char *const deny[] = {"jwks",       "registry",  "registries",
+                                       "healthcheck", "upstream",  "_service_url",
+                                       "auth",        NULL};
     static const char *const deny[] = {"jwks",     "registry",     "registries", "healthcheck",
                                        "upstream", "_service_url", "auth",       NULL};
     for (int i = 0; deny[i]; i++) {

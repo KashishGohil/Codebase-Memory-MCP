@@ -4252,6 +4252,8 @@ static void cross_join_with_rels(cbm_store_t *store, cbm_pattern_t *patn, bindin
  * Instead we scan only the bound terminal's edges and bind `c` to real
  * neighbours; with OPTIONAL we keep the row with `c` unbound when there are
  * none — the correct dead-code semantics. */
+static void expand_from_bound_terminal(cbm_store_t *store, cbm_pattern_t *patn, binding_t **bindings,
+                                       int *bind_count, const char *start_var, bool opt) {
 static void expand_from_bound_terminal(cbm_store_t *store, cbm_pattern_t *patn,
                                        binding_t **bindings, int *bind_count, const char *start_var,
                                        bool opt) {
@@ -4260,6 +4262,7 @@ static void expand_from_bound_terminal(cbm_store_t *store, cbm_pattern_t *patn,
     /* The relationship is written start-[r]->terminal. To enumerate the start
      * nodes reachable from the bound terminal we invert the stored direction. */
     bool rel_inbound = rel->direction && strcmp(rel->direction, "inbound") == 0;
+    bool scan_targets = !rel_inbound; /* (start)->(term): start = edge source = scan term's inbound */
     bool scan_targets =
         !rel_inbound; /* (start)->(term): start = edge source = scan term's inbound */
 
@@ -4276,6 +4279,8 @@ static void expand_from_bound_terminal(cbm_store_t *store, cbm_pattern_t *patn,
         cbm_node_t *term = binding_get(b, patn->nodes[1].variable ? patn->nodes[1].variable : "");
         int match_count = 0;
         if (term) {
+            for (int ti = 0; ti < (rel->type_count > 0 ? rel->type_count : 1) && new_count < max_new;
+                 ti++) {
             for (int ti = 0;
                  ti < (rel->type_count > 0 ? rel->type_count : 1) && new_count < max_new; ti++) {
                 cbm_edge_t *edges = NULL;

@@ -624,6 +624,8 @@ static TSNode resolve_toplevel_arrow_name(TSNode node, const char *kind) {
         return null_node;
     }
     const char *pk = ts_node_type(parent);
+    if (strcmp(pk, "variable_declarator") == 0 ||
+        strcmp(pk, "public_field_definition") == 0) {
     if (strcmp(pk, "variable_declarator") == 0 || strcmp(pk, "public_field_definition") == 0) {
         /* `const f = () => {}` and the class-field form `f = () => {}` both name
          * the arrow via the parent's `name` child (#new_ts_class_field_arrow):
@@ -4225,6 +4227,7 @@ static void extract_class_methods(CBMExtractCtx *ctx, TSNode class_node, const c
             if (ts_node_is_null(fname)) {
                 continue;
             }
+            push_method_def(ctx, value, class_qn, spec, fname);
             push_method_def(ctx, value, class_node, class_qn, spec, fname);
             continue;
         }

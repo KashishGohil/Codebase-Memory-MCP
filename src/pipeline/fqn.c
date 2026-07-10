@@ -432,6 +432,10 @@ char *cbm_project_name_from_path(const char *abs_path) {
     /* Normalize path separators */
     cbm_normalize_path_sep(path);
 
+    /* Map every character cbm_validate_project_name would reject. The
+     * validator (used by resolve_store via project_db_path) allows only
+     * [A-Za-z0-9._-], so anything else — path separators, ':', spaces, '@',
+     * '+', … — must be normalized here. Otherwise a repo like
     /* Map every character that is unsafe for portable project DB names. We
      * keep derived names in [A-Za-z0-9._-], so anything else — path
      * separators, ':', spaces, '@', '+', … — must be normalized here.
