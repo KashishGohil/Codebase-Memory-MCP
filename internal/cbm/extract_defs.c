@@ -6396,3 +6396,11 @@ void cbm_extract_definitions(CBMExtractCtx *ctx) {
     // Extract module-level variables
     extract_variables(ctx, ctx->root, spec);
 }
+
+void cbm_extract_definition_nodes(CBMExtractCtx *ctx) {
+    const CBMLangSpec *spec = cbm_lang_spec(ctx->language);
+    if (!spec) {
+        return;
+    }
+    walk_defs(ctx, ctx->root, spec, 0);
+}
