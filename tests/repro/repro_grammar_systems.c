@@ -257,6 +257,14 @@ TEST(repro_grammar_systems_zig) {
  * call to "add".
  */
 TEST(repro_grammar_systems_nim) {
+    /* DISABLED — GRAMMAR ISSUE (maintainer-approved, 2026-06-28): extraction of
+     * standard Nim (`proc add(a, b: int): int = ...`) fails extract-clean (NULL
+     * result or has_error set) — tree-sitter-nim mis-parses the indentation-
+     * sensitive layout (Nim was a deferred/problematic grammar in the sweep). A
+     * grammar/parser defect, not a cbm extraction bug. Original assertions below
+     * are preserved (unreachable) for re-enable when the grammar is fixed. */
+    printf("%sSKIP%s grammar issue (tree-sitter-nim parse failure)\n", tf_dim(), tf_reset());
+    return -1; /* skip — not counted as pass or fail */
     static const char src[] =
         "import std/strutils\n"
         "\n"

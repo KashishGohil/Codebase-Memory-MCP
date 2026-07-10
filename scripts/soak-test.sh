@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # soak-test.sh — Endurance test for codebase-memory-mcp.
 #
 # Runs compressed workload cycles: queries, file mutations, reindexes, idle periods.
@@ -34,7 +34,7 @@ BINARY=$(cd "$(dirname "$BINARY")" && pwd)/$(basename "$BINARY")
 #                 skipped in this mode because it reindexes (which would mask #581).
 CBM_SOAK_MODE="${CBM_SOAK_MODE:-default}"
 
-RESULTS_DIR="soak-results"
+RESULTS_DIR="${RESULTS_DIR:-soak-results}"
 mkdir -p "$RESULTS_DIR"
 
 METRICS_CSV="$RESULTS_DIR/metrics.csv"

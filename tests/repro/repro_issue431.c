@@ -109,14 +109,17 @@ TEST(repro_issue431_vscode_profile_inherits_mcp_json) {
     /* --- Precondition: VSCode is detected --- */
     cbm_detected_agents_t agents = cbm_detect_agents(tmpdir);
     if (!agents.vscode) {
-        /* Detection failed in the temp tree — adjust path derivation.
-         * On non-Apple Linux the detection reads cbm_app_config_dir() which
-         * is process-global (not home-relative), so detection may return false
-         * for a synthetic tmpdir home.  The bug still exists, but we cannot
-         * demonstrate it via the plan-based oracle without detection firing.
-         * Mark the test as an expected skip on this platform/config. */
+        /* #431 IS FIXED: install_vscode_profile_configs() (cli.c:3211) scans
+         * Code/User/profiles/ and plans a per-profile mcp.json, so the assertion
+         * below passes as a genuine regression guard whenever detection fires
+         * (which it does for this fixture). This branch is only reached if
+         * cbm_detect_agents() cannot see the fixture home on some platform — in
+         * which case the fix cannot be VERIFIED here. Skip honestly rather than
+         * vacuously PASS (would hide a future regression) or FAIL (would red a
+         * fixed bug). */
         th_rmtree(tmpdir);
-        PASS(); /* precondition unmet — non-blocking; bug still open */
+        SKIP_PLATFORM("VSCode detection did not fire for the synthetic fixture "
+                      "home; cannot verify the #431 per-profile install here");
     }
 
     /* --- Run the install plan oracle (dry-run, no mutations) --- */

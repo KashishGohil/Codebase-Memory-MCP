@@ -1516,11 +1516,19 @@ static void cs_resolve_invocation(CSLSPContext *ctx, TSNode call) {
         if (!fname) return;
         char *bare = cs_strip_generic_args(ctx->arena, fname);
 
-        /* Try enclosing class member. */
+        /* Try enclosing class member. cs_lookup_method walks the base chain, so
+         * a bare call may resolve to an INHERITED method. Distinguish, exactly
+         * as the instance-call path does: a method actually declared on the
+         * enclosing class is cs_self_method; one found on a base is
+         * cs_inherited_method. */
         if (ctx->enclosing_class_qn) {
             const CBMRegisteredFunc *f = cs_lookup_method(ctx, ctx->enclosing_class_qn, bare);
             if (f) {
-                cs_emit_resolved(ctx, f->qualified_name, "cs_self_method", 0.95f);
+                bool own =
+                    f->receiver_type && strcmp(f->receiver_type, ctx->enclosing_class_qn) == 0;
+                cs_emit_resolved(ctx, f->qualified_name,
+                                 own ? "cs_self_method" : "cs_inherited_method",
+                                 own ? 0.95f : 0.92f);
                 return;
             }
         }
@@ -1534,11 +1542,16 @@ static void cs_resolve_invocation(CSLSPContext *ctx, TSNode call) {
                 return;
             }
         }
-        /* Try `using static` imports. */
+        /* Try `using static` imports. The directive target is the namespace-
+         * qualified name as written ("Demo.MathUtil"), but types register under
+         * the file-stem QN ("proj.Client.MathUtil"); resolve the target through
+         * the type-name resolver (its short-name fallback bridges the two)
+         * before the method lookup. */
         for (int i = 0; i < ctx->using_count; i++) {
             const CBMCSUsing *u = &ctx->usings[i];
             if (u->kind != CBM_CS_USING_STATIC) continue;
-            const CBMRegisteredFunc *f = cs_lookup_method(ctx, u->target_qn, bare);
+            const char *host = cs_resolve_type_name(ctx, u->target_qn);
+            const CBMRegisteredFunc *f = cs_lookup_method(ctx, host ? host : u->target_qn, bare);
             if (f) {
                 cs_emit_resolved(ctx, f->qualified_name, "cs_using_static", 0.90f);
                 return;
@@ -2941,6 +2954,7 @@ CBMTypeRegistry *cbm_cs_build_cross_registry(CBMArena *arena, CBMLSPDef *defs, i
         cs_register_lsp_defs(arena, reg, &defs[i], 1);
     }
     cbm_registry_finalize(reg);
+    reg->read_only = true; /* seal: shared Tier-2 registry is read-only during resolve */
     return reg;
 }
 

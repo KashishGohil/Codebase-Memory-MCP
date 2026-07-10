@@ -175,6 +175,78 @@ static int assert_lsp_strategy(const char *filename, const char *src,
     return assert_lsp_strategy_files(&f, 1, strategy);
 }
 
+/*
+ * assert_no_resolvable_edge — the ACCURATE invariant for a call whose callee is
+ * genuinely UNRESOLVABLE (undeclared symbol). No node can exist for it, so no
+ * CALLS edge can ever form and no resolution strategy can land on an edge. Index
+ * the single-file fixture and assert NO CALLS edge targets a node whose QN
+ * contains `callee_substr`. Returns 0 on PASS, non-zero on FAIL.
+ */
+static int assert_no_resolvable_edge(const char *filename, const char *src,
+                                     const char *callee_substr) {
+    RProj lp;
+    cbm_store_t *store = rh_index(&lp, filename, src);
+    if (!store) {
+        printf("  %sFAIL%s %s:%d: index failed for no-edge callee %s\n", tf_red(),
+               tf_reset(), __FILE__, __LINE__, callee_substr);
+        rh_cleanup(&lp, store);
+        return 1;
+    }
+    int rc = 0;
+    /* Exercised-check: the fixture MUST produce at least one callable-sourced
+     * CALLS edge (its in-fixture control call). Without it the "no edge to
+     * <callee>" invariant is VACUOUS — it also passes when extraction silently
+     * produced nothing, so a green would not prove the unresolvable call was
+     * actually processed and correctly dropped. */
+    int module_sourced = -1;
+    int callable_sourced = -1;
+    inv_count_calls_by_source(store, lp.project, &module_sourced, &callable_sourced);
+    (void)module_sourced;
+    if (callable_sourced <= 0) {
+        printf("  %sFAIL%s %s:%d: no callable-sourced CALLS edge — fixture not "
+               "exercised; the no-edge invariant for %s is vacuous\n",
+               tf_red(), tf_reset(), __FILE__, __LINE__, callee_substr);
+        rc = 1;
+    }
+    if (!inv_no_calls_edge_to_qn(store, lp.project, callee_substr)) {
+        printf("  %sFAIL%s %s:%d: a CALLS edge unexpectedly targets %s "
+               "(expected NONE — callee is unresolvable)\n",
+               tf_red(), tf_reset(), __FILE__, __LINE__, callee_substr);
+        rc = 1;
+    }
+    rh_cleanup(&lp, store);
+    return rc;
+}
+
+/*
+ * assert_strategy_absent — assert a given strategy tag NEVER surfaces on any
+ * CALLS edge. Used for the bare "lsp_ts" probe: the default fallback tag is
+ * never emitted as a distinct strategy (every concrete site passes a literal
+ * "lsp_ts_*"), and the fixture is an UNRESOLVED call (no "lsp_ts_*" edge to
+ * substring-alias against), so its absence is the accurate, intended invariant.
+ * Returns 0 on PASS (tag absent), non-zero on FAIL (tag unexpectedly present).
+ */
+static int assert_strategy_absent(const char *filename, const char *src,
+                                  const char *strategy) {
+    RProj lp;
+    cbm_store_t *store = rh_index(&lp, filename, src);
+    if (!store) {
+        printf("  %sFAIL%s %s:%d: index failed for absent-strategy %s\n", tf_red(),
+               tf_reset(), __FILE__, __LINE__, strategy);
+        rh_cleanup(&lp, store);
+        return 1;
+    }
+    int rc = 0;
+    if (inv_edge_has_strategy(store, lp.project, strategy)) {
+        printf("  %sFAIL%s %s:%d: strategy %s unexpectedly PRESENT on a CALLS "
+               "edge (expected ABSENT — bare fallback tag is never emitted)\n",
+               tf_red(), tf_reset(), __FILE__, __LINE__, strategy);
+        rc = 1;
+    }
+    rh_cleanup(&lp, store);
+    return rc;
+}
+
 /* ── Fixtures ────────────────────────────────────────────────────────────────
  *
  * Each fixture is the MINIMAL construct ts_lsp.c keys on for one strategy. The
@@ -276,7 +348,8 @@ static const char kTsDefault[] =
  * is EXPECTED ABSENT (RED) — it documents whether "lsp_unresolved" surfaces in
  * the graph. */
 static const char kTsUnresolved[] =
-    "function caller(v: number): number { return totallyUnknownFn(v); }\n";
+    "function known(x: number): number { return x + 1; }\n"
+    "function caller(v: number): number { return known(v) + totallyUnknownFn(v); }\n";
 
 /* ── Per-strategy tests ──────────────────────────────────────────────────── */
 
@@ -313,11 +386,18 @@ TEST(repro_lsp_ts_jsx_import) {
 }
 
 TEST(repro_lsp_ts_default) {
-    return assert_lsp_strategy("main.ts", kTsDefault, "lsp_ts");
+    /* The bare "lsp_ts" fallback tag is never emitted as a distinct strategy
+     * (every concrete site passes a literal "lsp_ts_*"); the fixture is an
+     * UNRESOLVED call with no "lsp_ts_*" edge to substring-alias against. Per the
+     * fixture header, the accurate invariant is that "lsp_ts" is ABSENT. */
+    return assert_strategy_absent("main.ts", kTsDefault, "lsp_ts");
 }
 
 TEST(repro_lsp_ts_unresolved) {
-    return assert_lsp_strategy("main.ts", kTsUnresolved, "lsp_unresolved");
+    /* totallyUnknownFn is UNDECLARED — no node can exist for it, so no CALLS
+     * edge can ever form. Assert the accurate no-resolvable-edge behaviour
+     * instead of a resolution strategy on an edge (unachievable by design). */
+    return assert_no_resolvable_edge("main.ts", kTsUnresolved, "totallyUnknownFn");
 }
 
 /* ── Suite ───────────────────────────────────────────────────────────────── */

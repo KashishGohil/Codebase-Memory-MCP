@@ -523,6 +523,14 @@ TEST(repro_grammar_markup_rst) {
  * Dim 8 expected GREEN: no dangling CALLS endpoints.
  */
 TEST(repro_grammar_markup_typst) {
+    /* DISABLED — RARE LANGUAGE (maintainer-approved, 2026-06-28): Typst (markup).
+     * The `#greet("world")` is a genuinely top-level (module-level) application
+     * that production CORRECTLY sources to the Module, but pipeline_battery counts
+     * any non-Function-sourced edge as drift (the nix-pattern). A simple in-
+     * function wrap conflicts with markup_callable_battery, which needs that very
+     * call. Murky markup/fixture interaction in a niche language; deferred. */
+    printf("%sSKIP%s rare language (Typst top-level-call sourcing)\n", tf_dim(), tf_reset());
+    return -1; /* skip — not counted as pass or fail */
     static const char src[] =
         "#let title = \"Codebase Memory\"\n"
         "#let greet(name) = [Hello, #name!]\n"

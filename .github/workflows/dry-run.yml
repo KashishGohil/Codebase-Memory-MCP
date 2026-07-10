@@ -56,7 +56,13 @@ jobs:
   build:
     if: ${{ inputs.skip_builds != true && !cancelled() && (needs.test.result == 'success' || needs.test.result == 'skipped') }}
     needs: [test]
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/_build.yml
+    with:
+      attest: false
 
   # ── Smoke test every binary ────────────────────────────────────
   # Run unless builds were skipped or a build leg FAILED. Every build leg

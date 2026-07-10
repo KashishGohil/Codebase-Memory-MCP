@@ -8,6 +8,8 @@
 #include "cypher/cypher.h"
 #include "store/store.h"
 #include "foundation/platform.h"
+#include "foundation/limits.h"
+#include "foundation/log.h"
 
 enum {
     CYP_BUF_16 = 16,
@@ -22,7 +24,6 @@ enum {
     CYP_MAX_VARS = 16,     /* max Cypher variables in a query */
     CYP_MAX_EDGE_VARS = 8, /* max edge variables */
     CYP_GROWTH_10 = 10,    /* binding growth factor */
-    CYP_MAX_DEPTH = 10,    /* max variable-length path depth */
     CYP_CHAR_IDX1 = 1,     /* second character index (e.g. op[1]) */
     CYP_EBUF_MASK = 7,
     CYP_NODE_COLS = 4, /* columns per node var: name, qn, label, file */
@@ -1651,6 +1652,16 @@ static int parse_return_or_with(parser_t *p, cbm_return_clause_t **out, bool is_
 
     } while (check(p, TOK_COMMA));
 
+    /* Projection is materialized per row into fixed-width stack arrays sized at
+     * CBM_SZ_32 columns (execute_return_simple and its siblings). Bound the
+     * parsed item count to that width so an over-wide RETURN is rejected here
+     * instead of writing past those arrays downstream. */
+    if (r->count > CBM_SZ_32) {
+        free(r->items);
+        free(r);
+        return CBM_NOT_FOUND;
+    }
+
 tail:
     /* Optional ORDER BY */
     if (match(p, TOK_ORDER)) {
@@ -2441,11 +2452,11 @@ static bool eval_condition(const cbm_condition_t *c, binding_t *b) {
 
     /* IS NULL / IS NOT NULL */
     if (strcmp(c->op, "IS NULL") == 0) {
-        result = (!actual || actual[0] == '\0');
+        result = (actual[0] == '\0');
         return c->negated ? !result : result;
     }
     if (strcmp(c->op, "IS NOT NULL") == 0) {
-        result = (actual && actual[0] != '\0');
+        result = (actual[0] != '\0');
         return c->negated ? !result : result;
     }
 
@@ -2886,7 +2897,20 @@ static void expand_var_length(cbm_store_t *store, cbm_rel_pattern_t *rel,
                               cbm_node_pattern_t *target_node, binding_t *b, cbm_node_t *src,
                               const char *to_var, binding_t *new_bindings, int *new_count,
                               int max_new, int *match_count) {
-    int max_depth = rel->max_hops > 0 ? rel->max_hops : CYP_MAX_DEPTH;
+    /* Clamp BOTH the explicit (`*1..N`) and unbounded (`*`, `*..m`) forms to the
+     * engine ceiling: an explicit N above the cap was previously honoured
+     * verbatim, driving cbm_store_bfs to an unbounded hop count (#887). WARN on
+     * clamp — never a silent truncation. */
+    int depth_cap = cbm_cypher_max_depth();
+    int max_depth = rel->max_hops > 0 ? rel->max_hops : depth_cap;
+    if (max_depth > depth_cap) {
+        char req_buf[16];
+        char cap_buf[16];
+        snprintf(req_buf, sizeof(req_buf), "%d", max_depth);
+        snprintf(cap_buf, sizeof(cap_buf), "%d", depth_cap);
+        cbm_log_warn("cypher.depth_capped", "requested", req_buf, "cap", cap_buf);
+        max_depth = depth_cap;
+    }
     cbm_traverse_result_t tr = {0};
     const char *dir = rel->direction ? rel->direction : "outbound";
     cbm_store_bfs(store, src->id, dir, rel->types, rel->type_count, max_depth, CBM_PERCENT, &tr);
@@ -4091,7 +4115,7 @@ static void build_return_columns(result_builder_t *rb, cbm_return_clause_t *ret)
 static void execute_return_simple(cbm_return_clause_t *ret, binding_t *bindings, int bind_count,
                                   int max_rows, result_builder_t *rb) {
     int proj_cap = max_rows;
-    if (ret->limit > 0 && !ret->order_by && ret->skip <= 0) {
+    if (ret->limit > 0 && !ret->distinct && !ret->order_by && ret->skip <= 0) {
         proj_cap = ret->limit;
     }
     for (int bi = 0; bi < bind_count && rb->row_count < proj_cap; bi++) {
@@ -4230,12 +4254,17 @@ static void cross_join_with_rels(cbm_store_t *store, cbm_pattern_t *patn, bindin
  * none — the correct dead-code semantics. */
 static void expand_from_bound_terminal(cbm_store_t *store, cbm_pattern_t *patn, binding_t **bindings,
                                        int *bind_count, const char *start_var, bool opt) {
+static void expand_from_bound_terminal(cbm_store_t *store, cbm_pattern_t *patn,
+                                       binding_t **bindings, int *bind_count, const char *start_var,
+                                       bool opt) {
     cbm_rel_pattern_t *rel = &patn->rels[0];
     const cbm_node_pattern_t *start_node = &patn->nodes[0];
     /* The relationship is written start-[r]->terminal. To enumerate the start
      * nodes reachable from the bound terminal we invert the stored direction. */
     bool rel_inbound = rel->direction && strcmp(rel->direction, "inbound") == 0;
     bool scan_targets = !rel_inbound; /* (start)->(term): start = edge source = scan term's inbound */
+    bool scan_targets =
+        !rel_inbound; /* (start)->(term): start = edge source = scan term's inbound */
 
     size_t alloc_n = (size_t)*bind_count * (size_t)CYP_GROWTH_10 + SKIP_ONE;
     binding_t *new_bindings = malloc(alloc_n * sizeof(binding_t));
@@ -4252,6 +4281,8 @@ static void expand_from_bound_terminal(cbm_store_t *store, cbm_pattern_t *patn, 
         if (term) {
             for (int ti = 0; ti < (rel->type_count > 0 ? rel->type_count : 1) && new_count < max_new;
                  ti++) {
+            for (int ti = 0;
+                 ti < (rel->type_count > 0 ? rel->type_count : 1) && new_count < max_new; ti++) {
                 cbm_edge_t *edges = NULL;
                 int edge_count = 0;
                 if (rel->type_count > 0) {
@@ -4371,11 +4402,11 @@ static void execute_return_clause(cbm_query_t *q, cbm_return_clause_t *ret, bind
         }
     }
 
-    rb_apply_order_by(rb, ret);
-    rb_apply_skip_limit(rb, ret->skip, ret->limit >= 0 ? ret->limit : max_rows);
     if (ret->distinct) {
         rb_apply_distinct(rb);
     }
+    rb_apply_order_by(rb, ret);
+    rb_apply_skip_limit(rb, ret->skip, ret->limit >= 0 ? ret->limit : max_rows);
 }
 
 static int execute_single(cbm_store_t *store, cbm_query_t *q, const char *project, int max_rows,

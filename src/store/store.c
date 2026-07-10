@@ -26,6 +26,10 @@ enum {
     ST_FOUND = -1,
     ST_BUF_16 = 16,
     ST_BUF_64 = 64,
+    /* file: URI for the immutable read-only fallback. A path is at most
+     * CBM_SZ_1K; percent-encoding can triple it, plus the "file://" prefix,
+     * the "?immutable=1" suffix and a leading '/'. */
+    ST_QUERY_URI_MAX = 3 * 1024 + 64,
     ST_GROWTH = 2,
     ST_MAX_DEGREE = 8192,
     ST_HALF_SEC = 500000,
@@ -239,6 +243,14 @@ static int init_schema(cbm_store_t *s) {
         "  properties TEXT DEFAULT '{}',"
         "  UNIQUE(project, qualified_name)"
         ");"
+        /* local_name_gen (#768): IMPORTS edges carry one imported symbol's
+         * local_name each, so uniqueness must discriminate on it — two named
+         * imports from the same specifier are distinct edges. Non-IMPORTS
+         * edges get '' (NOT NULL: NULLs never conflict in a UNIQUE index,
+         * which would break their dedup entirely). Mirrors the graph-buffer
+         * dedup key (make_edge_key) and the raw dump writer's DDL + hand-
+         * built sqlite_autoindex_edges_1 (internal/cbm/sqlite_writer.c) —
+         * keep all three in sync. */
         "CREATE TABLE IF NOT EXISTS edges ("
         "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
         "  project TEXT NOT NULL REFERENCES projects(name) ON DELETE CASCADE,"
@@ -247,7 +259,9 @@ static int init_schema(cbm_store_t *s) {
         "  type TEXT NOT NULL,"
         "  properties TEXT DEFAULT '{}',"
         "  url_path_gen TEXT GENERATED ALWAYS AS (json_extract(properties,'$.url_path')),"
-        "  UNIQUE(source_id, target_id, type)"
+        "  local_name_gen TEXT GENERATED ALWAYS AS (CASE WHEN type='IMPORTS'"
+        "    THEN coalesce(json_extract(properties,'$.local_name'),'') ELSE '' END),"
+        "  UNIQUE(source_id, target_id, type, local_name_gen)"
         ");"
         "CREATE TABLE IF NOT EXISTS project_summaries ("
         "  project TEXT PRIMARY KEY,"
@@ -255,11 +269,43 @@ static int init_schema(cbm_store_t *s) {
         "  source_hash TEXT NOT NULL,"
         "  created_at TEXT NOT NULL,"
         "  updated_at TEXT NOT NULL"
+        ");"
+        /* Best-effort indexing-coverage signal (#963). One row per file the
+         * indexer could not fully cover: kind "parse_partial" (indexed, but the
+         * parse tree had ERROR/MISSING regions — detail = 1-based line ranges)
+         * or a skip phase ("read"/"extract"/"oversized" — detail = reason).
+         * Deliberately SEPARATE from the graph tables: coverage is metadata
+         * about the graph, not part of it. */
+        "CREATE TABLE IF NOT EXISTS index_coverage ("
+        "  project TEXT NOT NULL,"
+        "  rel_path TEXT NOT NULL,"
+        "  kind TEXT NOT NULL,"
+        "  detail TEXT DEFAULT '',"
+        "  PRIMARY KEY (project, rel_path, kind)"
         ");";
 
     int rc = exec_sql(s, ddl);
     if (rc != CBM_STORE_OK) {
         return rc;
+    }
+
+    /* Schema-compat probe (#768): DBs created before the local_name_gen
+     * discriminator still enforce UNIQUE(source_id,target_id,type) and lack
+     * the column — the widened upsert in cbm_store_insert_edge can neither
+     * prepare nor let two named imports coexist against them. SQLite cannot
+     * ALTER a table-level UNIQUE constraint in place, so fail the open:
+     * callers already treat an unopenable DB as incompatible (a full index
+     * deletes + rebuilds it, artifact import refuses and falls back to a
+     * reindex). Read-only query opens skip init_schema and keep working. */
+    {
+        sqlite3_stmt *probe = NULL;
+        if (sqlite3_prepare_v2(s->db, "SELECT local_name_gen FROM edges LIMIT 0;", CBM_NOT_FOUND,
+                               &probe, NULL) != SQLITE_OK) {
+            cbm_log_warn("store.schema", "result", "incompatible", "missing",
+                         "edges.local_name_gen");
+            return CBM_STORE_ERR;
+        }
+        sqlite3_finalize(probe);
     }
 
     /* FTS5 contentless virtual table for BM25 full-text search.
@@ -322,7 +368,16 @@ int64_t cbm_store_resolve_mmap_size(void) {
     return (int64_t)parsed;
 }
 
-static int configure_pragmas(cbm_store_t *s, bool in_memory) {
+/* Configure connection pragmas.
+ *   in_memory  — :memory: DB (synchronous OFF, no journal file).
+ *   read_only  — query-only connection opened SQLITE_OPEN_READONLY. Runs
+ *                ONLY non-writing pragmas (foreign_keys, temp_store,
+ *                busy_timeout, mmap_size) and SKIPS journal_mode=WAL,
+ *                wal_checkpoint and synchronous — those WRITE to the DB/WAL
+ *                and would (a) mutate the DB on every read query and (b)
+ *                fail on a read-only DB file / filesystem.
+ * in_memory and read_only are mutually exclusive. */
+static int configure_pragmas(cbm_store_t *s, bool in_memory, bool read_only) {
     int rc;
     rc = exec_sql(s, "PRAGMA foreign_keys = ON;");
     if (rc != CBM_STORE_OK) {
@@ -335,6 +390,16 @@ static int configure_pragmas(cbm_store_t *s, bool in_memory) {
 
     if (in_memory) {
         rc = exec_sql(s, "PRAGMA synchronous = OFF;");
+    } else if (read_only) {
+        /* Non-writing pragmas only — see the function comment. */
+        rc = exec_sql(s, "PRAGMA busy_timeout = 10000;");
+        if (rc != CBM_STORE_OK) {
+            return rc;
+        }
+        char mmap_sql[ST_BUF_64];
+        snprintf(mmap_sql, sizeof(mmap_sql), "PRAGMA mmap_size = %lld;",
+                 (long long)cbm_store_resolve_mmap_size());
+        rc = exec_sql(s, mmap_sql);
     } else {
         rc = exec_sql(s, "PRAGMA busy_timeout = 10000;");
         if (rc != CBM_STORE_OK) {
@@ -593,7 +658,7 @@ static cbm_store_t *store_open_internal(const char *path, bool in_memory) {
     sqlite3_create_function(s->db, "cbm_camel_split", SKIP_ONE, SQLITE_UTF8 | SQLITE_DETERMINISTIC,
                             NULL, sqlite_camel_split, NULL, NULL);
 
-    if (configure_pragmas(s, in_memory) != CBM_STORE_OK || init_schema(s) != CBM_STORE_OK ||
+    if (configure_pragmas(s, in_memory, false) != CBM_STORE_OK || init_schema(s) != CBM_STORE_OK ||
         create_user_indexes(s) != CBM_STORE_OK) {
         sqlite3_close(s->db);
         safe_str_free(&s->db_path);
@@ -615,6 +680,69 @@ cbm_store_t *cbm_store_open_path(const char *db_path) {
     return store_open_internal(db_path, false);
 }
 
+const char *cbm_store_db_path(const cbm_store_t *s) {
+    return s ? s->db_path : NULL;
+}
+
+/* Build a SQLite "file:" URI with immutable=1 from a filesystem path.
+ * immutable=1 bypasses WAL and locking and reads the main DB file directly —
+ * used only as a fallback for read-only filesystems where the wal-index
+ * (-shm) cannot be created. URI-special characters are percent-encoded.
+ * Windows backslashes are normalized to '/', and a leading '/' is inserted
+ * for drive-letter paths so the drive is not parsed as a URI authority.
+ * Returns false if the output buffer is too small. */
+static bool build_immutable_uri(const char *path, char *out, size_t out_sz) {
+    static const char PREFIX[] = "file://";
+    static const char SUFFIX[] = "?immutable=1";
+    static const char HEX[] = "0123456789ABCDEF";
+    size_t prefix_len = sizeof(PREFIX) - 1;
+    size_t suffix_len = sizeof(SUFFIX) - 1;
+    if (prefix_len + 1 > out_sz) {
+        return false;
+    }
+    memcpy(out, PREFIX, prefix_len);
+    size_t pos = prefix_len;
+
+    /* Ensure the path component begins with '/' (POSIX absolute paths already
+     * do; Windows "C:\..." gets a leading '/' -> "/C:/..."). */
+    if (path[0] != '/') {
+        if (pos + 1 >= out_sz) {
+            return false;
+        }
+        out[pos++] = '/';
+    }
+
+    for (const unsigned char *p = (const unsigned char *)path; *p != '\0'; p++) {
+        unsigned char c = *p;
+        if (c == '\\') {
+            c = '/'; /* normalize Windows separators */
+        }
+        bool safe = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+                    c == '/' || c == '.' || c == '-' || c == '_' || c == '~' || c == ':';
+        if (safe) {
+            if (pos + 1 >= out_sz) {
+                return false;
+            }
+            out[pos++] = (char)c;
+        } else {
+            if (pos + 3 >= out_sz) {
+                return false;
+            }
+            out[pos++] = '%';
+            out[pos++] = HEX[(c >> 4) & 0xF];
+            out[pos++] = HEX[c & 0xF];
+        }
+    }
+
+    if (pos + suffix_len + 1 > out_sz) {
+        return false;
+    }
+    memcpy(out + pos, SUFFIX, suffix_len);
+    pos += suffix_len;
+    out[pos] = '\0';
+    return true;
+}
+
 cbm_store_t *cbm_store_open_path_query(const char *db_path) {
     if (!db_path) {
         return NULL;
@@ -625,13 +753,52 @@ cbm_store_t *cbm_store_open_path_query(const char *db_path) {
         return NULL;
     }
 
-    /* Open read-write but do NOT create — returns SQLITE_CANTOPEN if absent. */
-    int rc = sqlite3_open_v2(db_path, &s->db, SQLITE_OPEN_READWRITE, NULL);
+    /* Query tools open the project DB READ-ONLY: a read query must never
+     * mutate the DB (the previous READWRITE open + WAL write-pragmas did),
+     * and must work on a read-only DB file / filesystem.
+     *
+     * Try a plain READONLY open first — on a normal writable filesystem this
+     * reads WAL frames correctly via the -shm wal-index. SQLite opens lazily,
+     * so a read-only-filesystem failure (cannot create -shm for a WAL-mode
+     * DB) surfaces on first access, not at open time; we probe with a trivial
+     * read to force it. If the probe fails, retry once with an immutable URI
+     * that bypasses WAL and reads the main DB file directly.
+     *
+     * No SQLITE_OPEN_CREATE on either path — a missing DB must return NULL
+     * (no ghost .db for unknown/unindexed projects). */
+    int rc = sqlite3_open_v2(db_path, &s->db, SQLITE_OPEN_READONLY, NULL);
+    if (rc == SQLITE_OK) {
+        /* Force first DB access so a read-only-FS WAL failure surfaces now. */
+        if (sqlite3_exec(s->db, "SELECT 1 FROM sqlite_master LIMIT 1;", NULL, NULL, NULL) !=
+            SQLITE_OK) {
+            sqlite3_close(s->db);
+            s->db = NULL;
+            rc = SQLITE_CANTOPEN; /* trigger immutable fallback */
+        }
+    }
     if (rc != SQLITE_OK) {
-        /* sqlite3_open_v2 allocates a handle even on failure — must close it. */
-        sqlite3_close(s->db);
-        free(s);
-        return NULL;
+        sqlite3_close(s->db); /* no-op if already NULL */
+        s->db = NULL;
+        /* A genuinely missing DB must return NULL without creating anything —
+         * only retry with the immutable URI when the file exists but could not
+         * be opened (the read-only-filesystem case). This also keeps the
+         * common "project not found" path to a single open attempt. */
+        if (!cbm_file_exists(db_path)) {
+            free(s);
+            return NULL;
+        }
+        char uri[ST_QUERY_URI_MAX];
+        if (!build_immutable_uri(db_path, uri, sizeof(uri))) {
+            free(s);
+            return NULL;
+        }
+        rc = sqlite3_open_v2(uri, &s->db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, NULL);
+        if (rc != SQLITE_OK) {
+            /* sqlite3_open_v2 allocates a handle even on failure — must close it. */
+            sqlite3_close(s->db);
+            free(s);
+            return NULL;
+        }
     }
 
     s->db_path = heap_strdup(db_path);
@@ -649,7 +816,7 @@ cbm_store_t *cbm_store_open_path_query(const char *db_path) {
     sqlite3_create_function(s->db, "cbm_camel_split", SKIP_ONE, SQLITE_UTF8 | SQLITE_DETERMINISTIC,
                             NULL, sqlite_camel_split, NULL, NULL);
 
-    if (configure_pragmas(s, false) != CBM_STORE_OK) {
+    if (configure_pragmas(s, false, true) != CBM_STORE_OK) {
         sqlite3_close(s->db);
         safe_str_free(&s->db_path);
         free(s);
@@ -1354,11 +1521,14 @@ int cbm_store_upsert_node_batch(cbm_store_t *s, const cbm_node_t *nodes, int cou
 /* ── Edge CRUD ──────────────────────────────────────────────────── */
 
 int64_t cbm_store_insert_edge(cbm_store_t *s, const cbm_edge_t *e) {
+    /* Conflict target includes local_name_gen (#768) so IMPORTS edges with
+     * different local_name coexist while re-inserting the same import still
+     * upserts. Must match the table's UNIQUE constraint in init_schema. */
     sqlite3_stmt *stmt =
         prepare_cached(s, &s->stmt_insert_edge,
                        "INSERT INTO edges (project, source_id, target_id, type, properties) "
                        "VALUES (?1, ?2, ?3, ?4, ?5) "
-                       "ON CONFLICT(source_id, target_id, type) DO UPDATE SET "
+                       "ON CONFLICT(source_id, target_id, type, local_name_gen) DO UPDATE SET "
                        "properties = json_patch(properties, ?5) "
                        "RETURNING id;");
     if (!stmt) {
@@ -1674,6 +1844,271 @@ int cbm_store_delete_file_hashes(cbm_store_t *s, const char *project) {
         return CBM_STORE_ERR;
     }
     return CBM_STORE_OK;
+}
+
+/* ── Index coverage (#963) ──────────────────────────────────────── */
+
+void cbm_store_coverage_shadow_project(char *dst, size_t dstsz, const char *project) {
+    snprintf(dst, dstsz, "%s::missed", project);
+}
+
+/* Minimal JSON string escape (quotes, backslashes, control chars → space). */
+static void cov_json_escape(char *dst, size_t dstsz, const char *src) {
+    size_t o = 0;
+    for (const char *p = src; *p && o + 2 < dstsz; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '"' || c == '\\') {
+            dst[o++] = '\\';
+            dst[o++] = (char)c;
+        } else if (c < 0x20) {
+            dst[o++] = ' ';
+        } else {
+            dst[o++] = (char)c;
+        }
+    }
+    dst[o] = '\0';
+}
+
+/* Rebuild the derived miss-GRAPH view under the shadow project
+ * "<project>::missed": ONLY the not-fully-indexed files, laid out as the
+ * file structure (Project → Folder chain → File), each File carrying
+ * {kind, detail}. Queryable via query_graph(graph="missed") with zero
+ * cypher-engine changes; the real project's graph gains no rows. Derived
+ * data — rebuilt from the authoritative (post-prune) table contents. */
+static void cov_rebuild_shadow_graph(cbm_store_t *s, const char *project) {
+    char covproj[CBM_SZ_512];
+    cbm_store_coverage_shadow_project(covproj, sizeof(covproj), project);
+
+    /* Wipe the previous view (edges first: no FK pragma guarantee). */
+    static const char *wipes[] = {"DELETE FROM edges WHERE project = ?1;",
+                                  "DELETE FROM nodes WHERE project = ?1;"};
+    for (int w = 0; w < 2; w++) {
+        sqlite3_stmt *del = NULL;
+        if (sqlite3_prepare_v2(s->db, wipes[w], CBM_NOT_FOUND, &del, NULL) == SQLITE_OK) {
+            bind_text(del, SKIP_ONE, covproj);
+            (void)sqlite3_step(del);
+            sqlite3_finalize(del);
+        }
+    }
+
+    cbm_coverage_row_t *rows = NULL;
+    int count = 0;
+    if (cbm_store_coverage_get(s, project, &rows, &count) != CBM_STORE_OK || count == 0) {
+        cbm_store_free_coverage(rows, count);
+        return;
+    }
+    /* Only FAILURE rows materialize in the miss graph; a project whose only
+     * coverage rows are by-design not_indexed_* entries gets NO graph (not
+     * even a bare root node). */
+    int failure_count = 0;
+    for (int i = 0; i < count; i++) {
+        if (!rows[i].kind || strncmp(rows[i].kind, "not_indexed", 11) != 0) {
+            failure_count++;
+        }
+    }
+    if (failure_count == 0) {
+        cbm_store_free_coverage(rows, count);
+        return;
+    }
+
+    /* nodes.project has an FK to projects(name) (enforced: foreign_keys=ON),
+     * so the shadow project needs its row. Invisible to list_projects, which
+     * scans the cache directory for .db files, not this table. */
+    if (cbm_store_upsert_project(s, covproj, "") != CBM_STORE_OK) {
+        cbm_store_free_coverage(rows, count);
+        return;
+    }
+
+    cbm_node_t root = {.project = covproj,
+                       .label = "Project",
+                       .name = project,
+                       .qualified_name = covproj,
+                       .properties_json = "{}"};
+    int64_t root_id = cbm_store_upsert_node(s, &root);
+
+    for (int i = 0; i < count; i++) {
+        const char *rel = rows[i].rel_path;
+        if (!rel || !rel[0] || root_id <= 0) {
+            continue;
+        }
+        /* The missed graph shows FAILURES ("we did not manage") only —
+         * by-design not_indexed_* rows stay out of it, so the UI's
+         * report-an-edge-case callout never fires for gitignored paths. */
+        if (rows[i].kind && strncmp(rows[i].kind, "not_indexed", 11) == 0) {
+            continue;
+        }
+        char pathbuf[CBM_SZ_1K];
+        snprintf(pathbuf, sizeof(pathbuf), "%s", rel);
+
+        int64_t parent = root_id;
+        for (char *p = pathbuf; *p; p++) {
+            if (*p != '/') {
+                continue;
+            }
+            /* Truncate at this slash → pathbuf is the directory prefix; the
+             * upsert binds copies, so restore the slash right after. */
+            *p = '\0';
+            const char *seg = strrchr(pathbuf, '/');
+            cbm_node_t folder = {.project = covproj,
+                                 .label = "Folder",
+                                 .name = seg ? seg + 1 : pathbuf,
+                                 .qualified_name = pathbuf,
+                                 .file_path = pathbuf,
+                                 .properties_json = "{}"};
+            int64_t fid = cbm_store_upsert_node(s, &folder);
+            *p = '/';
+            if (fid > 0) {
+                cbm_edge_t e = {.project = covproj,
+                                .source_id = parent,
+                                .target_id = fid,
+                                .type = "CONTAINS_FOLDER",
+                                .properties_json = "{}"};
+                (void)cbm_store_insert_edge(s, &e);
+                parent = fid;
+            }
+        }
+
+        const char *base = strrchr(rel, '/');
+        char props[CBM_SZ_2K];
+        char detail_esc[CBM_SZ_1K];
+        cov_json_escape(detail_esc, sizeof(detail_esc), rows[i].detail ? rows[i].detail : "");
+        snprintf(props, sizeof(props), "{\"kind\":\"%s\",\"detail\":\"%s\"}",
+                 rows[i].kind ? rows[i].kind : "", detail_esc);
+        cbm_node_t file = {.project = covproj,
+                           .label = "File",
+                           .name = base ? base + 1 : rel,
+                           .qualified_name = rel,
+                           .file_path = rel,
+                           .properties_json = props};
+        int64_t file_id = cbm_store_upsert_node(s, &file);
+        if (file_id > 0) {
+            cbm_edge_t e = {.project = covproj,
+                            .source_id = parent,
+                            .target_id = file_id,
+                            .type = "CONTAINS_FILE",
+                            .properties_json = "{}"};
+            (void)cbm_store_insert_edge(s, &e);
+        }
+    }
+    cbm_store_free_coverage(rows, count);
+}
+
+int cbm_store_coverage_replace(cbm_store_t *s, const char *project, const cbm_coverage_row_t *rows,
+                               int count) {
+    if (!s || !s->db || !project) {
+        return CBM_STORE_ERR;
+    }
+    if (exec_sql(s, "BEGIN;") != CBM_STORE_OK) {
+        return CBM_STORE_ERR;
+    }
+    sqlite3_stmt *del = NULL;
+    if (sqlite3_prepare_v2(s->db, "DELETE FROM index_coverage WHERE project = ?1;", CBM_NOT_FOUND,
+                           &del, NULL) != SQLITE_OK) {
+        store_set_error_sqlite(s, "coverage delete prepare");
+        (void)exec_sql(s, "ROLLBACK;");
+        return CBM_STORE_ERR;
+    }
+    bind_text(del, SKIP_ONE, project);
+    int rc = sqlite3_step(del);
+    sqlite3_finalize(del);
+    if (rc != SQLITE_DONE) {
+        store_set_error_sqlite(s, "coverage delete");
+        (void)exec_sql(s, "ROLLBACK;");
+        return CBM_STORE_ERR;
+    }
+    sqlite3_stmt *ins = NULL;
+    if (sqlite3_prepare_v2(
+            s->db,
+            "INSERT OR REPLACE INTO index_coverage (project, rel_path, kind, detail) "
+            "VALUES (?1, ?2, ?3, ?4);",
+            CBM_NOT_FOUND, &ins, NULL) != SQLITE_OK) {
+        store_set_error_sqlite(s, "coverage insert prepare");
+        (void)exec_sql(s, "ROLLBACK;");
+        return CBM_STORE_ERR;
+    }
+    for (int i = 0; i < count; i++) {
+        if (!rows[i].rel_path || !rows[i].kind) {
+            continue;
+        }
+        bind_text(ins, SKIP_ONE, project);
+        bind_text(ins, ST_COL_2, rows[i].rel_path);
+        bind_text(ins, ST_COL_3, rows[i].kind);
+        bind_text(ins, CBM_SZ_4, rows[i].detail ? rows[i].detail : "");
+        if (sqlite3_step(ins) != SQLITE_DONE) {
+            store_set_error_sqlite(s, "coverage insert");
+            sqlite3_finalize(ins);
+            (void)exec_sql(s, "ROLLBACK;");
+            return CBM_STORE_ERR;
+        }
+        sqlite3_reset(ins);
+    }
+    sqlite3_finalize(ins);
+    /* Prune FAILURE rows for files no longer known to the index (deleted from
+     * the repo): file_hashes is the authoritative live-file set after
+     * persist. By-design not_indexed_* rows are exempt — deliberately
+     * unindexed paths never have hash rows (discovery rewrites them fresh
+     * every run instead). */
+    sqlite3_stmt *prune = NULL;
+    if (sqlite3_prepare_v2(s->db,
+                           "DELETE FROM index_coverage WHERE project = ?1 "
+                           "AND kind NOT LIKE 'not_indexed%' AND rel_path NOT IN "
+                           "(SELECT rel_path FROM file_hashes WHERE project = ?1);",
+                           CBM_NOT_FOUND, &prune, NULL) == SQLITE_OK) {
+        bind_text(prune, SKIP_ONE, project);
+        (void)sqlite3_step(prune);
+        sqlite3_finalize(prune);
+    }
+    /* Rebuild the derived miss-graph view from the now-authoritative table
+     * contents (same transaction — the table and its view stay in step). */
+    cov_rebuild_shadow_graph(s, project);
+    return exec_sql(s, "COMMIT;");
+}
+
+int cbm_store_coverage_get(cbm_store_t *s, const char *project, cbm_coverage_row_t **out,
+                           int *count) {
+    *out = NULL;
+    *count = 0;
+    if (!s || !s->db || !project) {
+        return CBM_STORE_ERR;
+    }
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(s->db,
+                           "SELECT rel_path, kind, detail FROM index_coverage "
+                           "WHERE project = ?1 ORDER BY rel_path, kind;",
+                           CBM_NOT_FOUND, &stmt, NULL) != SQLITE_OK) {
+        store_set_error_sqlite(s, "coverage get prepare");
+        return CBM_STORE_ERR;
+    }
+    bind_text(stmt, SKIP_ONE, project);
+    int cap = ST_INIT_CAP_16;
+    int n = 0;
+    cbm_coverage_row_t *arr = malloc(cap * sizeof(cbm_coverage_row_t));
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        if (n >= cap) {
+            cap *= ST_GROWTH;
+            arr = safe_realloc(arr, cap * sizeof(cbm_coverage_row_t));
+        }
+        arr[n].rel_path = heap_strdup((const char *)sqlite3_column_text(stmt, 0));
+        arr[n].kind = heap_strdup((const char *)sqlite3_column_text(stmt, SKIP_ONE));
+        arr[n].detail = heap_strdup((const char *)sqlite3_column_text(stmt, CBM_SZ_2));
+        n++;
+    }
+    sqlite3_finalize(stmt);
+    *out = arr;
+    *count = n;
+    return CBM_STORE_OK;
+}
+
+void cbm_store_free_coverage(cbm_coverage_row_t *rows, int count) {
+    if (!rows) {
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        free((char *)rows[i].rel_path);
+        free((char *)rows[i].kind);
+        free((char *)rows[i].detail);
+    }
+    free(rows);
 }
 
 /* ── FindNodesByFileOverlap ─────────────────────────────────────── */
@@ -5325,12 +5760,24 @@ static int arch_clusters(cbm_store_t *s, const char *project, const char *path,
 
 /* ── GetArchitecture dispatch ──────────────────────────────────── */
 
+/* "overview" = compact architecture summary: every aspect EXCEPT the large
+ * per-file listing (file_tree), which alone dominates the payload on real
+ * repos and can push the MCP response past the output cap. Declared in
+ * store.h and shared with aspect_wanted in src/mcp/mcp.c so the store-side
+ * DB gate and the MCP-side serialization gate cannot drift. */
+bool cbm_store_arch_aspect_in_overview(const char *name) {
+    return strcmp(name, "file_tree") != 0;
+}
+
 static bool want_aspect(const char **aspects, int aspect_count, const char *name) {
     if (!aspects || aspect_count == 0) {
         return true;
     }
     for (int i = 0; i < aspect_count; i++) {
         if (strcmp(aspects[i], "all") == 0) {
+            return true;
+        }
+        if (strcmp(aspects[i], "overview") == 0 && cbm_store_arch_aspect_in_overview(name)) {
             return true;
         }
         if (strcmp(aspects[i], name) == 0) {

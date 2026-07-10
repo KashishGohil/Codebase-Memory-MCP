@@ -151,6 +151,9 @@ typedef struct {
     int64_t source_id;       /* edge endpoints — let callers match an edge to a hop node */
     int64_t target_id;
     char *properties_json;    /* raw edge properties (carries CALLS arg expressions) */
+    int64_t source_id; /* edge endpoints — let callers match an edge to a hop node */
+    int64_t target_id;
+    const char *properties_json; /* raw edge properties (carries CALLS arg expressions) */
 } cbm_edge_info_t;
 
 typedef struct {
@@ -201,9 +204,15 @@ cbm_store_t *cbm_store_open_memory(void);
 /* Open a file-backed database at the given path. Creates if needed. */
 cbm_store_t *cbm_store_open_path(const char *db_path);
 
-/* Open an existing file-backed database for querying only (no SQLITE_OPEN_CREATE).
- * Returns NULL if the file does not exist — never creates a new .db file. */
+/* Open an existing file-backed database for querying only. Opened READ-ONLY
+ * (no SQLITE_OPEN_CREATE, no write pragmas) so queries never mutate the DB and
+ * work on a read-only file / filesystem. Returns NULL if the file does not
+ * exist — never creates a new .db file. */
 cbm_store_t *cbm_store_open_path_query(const char *db_path);
+
+/* On-disk path of a file-backed store, or NULL for an in-memory (:memory:)
+ * store. The returned pointer is owned by the store. */
+const char *cbm_store_db_path(const cbm_store_t *s);
 
 /* Check database integrity. Returns true if the DB passes basic sanity checks
  * (projects table has correct types, no corruption indicators).
@@ -327,6 +336,12 @@ bool cbm_store_arch_path_scoped(const char *path);
 /* When scoped, writes normalized directory prefix into norm_out. Returns false if unscoped. */
 bool cbm_store_normalize_arch_path(const char *path, char *norm_out, size_t norm_sz);
 
+/* True when architecture aspect `name` belongs to the "overview" subset:
+ * every aspect EXCEPT the large per-file listing (file_tree). Shared by both
+ * aspect gates — want_aspect (store.c) and aspect_wanted (mcp.c) — so the
+ * two sites cannot drift. */
+bool cbm_store_arch_aspect_in_overview(const char *name);
+
 /* Delete all nodes for a project (cascade deletes edges). */
 int cbm_store_delete_nodes_by_project(cbm_store_t *s, const char *project);
 
@@ -385,6 +400,40 @@ int cbm_store_get_file_hashes(cbm_store_t *s, const char *project, cbm_file_hash
 int cbm_store_delete_file_hash(cbm_store_t *s, const char *project, const char *rel_path);
 
 int cbm_store_delete_file_hashes(cbm_store_t *s, const char *project);
+
+/* ── Index coverage (#963) ──────────────────────────────────────── */
+
+/* One best-effort coverage row: a file the indexer could not fully cover.
+ * kind "parse_partial" = indexed but the parse tree had ERROR/MISSING regions
+ * (detail = 1-based line ranges "12-40,88-90"); skip kinds "read"/"extract"/
+ * "oversized" = not indexed at all (detail = reason). Stored in the separate
+ * index_coverage table — coverage is metadata ABOUT the graph, never mixed
+ * into the graph itself. */
+typedef struct {
+    const char *rel_path;
+    const char *kind;
+    const char *detail;
+} cbm_coverage_row_t;
+
+/* Replace the project's coverage rows in one transaction, then prune rows for
+ * files absent from file_hashes (deleted from the repo). Call AFTER hashes
+ * were persisted for the run. */
+int cbm_store_coverage_replace(cbm_store_t *s, const char *project, const cbm_coverage_row_t *rows,
+                               int count);
+
+/* Fetch all coverage rows (ordered by rel_path). Caller frees via
+ * cbm_store_free_coverage. */
+int cbm_store_coverage_get(cbm_store_t *s, const char *project, cbm_coverage_row_t **out,
+                           int *count);
+
+/* Name of the derived miss-graph shadow project ("<project>::missed").
+ * cbm_store_coverage_replace materializes the coverage rows as a file-
+ * structure graph (Project → Folder → File{kind, detail}) under this project
+ * name — queryable via the normal cypher path without touching the real
+ * project's graph. */
+void cbm_store_coverage_shadow_project(char *dst, size_t dstsz, const char *project);
+
+void cbm_store_free_coverage(cbm_coverage_row_t *rows, int count);
 
 /* ── Search ─────────────────────────────────────────────────────── */
 
