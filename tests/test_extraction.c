@@ -1357,9 +1357,11 @@ TEST(cpp_preproc_signature_gap_first_branch_define) {
     ASSERT_FALSE(r->has_error);
     const CBMDefinition *add = find_def_by_label_name(r, "Method", "addRegionSamplingListener");
     ASSERT_NOT_NULL(add);
-    ASSERT_EQ(add->start_line, 17u);
+    /* Raw AST remains primary: the expanded active branch is coverage evidence,
+     * not a replacement for an existing raw definition. */
+    ASSERT_EQ(add->start_line, 22u);
     ASSERT_EQ(add->end_line, 27u);
-    ASSERT_NEQ(add->end_line, 20u);
+    ASSERT_NEQ(add->start_line, 17u);
     ASSERT(source_line_contains(src, add->start_line, "addRegionSamplingListener"));
     ASSERT(source_line_contains(src, add->end_line, "}"));
     const CBMDefinition *commit = find_def_by_label_name(r, "Method", "commit");
@@ -1396,7 +1398,8 @@ TEST(cpp_preproc_remap_failure_skips_macro_generated_callable) {
 }
 
 TEST(cpp_preproc_include_header_defs_not_main_owned) {
-    char tmpdir[256] = "/tmp/cbm_header_XXXXXX";
+    char tmpdir[512];
+    snprintf(tmpdir, sizeof(tmpdir), "%s/cbm_header_XXXXXX", cbm_tmpdir());
     ASSERT_NOT_NULL(cbm_mkdtemp(tmpdir));
 
     char header_path[512];
@@ -1408,6 +1411,9 @@ TEST(cpp_preproc_include_header_defs_not_main_owned) {
 
     const char *includes[] = {tmpdir, NULL};
     const char *src = "#include \"helper.h\"\n"
+                      "#ifdef ENABLE_SECOND_PASS\n"
+                      "int branch_value = 1;\n"
+                      "#endif\n"
                       "int main_owned() { return 0; }\n";
     CBMFileResult *r =
         extract_with_preproc_options(src, CBM_LANG_CPP, "t", "main.cpp", NULL, includes);

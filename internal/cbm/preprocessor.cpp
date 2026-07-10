@@ -34,9 +34,6 @@ static bool has_preprocessor_work(const char *source, int source_len) {
             if (remaining >= 6 && strncmp(source + j, "ifndef", 6) == 0) {
                 return true;
             }
-            if (remaining >= 7 && strncmp(source + j, "include", 7) == 0) {
-                return true;
-            }
             if (remaining >= 3 && strncmp(source + j, "if ", 3) == 0) {
                 return true;
             }

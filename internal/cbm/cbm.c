@@ -429,75 +429,6 @@ static int result_find_same_def_identity(const CBMFileResult *result, const CBMD
     return -1;
 }
 
-static bool cbm_pp_directive_matches(const char *p, int len, const char *word) {
-    int word_len = (int)strlen(word);
-    return len >= word_len && strncmp(p, word, (size_t)word_len) == 0 &&
-           (len == word_len || !cbm_ident_char(p[word_len]));
-}
-
-static bool cbm_line_is_preprocessor_branch_directive(const char *line, int len) {
-    int p = 0;
-    while (p < len && isspace((unsigned char)line[p])) {
-        p++;
-    }
-    if (p >= len || line[p++] != '#') {
-        return false;
-    }
-    while (p < len && isspace((unsigned char)line[p])) {
-        p++;
-    }
-    int word_len = len - p;
-    return cbm_pp_directive_matches(line + p, word_len, "if") ||
-           cbm_pp_directive_matches(line + p, word_len, "ifdef") ||
-           cbm_pp_directive_matches(line + p, word_len, "ifndef") ||
-           cbm_pp_directive_matches(line + p, word_len, "elif") ||
-           cbm_pp_directive_matches(line + p, word_len, "else") ||
-           cbm_pp_directive_matches(line + p, word_len, "endif");
-}
-
-static bool cbm_span_contains_preprocessor_branch(const char *source, int source_len,
-                                                  uint32_t start_line, uint32_t end_line) {
-    int span_start = 0;
-    int span_end = 0;
-    if (!cbm_source_line_bounds(source, source_len, start_line, end_line, &span_start, &span_end)) {
-        return false;
-    }
-    int line_start = span_start;
-    while (line_start <= span_end) {
-        int line_end = line_start;
-        while (line_end < span_end && source[line_end] != '\n') {
-            line_end++;
-        }
-        if (cbm_line_is_preprocessor_branch_directive(source + line_start, line_end - line_start)) {
-            return true;
-        }
-        if (line_end >= span_end) {
-            break;
-        }
-        line_start = line_end + 1;
-    }
-    return false;
-}
-
-static bool cbm_should_replace_preprocessed_duplicate(const CBMDefinition *existing,
-                                                      const CBMDefinition *remapped,
-                                                      const char *source, int source_len) {
-    if (!existing || !remapped || existing->start_line == 0 || remapped->start_line == 0) {
-        return false;
-    }
-    if (existing->start_line == remapped->start_line && existing->end_line == remapped->end_line) {
-        return false;
-    }
-    uint32_t start =
-        existing->start_line < remapped->start_line ? existing->start_line : remapped->start_line;
-    uint32_t existing_end =
-        existing->end_line < existing->start_line ? existing->start_line : existing->end_line;
-    uint32_t remapped_end =
-        remapped->end_line < remapped->start_line ? remapped->start_line : remapped->end_line;
-    uint32_t end = existing_end > remapped_end ? existing_end : remapped_end;
-    return cbm_span_contains_preprocessor_branch(source, source_len, start, end);
-}
-
 static void merge_missing_preprocessed_callables(CBMFileResult *dst, const CBMFileResult *src,
                                                  CBMArena *arena,
                                                  const CBMPreprocessedSource *preprocessed,
@@ -520,16 +451,13 @@ static void merge_missing_preprocessed_callables(CBMFileResult *dst, const CBMFi
                                                    original_source_len)) {
             continue;
         }
+        /* Successful expanded-source remaps are parse-coverage evidence. Raw
+         * definitions remain primary; the final defs array is fill-only below. */
         if (!cbm_recovered_callables_push(arena, recovered, &remapped)) {
             continue;
         }
-        int existing_idx = result_find_same_def_identity(dst, &remapped);
-        if (existing_idx < 0) {
+        if (result_find_same_def_identity(dst, &remapped) < 0) {
             cbm_defs_push(&dst->defs, arena, remapped);
-        } else if (cbm_should_replace_preprocessed_duplicate(&dst->defs.items[existing_idx],
-                                                             &remapped, original_source,
-                                                             original_source_len)) {
-            dst->defs.items[existing_idx] = remapped;
         }
     }
 }
