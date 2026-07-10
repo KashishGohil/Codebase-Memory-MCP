@@ -39,6 +39,17 @@ static int has_call(CBMFileResult *r, const char *callee) {
     return 0;
 }
 
+static int has_call_route(CBMFileResult *r, const char *callee, const char *route) {
+    for (int i = 0; i < r->calls.count; i++) {
+        const CBMCall *call = &r->calls.items[i];
+        if (call->callee_name && strstr(call->callee_name, callee) && call->first_string_arg &&
+            strcmp(call->first_string_arg, route) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Check if any import with the given module path exists. */
 static int __attribute__((unused)) has_import(CBMFileResult *r, const char *path_substr) {
     for (int i = 0; i < r->imports.count; i++) {
@@ -118,6 +129,34 @@ TEST(extract_ts_factory_object_methods_issue341) {
     ASSERT(has_def_any(r, "addItem"));
     ASSERT(has_def_any(r, "moveItem"));
     ASSERT(has_def_any(r, "deleteItem"));
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(extract_angular_httpclient_routes) {
+    CBMFileResult *r =
+        extract("import { HttpClient, inject } from '@angular/common/http';\n"
+                "class ApiService {\n"
+                "  constructor(private http: HttpClient, private config: Config) {}\n"
+                "  load(id: string) {\n"
+                "    const apiURL = `${this.config.baseUrl}/api/v1/orders/${id}?preview=true`;\n"
+                "    return this.http.get(apiURL);\n"
+                "  }\n"
+                "}\n"
+                "class FeatureService {\n"
+                "  private client = inject(HttpClient);\n"
+                "  load() { return this.client.get(`${this.config.baseUrl}/api/v1/features`); }\n"
+                "}\n"
+                "class LocalService {\n"
+                "  constructor(private http: LocalClient) {}\n"
+                "  load() { return this.http.get('/api/v1/local-only'); }\n"
+                "}\n",
+                CBM_LANG_TYPESCRIPT, "t", "api.service.ts");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    ASSERT(has_call_route(r, "HttpClient.get", "/api/v1/orders/{}"));
+    ASSERT(has_call_route(r, "HttpClient.get", "/api/v1/features"));
+    ASSERT_FALSE(has_call_route(r, "HttpClient.get", "/api/v1/local-only"));
     cbm_free_result(r);
     PASS();
 }
@@ -3508,6 +3547,7 @@ SUITE(extraction) {
     RUN_TEST(extract_r_box_use_imports_issue218);
     RUN_TEST(extract_r_dollar_call_issue219);
     RUN_TEST(extract_ts_factory_object_methods_issue341);
+    RUN_TEST(extract_angular_httpclient_routes);
     RUN_TEST(extract_c_macros_issue375);
     RUN_TEST(extract_cpp_macros_issue375);
     RUN_TEST(extract_gdscript_issue186);

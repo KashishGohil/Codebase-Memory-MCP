@@ -521,6 +521,29 @@ TEST(http_calls_axios_ts) {
     PASS();
 }
 
+/* Angular HttpClient — DI receiver identity and local template-string URL
+ * propagation should classify calls even though @angular/common/http is an
+ * external package with no indexed method definitions. */
+TEST(http_calls_angular_httpclient_ts) {
+    static const char *routes[] = {"/api/v1/orders", "/api/v1/orders/{}", NULL};
+    static const EtFile f[] = {
+        {"order.service.ts",
+         "import { HttpClient } from '@angular/common/http';\n\n"
+         "export class OrderService {\n"
+         "  constructor(private http: HttpClient, private config: Config) {}\n"
+         "  list() {\n"
+         "    return this.http.get(`${this.config.baseUrl}/api/v1/orders`);\n"
+         "  }\n"
+         "  create(id: string, payload: unknown) {\n"
+         "    const apiUrl = `${this.config.baseUrl}/api/v1/orders/${id}?notify=true`;\n"
+         "    return this.http.post(apiUrl, payload);\n"
+         "  }\n"
+         "}\n"}};
+    ASSERT_TRUE(et_edge_present(f, 1, "HTTP_CALLS", 2));
+    ASSERT_TRUE(et_routes_exact(f, 1, routes));
+    PASS();
+}
+
 /* requests (Python) — already in test_lang_contract.c but uses different fixture;
  * this variant tests cross-file import resolution */
 TEST(http_calls_requests_python) {
@@ -1459,6 +1482,7 @@ SUITE(edge_types_probe) {
     /* HTTP_CALLS — outbound HTTP clients (9 libraries × languages) */
     RUN_TEST(http_calls_fetch_js);
     RUN_TEST(http_calls_axios_ts);
+    RUN_TEST(http_calls_angular_httpclient_ts);
     RUN_TEST(http_calls_requests_python);
     RUN_TEST(http_calls_nethttp_go);
     RUN_TEST(http_calls_resttemplate_java);
