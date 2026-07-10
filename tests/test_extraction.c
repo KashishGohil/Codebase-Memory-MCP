@@ -8,6 +8,7 @@
 #include "test_framework.h"
 #include "cbm.h"
 #include "../src/foundation/compat.h" /* cbm_clock_gettime (wide-flat scaling guard) */
+#include "../src/foundation/compat_fs.h"
 #include <time.h>
 
 /* ── Helpers ───────────────────────────────────────────────────── */
@@ -75,6 +76,39 @@ static CBMFileResult *extract(const char *src, CBMLanguage lang, const char *pro
                               const char *path) {
     CBMFileResult *r = cbm_extract_file(src, (int)strlen(src), lang, proj, path, 0, NULL, NULL);
     return r;
+}
+
+static CBMFileResult *extract_with_preproc_options(const char *src, CBMLanguage lang,
+                                                   const char *proj, const char *path,
+                                                   const char **extra_defines,
+                                                   const char **include_paths) {
+    return cbm_extract_file(src, (int)strlen(src), lang, proj, path, 0, extra_defines,
+                            include_paths);
+}
+
+static int source_line_contains(const char *src, uint32_t line, const char *needle) {
+    if (!src || line == 0 || !needle) {
+        return 0;
+    }
+    const char *line_start = src;
+    for (uint32_t current = 1; current < line; current++) {
+        const char *nl = strchr(line_start, '\n');
+        if (!nl) {
+            return 0;
+        }
+        line_start = nl + 1;
+    }
+    const char *line_end = strchr(line_start, '\n');
+    if (!line_end) {
+        line_end = src + strlen(src);
+    }
+    size_t needle_len = strlen(needle);
+    for (const char *p = line_start; p + needle_len <= line_end; p++) {
+        if (strncmp(p, needle, needle_len) == 0) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1248,56 +1282,212 @@ TEST(cpp_out_of_line_method_issue428) {
     PASS();
 }
 
+static const char *CPP_PREPROC_SIGNATURE_GAP_SRC =
+    "struct Rect {};\n"
+    "struct IBinder {};\n"
+    "struct IRegionSamplingListener {};\n"
+    "typedef int status_t;\n"
+    "\n"
+    "class SurfaceFlinger {\n"
+    "public:\n"
+    "    status_t addRegionSamplingListener(const Rect&, const IBinder&,\n"
+    "                                       const IRegionSamplingListener&, bool);\n"
+    "    status_t addRegionSamplingListener(const Rect&, const IBinder&,\n"
+    "                                       const IRegionSamplingListener&);\n"
+    "    void commit();\n"
+    "    void composite();\n"
+    "};\n"
+    "\n"
+    "#ifdef FLYME_GRAPHICS_EXTEND_LUMARGB\n"
+    "status_t SurfaceFlinger::addRegionSamplingListener(const Rect& samplingArea,\n"
+    "                                                   const IBinder& stopLayerHandle,\n"
+    "                                                   const IRegionSamplingListener& listener,\n"
+    "                                                   const bool rgbSample) {\n"
+    "#else\n"
+    "status_t SurfaceFlinger::addRegionSamplingListener(const Rect& samplingArea,\n"
+    "                                                   const IBinder& stopLayerHandle,\n"
+    "                                                   const IRegionSamplingListener& listener) "
+    "{\n"
+    "#endif\n"
+    "    return 0;\n"
+    "}\n"
+    "\n"
+    "void SurfaceFlinger::commit() {}\n"
+    "\n"
+    "void SurfaceFlinger::composite() {}\n";
+
 /* #946: C++ code commonly gates alternate out-of-line method signatures with
  * #ifdef/#else/#endif. Raw tree-sitter can mis-balance the duplicate opening
  * braces and lose methods that follow the conditional block; extraction must
- * still recover later methods from the translation unit. */
+ * recover later methods and report ORIGINAL-source coordinates. */
 TEST(cpp_preproc_signature_gap_issue946) {
-    CBMFileResult *r =
-        extract("struct Rect {};\n"
-                "struct IBinder {};\n"
-                "struct IRegionSamplingListener {};\n"
-                "typedef int status_t;\n"
-                "\n"
-                "class SurfaceFlinger {\n"
-                "public:\n"
-                "    status_t addRegionSamplingListener(const Rect&, const IBinder&,\n"
-                "                                       const IRegionSamplingListener&, bool);\n"
-                "    status_t addRegionSamplingListener(const Rect&, const IBinder&,\n"
-                "                                       const IRegionSamplingListener&);\n"
-                "    void commit();\n"
-                "    void composite();\n"
-                "};\n"
-                "\n"
-                "#ifdef FLYME_GRAPHICS_EXTEND_LUMARGB\n"
-                "status_t SurfaceFlinger::addRegionSamplingListener(const Rect& samplingArea,\n"
-                "                                                   const IBinder& stopLayerHandle,\n"
-                "                                                   const IRegionSamplingListener& listener,\n"
-                "                                                   const bool rgbSample) {\n"
-                "#else\n"
-                "status_t SurfaceFlinger::addRegionSamplingListener(const Rect& samplingArea,\n"
-                "                                                   const IBinder& stopLayerHandle,\n"
-                "                                                   const IRegionSamplingListener& listener) {\n"
-                "#endif\n"
-                "    return 0;\n"
-                "}\n"
-                "\n"
-                "void SurfaceFlinger::commit() {}\n"
-                "\n"
-                "void SurfaceFlinger::composite() {}\n",
-                CBM_LANG_CPP, "t", "SurfaceFlinger.cpp");
+    const char *src = CPP_PREPROC_SIGNATURE_GAP_SRC;
+    CBMFileResult *r = extract(src, CBM_LANG_CPP, "t", "SurfaceFlinger.cpp");
     ASSERT_NOT_NULL(r);
     ASSERT_FALSE(r->has_error);
-    ASSERT(has_def(r, "Method", "commit"));
-    ASSERT(has_def(r, "Method", "composite"));
+    const CBMDefinition *add = find_def_by_label_name(r, "Method", "addRegionSamplingListener");
+    ASSERT_NOT_NULL(add);
+    ASSERT_EQ(add->start_line, 22u);
+    ASSERT_EQ(add->end_line, 27u);
+    ASSERT(source_line_contains(src, add->start_line, "addRegionSamplingListener"));
+    ASSERT(source_line_contains(src, add->end_line, "}"));
+    const CBMDefinition *commit = find_def_by_label_name(r, "Method", "commit");
+    ASSERT_NOT_NULL(commit);
+    ASSERT_EQ(commit->start_line, 29u);
+    ASSERT_EQ(commit->end_line, 29u);
+    ASSERT(source_line_contains(src, commit->start_line, "commit()"));
     const CBMDefinition *composite = find_def_by_label_name(r, "Method", "composite");
     ASSERT_NOT_NULL(composite);
     ASSERT_EQ(composite->start_line, 31u);
     ASSERT_EQ(composite->end_line, 31u);
+    ASSERT(source_line_contains(src, composite->start_line, "composite()"));
     ASSERT_FALSE(r->parse_incomplete);
     ASSERT_EQ(r->error_region_count, 0);
     ASSERT_NULL(r->error_ranges);
     cbm_free_result(r);
+    PASS();
+}
+
+TEST(cpp_preproc_signature_gap_first_branch_define) {
+    const char *src = CPP_PREPROC_SIGNATURE_GAP_SRC;
+    const char *defines[] = {"FLYME_GRAPHICS_EXTEND_LUMARGB", NULL};
+    CBMFileResult *r =
+        extract_with_preproc_options(src, CBM_LANG_CPP, "t", "SurfaceFlinger.cpp", defines, NULL);
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    const CBMDefinition *add = find_def_by_label_name(r, "Method", "addRegionSamplingListener");
+    ASSERT_NOT_NULL(add);
+    ASSERT_EQ(add->start_line, 17u);
+    ASSERT_EQ(add->end_line, 27u);
+    ASSERT_NEQ(add->end_line, 20u);
+    ASSERT(source_line_contains(src, add->start_line, "addRegionSamplingListener"));
+    ASSERT(source_line_contains(src, add->end_line, "}"));
+    const CBMDefinition *commit = find_def_by_label_name(r, "Method", "commit");
+    const CBMDefinition *composite = find_def_by_label_name(r, "Method", "composite");
+    ASSERT_NOT_NULL(commit);
+    ASSERT_NOT_NULL(composite);
+    ASSERT_EQ(commit->start_line, 29u);
+    ASSERT_EQ(composite->start_line, 31u);
+    ASSERT_FALSE(r->parse_incomplete);
+    ASSERT_EQ(r->error_region_count, 0);
+    ASSERT_NULL(r->error_ranges);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(cpp_preproc_remap_failure_skips_macro_generated_callable) {
+    const char *src = "#define MAKE_FN(name) int name() { return 1; }\n"
+                      "#ifdef ENABLE_GENERATED\n"
+                      "MAKE_FN(generated)\n"
+                      "#endif\n"
+                      "int visible() { return 0; }\n";
+    const char *defines[] = {"ENABLE_GENERATED", NULL};
+    CBMFileResult *r =
+        extract_with_preproc_options(src, CBM_LANG_CPP, "t", "macro.cpp", defines, NULL);
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    ASSERT_FALSE(has_def(r, "Function", "generated"));
+    ASSERT(has_def(r, "Function", "visible"));
+    ASSERT_TRUE(r->parse_incomplete);
+    ASSERT_GTE(r->error_region_count, 1);
+    ASSERT_NOT_NULL(r->error_ranges);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(cpp_preproc_include_header_defs_not_main_owned) {
+    char tmpdir[256] = "/tmp/cbm_header_XXXXXX";
+    ASSERT_NOT_NULL(cbm_mkdtemp(tmpdir));
+
+    char header_path[512];
+    snprintf(header_path, sizeof(header_path), "%s/helper.h", tmpdir);
+    FILE *header = cbm_fopen(header_path, "wb");
+    ASSERT_NOT_NULL(header);
+    ASSERT_GTE(fputs("int header_owned() { return 1; }\n", header), 0);
+    ASSERT_EQ(fclose(header), 0);
+
+    const char *includes[] = {tmpdir, NULL};
+    const char *src = "#include \"helper.h\"\n"
+                      "int main_owned() { return 0; }\n";
+    CBMFileResult *r =
+        extract_with_preproc_options(src, CBM_LANG_CPP, "t", "main.cpp", NULL, includes);
+    cbm_unlink(header_path);
+    cbm_rmdir(tmpdir);
+
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    ASSERT(has_def(r, "Function", "main_owned"));
+    ASSERT_FALSE(has_def(r, "Function", "header_owned"));
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(cpp_preproc_remap_does_not_match_call_site) {
+    const char *src = "int main() {\n"
+                      "    if (foo()) {\n"
+                      "        return 1;\n"
+                      "    }\n"
+                      "    return 0;\n"
+                      "}\n"
+                      "\n"
+                      "#ifdef ENABLE_GUARDED\n"
+                      "int guarded(int x) {\n"
+                      "#else\n"
+                      "int guarded(int x) {\n"
+                      "#endif\n"
+                      "    return x;\n"
+                      "}\n"
+                      "\n"
+                      "int foo() {\n"
+                      "    return 1;\n"
+                      "}\n";
+    CBMFileResult *r = extract(src, CBM_LANG_CPP, "t", "callsite.cpp");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    const CBMDefinition *foo = find_def_by_label_name(r, "Function", "foo");
+    ASSERT_NOT_NULL(foo);
+    ASSERT_EQ(foo->start_line, 16u);
+    ASSERT_EQ(foo->end_line, 18u);
+    ASSERT(source_line_contains(src, 2u, "foo()"));
+    ASSERT(source_line_contains(src, foo->start_line, "int foo()"));
+    ASSERT_FALSE(r->parse_incomplete);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(cpp_preproc_recovered_ranges_over_256) {
+    enum { N = 300 };
+    size_t cap = (size_t)N * 64u + 512u;
+    char *src = (char *)malloc(cap);
+    ASSERT_NOT_NULL(src);
+    size_t off = 0;
+    off += (size_t)snprintf(src + off, cap - off,
+                            "#ifdef ENABLE_BIG\n"
+                            "int guarded(int x) {\n"
+                            "#else\n"
+                            "int guarded(int x) {\n"
+                            "#endif\n"
+                            "    return x;\n"
+                            "}\n");
+    for (int i = 0; i < N; i++) {
+        off += (size_t)snprintf(src + off, cap - off, "int recovered_%03d(void) { return %d; }\n",
+                                i, i);
+    }
+
+    CBMFileResult *r =
+        cbm_extract_file(src, (int)off, CBM_LANG_C, "t", "many_recovered.c", 0, NULL, NULL);
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    ASSERT_FALSE(r->parse_incomplete);
+    ASSERT_EQ(r->error_region_count, 0);
+    ASSERT_NULL(r->error_ranges);
+    ASSERT(has_def(r, "Function", "recovered_000"));
+    ASSERT(has_def(r, "Function", "recovered_299"));
+    const CBMDefinition *last = find_def_by_label_name(r, "Function", "recovered_299");
+    ASSERT_NOT_NULL(last);
+    ASSERT(source_line_contains(src, last->start_line, "recovered_299"));
+    cbm_free_result(r);
+    free(src);
     PASS();
 }
 
@@ -3666,6 +3856,11 @@ SUITE(extraction) {
     RUN_TEST(cpp_function);
     RUN_TEST(cpp_out_of_line_method_issue428);
     RUN_TEST(cpp_preproc_signature_gap_issue946);
+    RUN_TEST(cpp_preproc_signature_gap_first_branch_define);
+    RUN_TEST(cpp_preproc_remap_failure_skips_macro_generated_callable);
+    RUN_TEST(cpp_preproc_include_header_defs_not_main_owned);
+    RUN_TEST(cpp_preproc_remap_does_not_match_call_site);
+    RUN_TEST(cpp_preproc_recovered_ranges_over_256);
     RUN_TEST(cobol_paragraph);
     RUN_TEST(verilog_module);
     RUN_TEST(cuda_kernel);
