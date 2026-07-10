@@ -2225,6 +2225,11 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
              * empty — the LSP was confident but its target isn't in the gbuf
              * (external/unindexed), so drop the edge rather than fall back to
              * the registry resolver, matching prior single-lookup semantics. */
+            lsp_target =
+                cbm_pipeline_lsp_target_node(rc->main_gbuf, rc->project_name, lsp->callee_qn);
+            fprintf(stderr, "LSPDIAGT callee_qn=%s resolved=%d strat=%s conf=%.2f\n",
+                    lsp->callee_qn ? lsp->callee_qn : "-", lsp_target ? 1 : 0,
+                    lsp->strategy ? lsp->strategy : "-", lsp->confidence);
             lsp_target = cbm_pipeline_lsp_target_node(rc->main_gbuf, rc->project_name,
                                                       lsp->callee_qn, allow_tail);
             if (lsp_target) {

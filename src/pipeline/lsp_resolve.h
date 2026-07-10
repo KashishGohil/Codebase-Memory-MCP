@@ -137,10 +137,16 @@ static inline const CBMResolvedCall *cbm_pipeline_find_lsp_resolution(
     if (!call->enclosing_func_qn || !call->callee_name) {
         return NULL;
     }
+    const CBMResolvedCall *best = NULL;
+    fprintf(stderr, "LSPDIAGJ call enc=%s callee=%s n=%d\n",
+            call->enclosing_func_qn, call->callee_name, arr->count);
 
     const CBMResolvedCall *best_exact = NULL;
     for (int i = 0; i < arr->count; i++) {
         const CBMResolvedCall *rc = &arr->items[i];
+        fprintf(stderr, "LSPDIAGJ  rc[%d] caller=%s callee_qn=%s conf=%.2f strat=%s\n", i,
+                rc->caller_qn ? rc->caller_qn : "-", rc->callee_qn ? rc->callee_qn : "-",
+                rc->confidence, rc->strategy ? rc->strategy : "-");
         if (!rc->caller_qn || !rc->callee_qn) {
             continue;
         }
