@@ -334,6 +334,44 @@ static bool resolve_global_excludes_path(char *out, size_t out_sz) {
     return false;
 }
 
+/* ── Env-var-configurable extra skip dirs ──────────────────────────
+ * CBM_EXTRA_SKIP_DIRS: comma-separated directory names to skip, on top of
+ * the hardcoded ALWAYS_SKIP_DIRS above. Lets a caller add repo-specific or
+ * site-specific artifact dirs (e.g. ".dbt", a Terraform state dir, a prior
+ * AI-tooling output dir) per invocation, without a rebuild. Applies in
+ * every mode, same as ALWAYS_SKIP_DIRS. Not cached across calls (the list
+ * is short and this keeps the function safe to call from any thread). */
+static bool str_in_env_csv(const char *s, const char *csv) {
+    if (!s || !csv || !csv[0]) {
+        return false;
+    }
+    size_t slen = strlen(s);
+    const char *p = csv;
+    while (*p) {
+        const char *comma = strchr(p, ',');
+        size_t seg_len = comma ? (size_t)(comma - p) : strlen(p);
+
+        const char *seg = p;
+        size_t len = seg_len;
+        while (len > 0 && isspace((unsigned char)seg[0])) {
+            seg++;
+            len--;
+        }
+        while (len > 0 && isspace((unsigned char)seg[len - 1])) {
+            len--;
+        }
+
+        if (len == slen && strncmp(seg, s, len) == 0) {
+            return true;
+        }
+        if (!comma) {
+            break;
+        }
+        p = comma + 1;
+    }
+    return false;
+}
+
 /* ── Public filter functions ─────────────────────── */
 
 bool cbm_should_skip_dir(const char *dirname, cbm_index_mode_t mode) {
@@ -342,6 +380,16 @@ bool cbm_should_skip_dir(const char *dirname, cbm_index_mode_t mode) {
     }
 
     if (str_in_list(dirname, ALWAYS_SKIP_DIRS)) {
+        return true;
+    }
+
+    /* Read through cbm_safe_getenv so the value is copied into a caller-owned
+     * buffer before use — raw getenv() is mt-unsafe (pointer can be invalidated
+     * by a concurrent setenv/putenv) and mishandles UTF-8 on Windows. */
+    char extra_skip[CBM_SZ_1K];
+    if (str_in_env_csv(dirname,
+                       cbm_safe_getenv("CBM_EXTRA_SKIP_DIRS", extra_skip,
+                                       sizeof(extra_skip), NULL))) {
         return true;
     }
 
