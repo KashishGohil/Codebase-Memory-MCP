@@ -419,13 +419,14 @@ TEST(repro_grammar_web_css) {
  * "Function" def for "flex-center". The @include fires a call_expression.
  *
  * Dims asserted: 1-8 (full battery).
- * Dim 5 expected GREEN: "Function" def for "flex-center".
+ * Dim 5 expected GREEN: "Function" def for "flex-center" (and "card").
  * Dim 6 expected GREEN: call to "flex-center" via @include.
- * Dim 7 expected RED: cbm_find_enclosing_func walks the TSNode ancestry
- *   looking for a node type in func_kinds_for_lang(CBM_LANG_SCSS). If
- *   mixin_statement is absent from that set the @include call inside the .card
- *   rule will be sourced at Module rather than at the "flex-center" Function.
- *   RED here documents the enclosing-func gap for SCSS.
+ * Dim 7 expected GREEN: the @include flex-center sits inside the "card"
+ *   mixin_statement body. mixin_statement is in scss_func_types, so
+ *   push_boundary_scopes pushes a SCOPE_FUNC for "card" and the in-body call
+ *   sources to the "card" Function rather than the Module. (The earlier fixture
+ *   put the @include inside a plain rule_set, which is not a callable, so the
+ *   call was legitimately Module-sourced -- a broken-fixture, not a prod bug.)
  * Dim 8 expected GREEN: dangling edge check.
  */
 TEST(repro_grammar_web_scss) {
@@ -436,7 +437,7 @@ TEST(repro_grammar_web_scss) {
         "  align-items: center;\n"
         "}\n"
         "\n"
-        ".card {\n"
+        "@mixin card {\n"
         "  @include flex-center;\n"
         "  background: #fff;\n"
         "}\n";
@@ -657,30 +658,35 @@ TEST(repro_grammar_web_prisma) {
 }
 
 /* ── GoTemplate ──────────────────────────────────────────────────────────────
- * Idiomatic Go template: a top-level template body that calls a built-in
- * (printf) and a named block (template action). gotemplate_call_types =
- * {"function_call", "method_call", "template_action"} so call extraction
- * fires. gotemplate_module_types = {"template"}. No func_types; no "Function"
- * def is minted for template definitions.
+ * Idiomatic Go template: a "greeting" named template whose body calls the
+ * built-in printf, and a "page" named template whose body invokes greeting via
+ * a {{ template }} action. gotemplate_call_types = {"function_call",
+ * "method_call", "template_action"}; gotemplate_module_types = {"template"}.
+ * gotemplate_func_types = {"define_action"} so each {{ define "x" }} block mints
+ * a "Function" def and pushes a SCOPE_FUNC for call attribution.
  *
  * Dims asserted: 1-4 + 6 + 7-8.
- * Dim 5 SKIPPED: no func/class/field_types; no def is minted for the named
- * block template (tree-sitter-gotmpl does not map define blocks to func_types).
- * Dim 6 expected GREEN: call to "printf" via function_call or template_action.
- * Dim 7 expected RED: no "Function" node exists to source the call -- it will
- *   be sourced at Module. This is the direct consequence of having call_types
- *   without matching func_types.
+ * Dim 6 expected GREEN: call to "printf" inside the greeting define body.
+ * Dim 7 expected GREEN: the {{ template "greeting" }} call inside the page
+ *   define body resolves to the same-file greeting Function and sources to the
+ *   page Function. (Previously the spec had no func_types -- the def-extractor
+ *   minted a "Function" for define_action but the scope-tracking func_types list
+ *   was empty, so the call mis-sourced to Module: a production sync bug, now
+ *   fixed by adding define_action to gotemplate_func_types + a compute_func_qn
+ *   case that strips the quoted template name. The fixture also moved its only
+ *   call sites from top level into define bodies.)
  * Dim 8 expected GREEN: no dangling CALLS endpoints.
  */
 TEST(repro_grammar_web_gotemplate) {
     static const char src[] =
         "{{ define \"greeting\" }}\n"
-        "  Hello, {{ .Name }}!\n"
+        "  {{ $msg := printf \"Welcome to %s\" .Site }}\n"
+        "  <h1>{{ $msg }}</h1>\n"
         "{{ end }}\n"
         "\n"
-        "{{ $msg := printf \"Welcome to %s\" .Site }}\n"
-        "<h1>{{ $msg }}</h1>\n"
-        "{{ template \"greeting\" . }}\n";
+        "{{ define \"page\" }}\n"
+        "  {{ template \"greeting\" . }}\n"
+        "{{ end }}\n";
     if (callable_battery("GoTemplate", src, CBM_LANG_GOTEMPLATE,
                          "index.tmpl", NULL, "printf") != 0)
         return 1;

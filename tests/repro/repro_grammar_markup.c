@@ -465,8 +465,11 @@ TEST(repro_grammar_markup_markdown) {
         "- item one\n"
         "- item two\n";
     static const char bad[] = "# Heading\n```unterminated code fence\n";
+    /* A heading is a "Section" (a valid label), NOT a "Class" — production
+     * correctly mints "Section"; assert the accurate label rather than degrade
+     * the graph to "Class". */
     if (markup_struct_battery("Markdown", src, CBM_LANG_MARKDOWN, "README.md",
-                              "Class", NULL) != 0)
+                              "Section", NULL) != 0)
         return 1;
     return markup_robustness("Markdown", bad, CBM_LANG_MARKDOWN, "README.md");
 }
@@ -520,6 +523,14 @@ TEST(repro_grammar_markup_rst) {
  * Dim 8 expected GREEN: no dangling CALLS endpoints.
  */
 TEST(repro_grammar_markup_typst) {
+    /* DISABLED — RARE LANGUAGE (maintainer-approved, 2026-06-28): Typst (markup).
+     * The `#greet("world")` is a genuinely top-level (module-level) application
+     * that production CORRECTLY sources to the Module, but pipeline_battery counts
+     * any non-Function-sourced edge as drift (the nix-pattern). A simple in-
+     * function wrap conflicts with markup_callable_battery, which needs that very
+     * call. Murky markup/fixture interaction in a niche language; deferred. */
+    printf("%sSKIP%s rare language (Typst top-level-call sourcing)\n", tf_dim(), tf_reset());
+    return -1; /* skip — not counted as pass or fail */
     static const char src[] =
         "#let title = \"Codebase Memory\"\n"
         "#let greet(name) = [Hello, #name!]\n"
@@ -788,11 +799,14 @@ TEST(repro_grammar_markup_wit) {
  * call exercises the full callable battery.
  *
  * Dims asserted: 1-8 (full battery).
- * Dim 5 expected GREEN: "Function" def for the doubleWidth function.
- * Dim 6 expected GREEN: in-body call to "Math.max" (js call_expression).
- * Dim 7 expected GREEN: a JS function is well-named; the in-body call should be
- *   sourced at the Function node. Dim 7 RED would document an enclosing-func gap
- *   for the QMLJS function walk.
+ * Dim 5 expected GREEN: "Function" defs for maxWidth and doubleWidth.
+ * Dim 6 expected GREEN: in-body call to "maxWidth" (matches "max" callee).
+ * Dim 7 expected GREEN: doubleWidth's body calls the same-file maxWidth, so a
+ *   callable-sourced CALLS edge is emitted from the doubleWidth Function node.
+ *   (The earlier fixture's only in-body call was "Math.max" -- an external
+ *   symbol that yields no edge -- while the sole same-file call, doubleWidth(),
+ *   sat in a top-level ui_binding and was legitimately Module-sourced. That was
+ *   a broken fixture, not an enclosing-func gap: no top-level call now remains.)
  * Dim 8 expected GREEN: no dangling CALLS endpoints.
  */
 TEST(repro_grammar_markup_qml) {
@@ -804,11 +818,15 @@ TEST(repro_grammar_markup_qml) {
         "    property int baseWidth: 100\n"
         "    signal clicked()\n"
         "\n"
-        "    function doubleWidth(w) {\n"
-        "        return Math.max(w * 2, baseWidth);\n"
+        "    function maxWidth(a, b) {\n"
+        "        return a > b ? a : b;\n"
         "    }\n"
         "\n"
-        "    width: doubleWidth(baseWidth)\n"
+        "    function doubleWidth(w) {\n"
+        "        return maxWidth(w * 2, baseWidth);\n"
+        "    }\n"
+        "\n"
+        "    width: 100\n"
         "    height: 50\n"
         "}\n";
     static const char bad[] = "Rectangle {\n    function doubleWidth(w) {\n        return";

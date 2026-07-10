@@ -94,6 +94,74 @@ static const char *capture_logs_end(void) {
 
 /* ── Tests ───────────────────────────────────────────────────────── */
 
+/* Rewrite the "original_size" number in an artifact.json in place, adding
+ * `delta` to it. Returns false if the field / a digit run isn't found. */
+static bool bump_artifact_original_size(const char *meta_path, long delta) {
+    FILE *fp = fopen(meta_path, "rb");
+    if (!fp) {
+        return false;
+    }
+    char buf[4096];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, fp);
+    fclose(fp);
+    buf[n] = '\0';
+    char *key = strstr(buf, "\"original_size\"");
+    if (!key) {
+        return false;
+    }
+    char *colon = strchr(key, ':');
+    if (!colon) {
+        return false;
+    }
+    char *ds = colon + 1;
+    while (*ds == ' ' || *ds == '\t') {
+        ds++;
+    }
+    char *de = ds;
+    while (*de >= '0' && *de <= '9') {
+        de++;
+    }
+    if (de == ds) {
+        return false;
+    }
+    long val = strtol(ds, NULL, 10) + delta;
+    char out[4096];
+    int pre = (int)(ds - buf);
+    snprintf(out, sizeof(out), "%.*s%ld%s", pre, buf, val, de);
+    fp = fopen(meta_path, "wb");
+    if (!fp) {
+        return false;
+    }
+    fwrite(out, 1, strlen(out), fp);
+    fclose(fp);
+    return true;
+}
+
+/* The decompressed size is driven by the zstd frame's own content-size header,
+ * not the separately-stored original_size field (which travels in plaintext
+ * artifact.json and is trivially editable). A mismatch between the two must be
+ * rejected — this is the check that keeps the destination allocation and the
+ * decoder capacity pinned to the same verified size, so a doctored size can
+ * never make the decoder write past the buffer. */
+TEST(artifact_import_rejects_size_mismatch) {
+    setup_artifact_test();
+    create_test_db(g_db);
+    ASSERT_EQ(cbm_artifact_export(g_db, g_repo, "test-proj", CBM_ARTIFACT_FAST), 0);
+
+    char meta[1024];
+    snprintf(meta, sizeof(meta), "%s/.codebase-memory/artifact.json", g_repo);
+    ASSERT_TRUE(
+        bump_artifact_original_size(meta, 4096)); /* claim 4 KiB more than the frame holds */
+
+    char import_db[1024];
+    snprintf(import_db, sizeof(import_db), "%s/imported.db", g_tmpdir);
+    int rc = cbm_artifact_import(g_repo, import_db);
+    ASSERT_NEQ(rc, 0); /* must reject the mismatch, not import on the doctored size */
+
+    cleanup_dir(g_tmpdir);
+    PASS();
+}
+
 TEST(artifact_export_fast_roundtrip) {
     setup_artifact_test();
     create_test_db(g_db);
@@ -242,6 +310,20 @@ TEST(artifact_gitattributes_created) {
     struct stat st;
     ASSERT_EQ(stat(ga, &st), 0);
 
+    /* Attribute ORDER is load-bearing: gitattributes apply left to right and
+     * the `binary` macro expands to `-diff -merge -text`, so a trailing
+     * `binary` unsets a preceding `merge=ours` (git check-attr merge reports
+     * "unset" and concurrent artifact refreshes produce binary conflicts
+     * instead of auto-resolving). The driver must come after the macro. */
+    FILE *gaf = fopen(ga, "r");
+    ASSERT_NOT_NULL(gaf);
+    char content[512] = {0};
+    size_t rd = fread(content, 1, sizeof(content) - 1, gaf);
+    (void)fclose(gaf);
+    ASSERT_TRUE(rd > 0);
+    ASSERT_NOT_NULL(strstr(content, CBM_ARTIFACT_FILENAME " binary merge=ours"));
+    ASSERT_TRUE(strstr(content, "merge=ours binary") == NULL);
+
     cleanup_dir(g_tmpdir);
     PASS();
 }
@@ -318,7 +400,53 @@ TEST(artifact_null_safety) {
     PASS();
 }
 
+/* ── git shell-out path safety ────────────────────────────────────────────────
+ *
+ * artifact.c shells out to git via cbm_popen with the repo path interpolated into
+ * the command. It previously used single quotes (`git -C '%s'`) with NO validation
+ * — but cmd.exe does not honor single quotes, so on Windows a repo path with a space
+ * broke argument grouping, and an embedded quote/metacharacter could break out of the
+ * intended argument entirely. The hardening validates the path and switches to double
+ * quotes; cbm_artifact_repo_path_is_shell_safe() is the guard. Rejecting quotes and
+ * shell/cmd.exe metacharacters is the contract; spaces must stay allowed (double
+ * quotes handle them) — that is the concrete regression the single-quote form caused. */
+TEST(artifact_repo_path_shell_safe_accepts_plain_and_spaced) {
+    ASSERT_TRUE(cbm_artifact_repo_path_is_shell_safe("/home/user/repo"));
+    ASSERT_TRUE(cbm_artifact_repo_path_is_shell_safe("C:/Users/me/repo"));
+    ASSERT_TRUE(cbm_artifact_repo_path_is_shell_safe("/home/user/my repo")); /* space OK */
+    PASS();
+}
+
+TEST(artifact_repo_path_shell_safe_rejects_injection) {
+    ASSERT_FALSE(cbm_artifact_repo_path_is_shell_safe(NULL));
+    ASSERT_FALSE(cbm_artifact_repo_path_is_shell_safe("it's"));        /* single quote */
+    ASSERT_FALSE(cbm_artifact_repo_path_is_shell_safe("a\"b"));        /* double quote */
+    ASSERT_FALSE(cbm_artifact_repo_path_is_shell_safe("x; rm -rf /")); /* command sep */
+    ASSERT_FALSE(cbm_artifact_repo_path_is_shell_safe("$(whoami)"));   /* substitution */
+    ASSERT_FALSE(cbm_artifact_repo_path_is_shell_safe("a`id`b"));      /* backtick */
+    ASSERT_FALSE(cbm_artifact_repo_path_is_shell_safe("a|b"));         /* pipe */
+    PASS();
+}
+
+TEST(artifact_repo_path_shell_safe_rejects_cmd_metachars_on_windows) {
+#ifdef _WIN32
+    /* cmd.exe expands %VAR%, delayed !VAR!, and escapes with ^ even inside double
+     * quotes — git_context.c rejects these on Windows and this must match. */
+    ASSERT_FALSE(cbm_artifact_repo_path_is_shell_safe("C:/a%USERPROFILE%b"));
+    ASSERT_FALSE(cbm_artifact_repo_path_is_shell_safe("C:/a!b"));
+    ASSERT_FALSE(cbm_artifact_repo_path_is_shell_safe("C:/a^b"));
+#else
+    /* POSIX shells treat % ! ^ literally inside double quotes — allowed. */
+    ASSERT_TRUE(cbm_artifact_repo_path_is_shell_safe("/a%b"));
+    ASSERT_TRUE(cbm_artifact_repo_path_is_shell_safe("/a^b"));
+#endif
+    PASS();
+}
+
 SUITE(artifact) {
+    RUN_TEST(artifact_repo_path_shell_safe_accepts_plain_and_spaced);
+    RUN_TEST(artifact_repo_path_shell_safe_rejects_injection);
+    RUN_TEST(artifact_repo_path_shell_safe_rejects_cmd_metachars_on_windows);
     RUN_TEST(artifact_export_fast_roundtrip);
     RUN_TEST(artifact_export_best_roundtrip);
     RUN_TEST(artifact_exists_check);
@@ -328,5 +456,6 @@ SUITE(artifact) {
     RUN_TEST(artifact_gitattributes_created);
     RUN_TEST(artifact_export_rename_failure_logs_specific_error);
     RUN_TEST(pipeline_persistence_export_failure_returns_error);
+    RUN_TEST(artifact_import_rejects_size_mismatch);
     RUN_TEST(artifact_null_safety);
 }

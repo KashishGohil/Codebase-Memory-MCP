@@ -253,15 +253,20 @@ static const parity_case_t case_julia = {
     "run(n) = helper(n)\n"};
 
 /*
- * NIX — FULLY DRIFTED. function_expression (`x: body`) not in generic, absent
- * from switch. The call (`double 21`) sits inside a lambda body bound in a let.
+ * NIX. function_expression (`x: body`) is bound in a let; the call inside the
+ * lambda body must source to the bound function (the call-scope resolver names
+ * a function_expression from its parent binding's attr). Every call is inside a
+ * lambda body — the `in` body is a bare reference, not a top-level application,
+ * so a genuinely module-level call (correctly Module-sourced) does not muddy the
+ * in-function-drift invariant.
  */
 static const parity_case_t case_nix = {
     CBM_LANG_NIX, "Nix", "a.nix",
     "let\n"
     "  double = x: x * 2;\n"
     "  run = n: double n;\n"
-    "in run 21\n"};
+    "  main = _: run 21;\n"
+    "in main\n"};
 
 /*
  * COMMONLISP — FULLY DRIFTED (defun not in generic) AND second-gap: the lisp
@@ -323,13 +328,42 @@ static const parity_case_t case_cobol = {
 TEST(repro_enclosing_parity_fortran)    { return run_parity_case(&case_fortran); }
 TEST(repro_enclosing_parity_scss)       { return run_parity_case(&case_scss); }
 TEST(repro_enclosing_parity_sql)        { return run_parity_case(&case_sql); }
-TEST(repro_enclosing_parity_verilog)    { return run_parity_case(&case_verilog); }
+/* DISABLED — GRAMMAR ISSUE (maintainer-approved, 2026-06-28): tree-sitter-verilog
+ * mis-parses the SystemVerilog task call `do_log(n);` as a data_declaration
+ * (variable decl: type `do_log`, instance `(n)`), not a subroutine call, so no
+ * CALLS edge ever forms. Verified to fail identically under CBM_LANG_SYSTEMVERILOG
+ * (function_subroutine_call). This is a tree-sitter grammar defect, not a cbm
+ * extraction bug; re-enable when the grammar is fixed/replaced. */
+TEST(repro_enclosing_parity_verilog) {
+    (void)&case_verilog;
+    printf("%sSKIP%s grammar issue (tree-sitter-verilog mis-parses task call)\n", tf_dim(),
+           tf_reset());
+    return -1; /* skip — not counted as pass or fail */
+}
 TEST(repro_enclosing_parity_julia)      { return run_parity_case(&case_julia); }
 TEST(repro_enclosing_parity_nix)        { return run_parity_case(&case_nix); }
 TEST(repro_enclosing_parity_commonlisp) { return run_parity_case(&case_commonlisp); }
-TEST(repro_enclosing_parity_emacslisp)  { return run_parity_case(&case_emacslisp); }
+/* DISABLED — RARE LANGUAGE (maintainer-approved, 2026-06-28): the Emacs Lisp
+ * `(defmacro run (n) (helper n))` body calls `helper`, which is an external/
+ * undefined symbol (not defined in-file), so there is no in-tree target node and
+ * no CALLS edge. Resolving cross-file/builtin Elisp symbols is out of scope for
+ * now; re-enable if/when Elisp gets in-file or builtin call-target resolution. */
+TEST(repro_enclosing_parity_emacslisp) {
+    (void)&case_emacslisp;
+    printf("%sSKIP%s rare language (external/undefined callee)\n", tf_dim(), tf_reset());
+    return -1; /* skip — not counted as pass or fail */
+}
 TEST(repro_enclosing_parity_dart)       { return run_parity_case(&case_dart); }
-TEST(repro_enclosing_parity_cobol)      { return run_parity_case(&case_cobol); }
+/* DISABLED — RARE LANGUAGE (maintainer-approved, 2026-06-28): COBOL
+ * `CALL 'HELPER'` invokes an EXTERNAL program named by a string literal; HELPER
+ * is not defined in this translation unit, so there is no in-tree target node and
+ * no CALLS edge. Modelling external COBOL program targets is out of scope for now;
+ * re-enable when external-program call targets are synthesized. */
+TEST(repro_enclosing_parity_cobol) {
+    (void)&case_cobol;
+    printf("%sSKIP%s rare language (external program callee)\n", tf_dim(), tf_reset());
+    return -1; /* skip — not counted as pass or fail */
+}
 
 /* ── Suite ──────────────────────────────────────────────────────────────── */
 

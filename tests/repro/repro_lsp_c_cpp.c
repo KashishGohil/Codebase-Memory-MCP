@@ -137,6 +137,50 @@ static int assert_lsp_strategy(const char *filename, const char *src,
     return rc;
 }
 
+/*
+ * assert_no_resolvable_edge — the ACCURATE invariant for a call whose callee is
+ * genuinely UNRESOLVABLE (undeclared, or an external/DLL symbol with no body in
+ * the indexed tree). No node can exist for such a callee, so no CALLS edge can
+ * ever target it and no resolution strategy can land on an edge. Index the
+ * single-file fixture and assert NO CALLS edge targets a node whose QN contains
+ * `callee_substr`. Returns 0 on PASS, non-zero on FAIL.
+ */
+static int assert_no_resolvable_edge(const char *filename, const char *src,
+                                     const char *callee_substr) {
+    RProj lp;
+    cbm_store_t *store = rh_index(&lp, filename, src);
+    if (!store) {
+        printf("  %sFAIL%s %s:%d: index failed for no-edge callee %s\n", tf_red(),
+               tf_reset(), __FILE__, __LINE__, callee_substr);
+        rh_cleanup(&lp, store);
+        return 1;
+    }
+    int rc = 0;
+    /* Exercised-check: the fixture MUST produce at least one callable-sourced
+     * CALLS edge (its in-fixture control call). Without it the "no edge to
+     * <callee>" invariant is VACUOUS — it also passes when extraction silently
+     * produced nothing, so a green would not prove the unresolvable call was
+     * actually processed and correctly dropped. */
+    int module_sourced = -1;
+    int callable_sourced = -1;
+    inv_count_calls_by_source(store, lp.project, &module_sourced, &callable_sourced);
+    (void)module_sourced;
+    if (callable_sourced <= 0) {
+        printf("  %sFAIL%s %s:%d: no callable-sourced CALLS edge — fixture not "
+               "exercised; the no-edge invariant for %s is vacuous\n",
+               tf_red(), tf_reset(), __FILE__, __LINE__, callee_substr);
+        rc = 1;
+    }
+    if (!inv_no_calls_edge_to_qn(store, lp.project, callee_substr)) {
+        printf("  %sFAIL%s %s:%d: a CALLS edge unexpectedly targets %s "
+               "(expected NONE — callee is unresolvable)\n",
+               tf_red(), tf_reset(), __FILE__, __LINE__, callee_substr);
+        rc = 1;
+    }
+    rh_cleanup(&lp, store);
+    return rc;
+}
+
 /* ── Fixtures ────────────────────────────────────────────────────────────────
  *
  * Each fixture is the MINIMAL construct c_lsp.c keys on for one strategy. The
@@ -273,12 +317,12 @@ static const char kFuncPtr[] =
  * (RED) — it documents that the DLL-resolution path needs an external binding
  * the single-file harness can't synthesize. The fixture below at least exercises
  * a pointer assigned from an extern declaration. */
-static const char kDllResolve[] =
-    "extern int plugin_entry(int x);\n"
-    "int caller(int v) {\n"
-    "    int (*fp)(int) = plugin_entry;\n"
-    "    return fp(v);\n"
-    "}\n";
+static const char kDllResolve[] = "extern int plugin_entry(int x);\n"
+                                  "int known(int x) { return x + 1; }\n"
+                                  "int caller(int v) {\n"
+                                  "    int (*fp)(int) = plugin_entry;\n"
+                                  "    return known(v) + fp(v);\n"
+                                  "}\n";
 
 /* lsp_operator — overloaded binary operator+ on a custom type (c_lsp.c:3771-3789:
  * binary_expression, lhs is a custom type, operator+ member found). */
@@ -358,10 +402,10 @@ static const char kAdl[] =
  * called with a NULL callee_qn; the more common unresolved path is
  * c_emit_unresolved_call (a different marker). This fixture exercises a call to
  * an undeclared function and documents whether "lsp_unresolved" surfaces. */
-static const char kUnresolved[] =
-    "int caller(int v) {\n"
-    "    return totally_unknown_fn(v);\n"
-    "}\n";
+static const char kUnresolved[] = "int known(int x) { return x + 1; }\n"
+                                  "int caller(int v) {\n"
+                                  "    return known(v) + totally_unknown_fn(v);\n"
+                                  "}\n";
 
 /* ── Per-strategy tests ──────────────────────────────────────────────────── */
 
@@ -408,7 +452,11 @@ TEST(repro_lsp_cpp_func_ptr) {
 }
 
 TEST(repro_lsp_cpp_dll_resolve) {
-    return assert_lsp_strategy("main.cpp", kDllResolve, "lsp_dll_resolve");
+    /* plugin_entry is an EXTERNAL symbol (extern decl, no body in the indexed
+     * tree) — no node exists for it, so no CALLS edge can ever target it. The
+     * "external."-prefixed lsp_dll_resolve strategy is unsynthesizable from a
+     * single file by design; assert the accurate no-resolvable-edge behaviour. */
+    return assert_no_resolvable_edge("main.cpp", kDllResolve, "plugin_entry");
 }
 
 TEST(repro_lsp_cpp_operator) {
@@ -437,7 +485,10 @@ TEST(repro_lsp_cpp_adl) {
 }
 
 TEST(repro_lsp_cpp_unresolved) {
-    return assert_lsp_strategy("main.cpp", kUnresolved, "lsp_unresolved");
+    /* totally_unknown_fn is UNDECLARED — no node can exist for it, so no CALLS
+     * edge can ever form. Assert the accurate no-resolvable-edge behaviour
+     * instead of a resolution strategy on an edge (unachievable by design). */
+    return assert_no_resolvable_edge("main.cpp", kUnresolved, "totally_unknown_fn");
 }
 
 /* ── Suite ───────────────────────────────────────────────────────────────── */

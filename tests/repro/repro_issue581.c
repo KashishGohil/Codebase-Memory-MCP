@@ -245,46 +245,41 @@ TEST(repro_issue581_query_rss_stable) {
     free(args);
     rh_cleanup(&lp, store);
 
-    // If RSS is not measurable (cbm_mem_rss() returns 0 and no Linux fallback),
-    // skip the growth assertion -- an unmeasurable RSS cannot produce a
-    // meaningful signal.  This avoids a false PASS masking a real leak on
-    // platforms where our RSS API is unavailable.
-    if (rss_warmup == 0 || rss_end == 0) {
-        printf("  NOTE: RSS not measurable on this platform/build; "
-               "growth assertion skipped (inconclusive, not a pass)\n");
-        PASS();
+    if (rss_warmup > 0 && rss_end > 0) {
+        printf("  rss_warmup_kb=%zu rss_end_kb=%zu factor=%.2f threshold=%.1f\n", rss_warmup / 1024,
+               rss_end / 1024, (double)rss_end / (double)rss_warmup, LEAK_FACTOR);
+    } else {
+        printf("  NOTE: RSS not measurable on this platform/build\n");
     }
 
-    printf("  rss_warmup_kb=%zu rss_end_kb=%zu factor=%.2f threshold=%.1f\n",
-           rss_warmup / 1024, rss_end / 1024,
-           (double)rss_end / (double)rss_warmup,
-           LEAK_FACTOR);
-
-    // PRIMARY assertion: end RSS must not exceed LEAK_FACTOR x warmup RSS.
+    // HONEST RED — this guard is currently VACUOUS and #581 is OPEN.
     //
-    // RED condition (current code):
-    //   SQLite WAL + mimalloc retained pages grow each iteration.
-    //   Over 150 iterations the cumulative growth pushes rss_end above
-    //   LEAK_FACTOR * rss_warmup.
-    //   ASSERT fires -> RED.
+    // This fixture CANNOT reproduce the leak: a 3-node graph over 150
+    // search_graph calls allocates far too little to move process RSS (observed
+    // factor=1.00), so the old "rss_end <= 3.0 x rss_warmup" assertion passed
+    // even on the leaking build. A green here would mean "leak fixed" while the
+    // leak is unfixed — a false guard that violates the tests-are-guards rule
+    // (green <=> fixed). So it stays RED.
     //
-    // GREEN condition (after fix):
-    //   Periodic compaction (cbm_mem_collect + WAL TRUNCATE checkpoint) keeps
-    //   rss_end near rss_warmup.  factor stays <1.5 comfortably.
+    // Turning this GREEN legitimately requires BOTH:
+    //   (a) a real reproduction tier — a long-running MCP session issuing
+    //       thousands of ops against a LARGE graph, measuring the SQLite WAL
+    //       file size and mimalloc committed pages DIRECTLY (not process-RSS
+    //       jitter) so the monotonic growth is actually observable; AND
+    //   (b) the fix — periodic SQLITE_CHECKPOINT_TRUNCATE + cbm_mem_collect() in
+    //       the MCP query loop / idle eviction (see the header + #581).
     //
-    // We report the ratio in the failure message so the fixer can see the
-    // growth slope without needing a profiler.
-    size_t rss_limit = (size_t)(rss_warmup * LEAK_FACTOR);
-    if (rss_end > rss_limit) {
-        printf("  BUG #581 reproduced: RSS grew %.2fx after %d search_graph calls "
-               "(warmup=%zu kB end=%zu kB limit=%zu kB)\n",
-               (double)rss_end / (double)rss_warmup,
-               ITER_TOTAL - ITER_WARMUP,
-               rss_warmup / 1024, rss_end / 1024, rss_limit / 1024);
-    }
-    ASSERT(rss_end <= rss_limit);
-
-    PASS();
+    // Until both land this is an honest "not fixed / not provable here" RED, not
+    // a false green.
+    /* TODO(#581): whitelisted known-red on the non-gating bug-repro board. The
+     * leak is a real OPEN bug; this fixture cannot yet reproduce it, so the test
+     * stays RED (honest "not fixed") rather than vacuously green. Turning it
+     * green requires a real WAL-size / mimalloc-committed-pages reproduction tier
+     * plus the query-path compaction fix (see header). Tracked, not skipped. */
+    FAIL("TODO(#581) whitelisted known-red: query-path memory leak is OPEN and "
+         "cannot be reproduced in this fixture (RSS factor ~1.0 even when "
+         "leaking) — needs a real WAL/committed-pages reproduction tier plus the "
+         "query-path compaction fix");
 }
 
 // -- Suite ------------------------------------------------------------------

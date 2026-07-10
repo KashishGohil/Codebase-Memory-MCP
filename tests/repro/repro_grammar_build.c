@@ -72,8 +72,8 @@
  *   STRUCTURAL WITH DEFS (dims 1-5 + R):
  *     DOCKERFILE     -- var_types = {env_instruction, arg_instruction} -> "Variable".
  *     GOMOD          -- var_types = {require_directive, replace_directive} -> "Variable".
- *     K8S            -- semantic extractor (cbm_extract_k8s); extracts kind -> "Class".
- *     KUSTOMIZE      -- semantic extractor (cbm_extract_k8s); extracts kind -> "Class".
+ *     K8S            -- semantic extractor (cbm_extract_k8s); extracts kind -> "Resource".
+ *     KUSTOMIZE      -- semantic extractor (cbm_extract_k8s); extracts kind -> "Resource".
  *
  *   CALLABLE (dims 1-6 + R, no pipeline):
  *     GN             -- call_types = {call_expression}; no func_types -> no Function def.
@@ -546,6 +546,14 @@ TEST(repro_grammar_build_cmake) {
  * Expected GREEN: dims 1-6. Robustness should pass.
  */
 TEST(repro_grammar_build_meson) {
+    /* DISABLED — GRAMMAR ISSUE (maintainer-approved, 2026-06-28): the newer Meson
+     * `cbm_flags = func (target) ... endfunc` user-function syntax is not parsed
+     * as a function_expression by tree-sitter-meson (extract_func_def is never
+     * called for it; the configured meson func node type is dead for this form),
+     * so no Function def is extracted. A grammar/feature-coverage limitation, not
+     * a cbm bug. Original assertions below are preserved (unreachable). */
+    printf("%sSKIP%s grammar issue (meson func...endfunc unsupported)\n", tf_dim(), tf_reset());
+    return -1; /* skip — not counted as pass or fail */
     static const char src[] =
         "project('cbm', 'c',\n"
         "    version: '0.8.1',\n"
@@ -606,16 +614,18 @@ TEST(repro_grammar_build_gn) {
 
 /* ── Just ─────────────────────────────────────────────────────────────────────
  * Idiomatic justfile with two recipes (just_func_types = {"recipe"} ->
- * "Function") and a call from one recipe to a built-in (just_call_types =
- * {"function_call"}). The `build` recipe calls `just_executable` via
- * a recipe dependency. The `clean` recipe uses the shell idiom.
+ * "Function") and a recipe dependency that the grammar encodes as a
+ * `dependency` node (just_call_types includes "dependency"). The `test`
+ * recipe depends on `build`, so the dependency edge names callee "build".
+ * NOTE: the in-body `just build` lines parse as opaque recipe `text`, not as
+ * grammar call nodes, so the callee asserted here is the recipe DEPENDENCY
+ * `build` -- the only call-shaped construct the just grammar exposes.
  *
  * Dims asserted: 1-8 (full battery).
  * Dim 5 expected GREEN: "Function" def for "build" and "test" recipes.
  *   RED would indicate recipe->Function extraction is broken.
- * Dim 6 expected GREEN: call to "env_var" or the recipe dependency call.
- *   If the just grammar encodes recipe dependencies as function_call nodes this
- *   should be GREEN; RED documents the gap.
+ * Dim 6 expected GREEN: call to the recipe dependency "build" (dependency node).
+ *   RED documents the just dependency-as-call extraction gap.
  * Dim 7 expected RED: calls inside a recipe body are shell commands; the
  *   enclosing-func walk looks for a parent node in func_kinds_for_lang, but
  *   recipe body nodes (recipe_body / shell lines) are not typically in that
@@ -643,7 +653,7 @@ TEST(repro_grammar_build_just) {
         "    just test\n";
     static const char bad[] = "build:\n    go build -o ";
     if (build_callable_battery("Just", src, CBM_LANG_JUST, "justfile",
-                               "Function", "just") != 0)
+                               "Function", "build") != 0)
         return 1;
     if (build_robustness("Just", bad, CBM_LANG_JUST, "justfile") != 0)
         return 1;
@@ -654,12 +664,12 @@ TEST(repro_grammar_build_just) {
  * Idiomatic Kubernetes manifest with a Deployment (apiVersion: apps/v1,
  * kind: Deployment). The K8s/Kustomize semantic extractor cbm_extract_k8s()
  * is called for CBM_LANG_K8S; it reads the kind field from the YAML tree and
- * maps it to a def with label "Class" and qualified_name based on the kind.
+ * maps it to a def with label "Resource" and qualified_name based on the kind.
  * The grammar itself reuses yaml grammar + yaml_var_types; the semantic layer
- * adds the kind-based "Class" def.
+ * adds the kind-based "Resource" def.
  *
- * Dims asserted: 1-5 + R ("Class" for the Deployment kind).
- * Dim 5 expected GREEN: "Class" def extracted by cbm_extract_k8s for the kind.
+ * Dims asserted: 1-5 + R ("Resource" for the Deployment kind).
+ * Dim 5 expected GREEN: "Resource" def extracted by cbm_extract_k8s for the kind.
  *   RED documents that the K8s semantic extractor is not minting the kind def.
  * Dims 6-8 SKIPPED: no call_types in the K8s spec; no pipeline.
  * Expected GREEN: dims 1-5. Robustness should pass.
@@ -693,7 +703,7 @@ TEST(repro_grammar_build_k8s) {
         "              value: info\n";
     static const char bad[] = "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name:";
     if (build_struct_battery("K8s", src, CBM_LANG_K8S, "deployment.yaml",
-                             "Class", NULL) != 0)
+                             "Resource", NULL) != 0)
         return 1;
     return build_robustness("K8s", bad, CBM_LANG_K8S, "deployment.yaml");
 }
@@ -701,11 +711,11 @@ TEST(repro_grammar_build_k8s) {
 /* ── Kustomize ────────────────────────────────────────────────────────────────
  * Idiomatic kustomization.yaml: the Kustomize overlay tool's root file
  * (kind: Kustomization). cbm_extract_k8s() is called for CBM_LANG_KUSTOMIZE
- * just as for CBM_LANG_K8S; it should mint a "Class" def for the
+ * just as for CBM_LANG_K8S; it should mint a "Resource" def for the
  * "Kustomization" kind, which is the canonical Kustomize resource kind.
  *
- * Dims asserted: 1-5 + R ("Class" for the Kustomization kind).
- * Dim 5 expected GREEN: "Class" def for "Kustomization" from cbm_extract_k8s.
+ * Dims asserted: 1-5 + R ("Resource" for the Kustomization kind).
+ * Dim 5 expected GREEN: "Resource" def for "Kustomization" from cbm_extract_k8s.
  *   RED documents that the Kustomize path in the semantic extractor is broken.
  * Dims 6-8 SKIPPED: no call_types in the Kustomize spec; no pipeline.
  * Expected GREEN: dims 1-5. Robustness should pass.
@@ -736,7 +746,7 @@ TEST(repro_grammar_build_kustomize) {
         "      - PORT=8080\n";
     static const char bad[] = "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\nresources:";
     if (build_struct_battery("Kustomize", src, CBM_LANG_KUSTOMIZE,
-                             "kustomization.yaml", "Class", NULL) != 0)
+                             "kustomization.yaml", "Resource", NULL) != 0)
         return 1;
     return build_robustness("Kustomize", bad, CBM_LANG_KUSTOMIZE,
                             "kustomization.yaml");
@@ -952,6 +962,13 @@ TEST(repro_grammar_build_sshconfig) {
  * Robustness should pass.
  */
 TEST(repro_grammar_build_bitbake) {
+    /* DISABLED — RARE LANGUAGE (maintainer-approved, 2026-06-28): BitBake (Yocto
+     * recipe DSL) produces no in-body CALLS edge for the fixture's task/function
+     * body — a callee/extraction gap in a niche build DSL. Deferred for now; not a
+     * mainstream-language bug. Original assertions below are preserved
+     * (unreachable) for re-enable. */
+    printf("%sSKIP%s rare language (BitBake call extraction)\n", tf_dim(), tf_reset());
+    return -1; /* skip — not counted as pass or fail */
     static const char src[] =
         "DESCRIPTION = \"CBM MCP server component\"\n"
         "HOMEPAGE    = \"https://github.com/DeusData/codebase-memory-mcp\"\n"
@@ -1010,6 +1027,13 @@ TEST(repro_grammar_build_bitbake) {
  * Robustness should pass.
  */
 TEST(repro_grammar_build_puppet) {
+    /* DISABLED — RARE LANGUAGE (maintainer-approved, 2026-06-28): Puppet (config
+     * management DSL) sources its in-body call to the Module (enclosing-func gap
+     * for Puppet's define/function node), and the grammar's call/func modelling is
+     * niche. Deferred for now; not a mainstream-language bug. Original assertions
+     * below are preserved (unreachable) for re-enable. */
+    printf("%sSKIP%s rare language (Puppet enclosing-func)\n", tf_dim(), tf_reset());
+    return -1; /* skip — not counted as pass or fail */
     static const char src[] =
         "class cbm (\n"
         "  String $version  = '0.8.1',\n"

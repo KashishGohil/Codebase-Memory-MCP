@@ -371,8 +371,12 @@ TEST(repro_grammar_misc_bicep) {
  * Dims asserted: 1-8 + R.
  * Dim 5 expected GREEN: "Function" for the cffunction defs.
  * Dim 6 expected GREEN: call to "add" inside compute.
- * Dim 7 expected RED: CFML has no cross-LSP rescue; the enclosing-func walk for
- *   the CFML grammar's function node may fall back to Module for the in-body call.
+ * Dim 7 expected GREEN: cf_function_tag is in cfml_func_types and compute_func_qn
+ *   resolves its name from the cf_attribute (name="..."), so the add() call inside
+ *   compute's cffunction body sources to the compute Function. (Previously the
+ *   def-extractor minted a "Function" for cf_function_tag but the scope-tracking
+ *   func_types list only had function_declaration/_expression, so the in-body call
+ *   mis-sourced to Module: a production sync bug, not a rescue gap -- now fixed.)
  * Dim 8 expected GREEN: no dangling CALLS endpoints.
  */
 TEST(repro_grammar_misc_cfml) {
@@ -471,12 +475,14 @@ TEST(repro_grammar_misc_linkerscript) {
  * "Function"; pine_call_types = {"call"} -> call extraction.
  *
  * Dims asserted: 1-8 + R.
- * Dim 5 expected GREEN: "Function" for ema2.
- * Dim 6 expected GREEN: call to "plot" / "ema2".
- * Dim 7 expected RED: Pine has no cross-LSP rescue; calls at module-script level
- *   have no enclosing Function, and the enclosing-func walk for the in-body call
- *   may still fall back to Module. RED documents the attribution gap; dim 7 may
- *   also fail vacuously if the only call sites are at script top level.
+ * Dim 5 expected GREEN: "Function" for ema2 and wrap.
+ * Dim 6 expected GREEN: call to "ema2" inside wrap.
+ * Dim 7 expected GREEN: wrap's body calls the same-file ema2, so a
+ *   callable-sourced CALLS edge is emitted from the wrap Function node. The
+ *   top-level indicator() call targets a Pine built-in (no same-file def), so it
+ *   yields no edge -- no Module-sourced edge remains. (The earlier fixture's only
+ *   same-file calls -- out = ema2(...) and plot(out) -- sat at script top level
+ *   and were legitimately Module-sourced: a broken fixture, not a prod gap.)
  * Dim 8 expected GREEN: no dangling CALLS endpoints.
  */
 TEST(repro_grammar_misc_pine) {
@@ -485,11 +491,12 @@ TEST(repro_grammar_misc_pine) {
         "indicator(\"CBM EMA\", overlay=true)\n"
         "\n"
         "ema2(src, len) =>\n"
-        "    a = ta.ema(src, len)\n"
+        "    a = src + len\n"
         "    a\n"
         "\n"
-        "out = ema2(close, 20)\n"
-        "plot(out)\n";
+        "wrap(src, len) =>\n"
+        "    b = ema2(src, len)\n"
+        "    b\n";
     static const char bad[] = "//@version=5\nema2(src, len) =>\n    a = ta.ema(";
     if (misc_single_file_battery("PINE", src, CBM_LANG_PINE, "ind.pine",
                                  "Function", NULL, "ema2") != 0)
